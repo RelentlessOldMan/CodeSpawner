@@ -43,6 +43,12 @@ public static class Presets
         ["--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--ordinary-headers", "0",
          "--blob-files", "0", "--cfiles", "2", "--tiny-files", "500000"];
 
+    // pathological-symbols: token-paste (expected-miss), long idents, deep nesting — symbol-extractor stress.
+    private static readonly string[] PathologicalSymbols = [.. Bare, "--pathological-symbols", "50"];
+
+    // dup-content: byte-identical copies + near-identical controls — content-hash dedup / posting collapse.
+    private static readonly string[] DupContent = [.. Bare, "--dup-groups", "200", "--dup-copies", "4"];
+
     public static bool TryGet(string name, out string[] tokens)
     {
         tokens = name.ToLowerInvariant() switch
@@ -55,6 +61,8 @@ public static class Presets
             "long-lines" => LongLines,
             "encoding-mix" => EncodingMix,
             "many-tiny" => ManyTiny,
+            "pathological-symbols" => PathologicalSymbols,
+            "dup-content" => DupContent,
             _ => [],
         };
         return tokens.Length > 0;
@@ -82,7 +90,7 @@ public static class Presets
 
         if (name is null) return args;
         if (!TryGet(name, out var tokens))
-            throw new ArgException($"unknown preset '{name}' (death|ci|memory|dense-band|broad-token|long-lines|encoding-mix|many-tiny)");
+            throw new ArgException($"unknown preset '{name}' (death|ci|memory|dense-band|broad-token|long-lines|encoding-mix|many-tiny|pathological-symbols|dup-content)");
 
         // preset first, user args after -> user overrides.
         return [.. tokens, .. rest];

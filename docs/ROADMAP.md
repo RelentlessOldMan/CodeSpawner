@@ -32,16 +32,21 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
 
 ---
 
-## Batch 2 — backlog (coordinated; some touch the manifest)
+## Batch 2 — SHIPPED (v1.0.2), plus one deferred item
 
-- **pathological-symbols (C-subset)** + **`expectedMiss`** — token-paste macros (`handler_##id`), extreme
-  identifier length, deep scope nesting. Adds an optional per-symbol `expectedMiss` set = "a correct indexer
-  is allowed/expected NOT to resolve this" (the honest-miss dual of `unreachableRefs`). Additive → v1.
-- **dup-content** (`--dup-groups <n>`) — N groups of byte-identical / near-identical files scattered across
-  dirs (vendored copies, generated variants). Manifest gains a `dupGroups` map (group → [paths]) so dedup /
-  segment-merge posting collapse can be asserted against truth. Additive → v1.
-- **C++ language profile** — nested templates, vtables/overrides, token-paste at C++ scale. This is the
+- ✅ **pathological-symbols (C-subset)** + **`expectedMiss`** (`--pathological-symbols <n>`, preset
+  `pathological-symbols`) — token-paste macros (`CS_MK_HANDLER(k)` → `patho{i}_handler_{k}`, flagged
+  `expectedMiss`), extreme-length identifiers, deep scope nesting. Per-symbol optional `expectedMiss` bool =
+  the honest-miss dual of `unreachableRefs`. Additive, stayed v1.
+- ✅ **dup-content** (`--dup-groups <n> --dup-copies <n>`, preset `dup-content`) — N groups of byte-identical
+  copies scattered across dirs + a near-identical control each. Top-level `dupGroups` map records each
+  group's `sha256` + `paths` (must collapse) + `nearVariants` (must not). Additive, stayed v1.
+- ⏳ **C++ language profile** — nested templates, vtables/overrides, token-paste at C++ scale. Still the
   deferred language seam; it is the trigger for the formal **manifestVersion 2** bump.
+
+### Batch 2.1 refinement (backlog)
+- Near-identical dedup currently ships one control per group. A `--dup-near <n>` knob for a tunable
+  non-collapse population could follow if CodeCompass wants to stress the near-miss boundary harder.
 
 ## Longer-term — highest-value after the pathologies
 

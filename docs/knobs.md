@@ -42,6 +42,9 @@ never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` kee
 | `--max-line-bytes <m>` | `8388608` | Bytes in the single giant line of each long-line file. |
 | `--no-newline` | off | Force ALL long-line files to have no newline at all (default alternates newline / no-newline). |
 | `--encoding-mix <n>` | `0` | Count of encoding-stress files: UTF-16LE/BE + BOM, UTF-8-BOM, invalid byte runs, non-ASCII identifiers. Multibyte trigram extraction / BOM handling. |
+| `--pathological-symbols <n>` | `0` | Count of files with pathological symbol shapes: token-paste macros (`handler_##id` → **expectedMiss** honest-miss symbols), extreme-length identifiers, deep scope nesting. Symbol-extractor cost + honest-miss correctness. |
+| `--dup-groups <n>` | `0` | Count of duplicate-content groups (byte-identical copies scattered across dirs + a near-identical control each). Content-hash dedup / segment-merge posting collapse. Recorded under top-level `dupGroups`. |
+| `--dup-copies <n>` | `4` | Byte-identical copies per dup group (the set that must collapse). |
 | `--io-parallelism <n>` | `#cores` | Max concurrent large-header writes. Header emission is CPU-bound (~40 MB/s/core) so it scales with cores on SSD; lower it on a spinning disk. |
 
 ## Presets
@@ -56,6 +59,8 @@ never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` kee
 | `--preset long-lines` | `--long-line-files 8 --max-line-bytes 8388608` (noise off) | Long-line / no-newline block-building stress. |
 | `--preset encoding-mix` | `--encoding-mix 40` (noise off) | Multibyte / BOM / invalid-byte extraction. |
 | `--preset many-tiny` | `--tiny-files 500000` (noise off) | Walker throughput / per-file & SMB stat pressure. |
+| `--preset pathological-symbols` | `--pathological-symbols 50` (noise off) | Symbol-extractor cost + honest-miss (`expectedMiss`) correctness. |
+| `--preset dup-content` | `--dup-groups 200 --dup-copies 4` (noise off) | Content-hash dedup / posting-collapse (`dupGroups`). |
 
 Your own knobs after a `--preset` override it (e.g. `--preset death --giant-headers 4`).
 

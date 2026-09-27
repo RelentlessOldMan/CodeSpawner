@@ -98,4 +98,7 @@ public enum Category
     BroadToken,
     LongLine,
     EncodingMix,
+    // Batch 2 pathologies (appended):
+    PathoSymbol,
+    DupContent,
 }

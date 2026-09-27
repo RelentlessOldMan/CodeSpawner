@@ -91,6 +91,20 @@ Check "broad-token verify" $btVerify
 Check "broad-token deterministic" $btDet
 Check "_meta.populations present" $hasPops
 
+# 4c. PATHOLOGICAL SYMBOLS: verifies + manifest carries expectedMiss.
+$ps = Join-Path $Work "ps"
+& $Exe gen --out $ps --preset pathological-symbols --pathological-symbols 6 | Out-Null
+& $Exe verify --corpus $ps | Out-Null
+Check "pathological-symbols verify" ($LASTEXITCODE -eq 0)
+Check "expectedMiss present" ((Get-Content "$ps-manifest.json" -Raw) -match '"expectedMiss"\s*:\s*true')
+
+# 4d. DUP-CONTENT: verifies + manifest carries dupGroups with sha256.
+$dc = Join-Path $Work "dc"
+& $Exe gen --out $dc --preset dup-content --dup-groups 6 | Out-Null
+& $Exe verify --corpus $dc | Out-Null
+Check "dup-content verify" ($LASTEXITCODE -eq 0)
+Check "dupGroups present" ((Get-Content "$dc-manifest.json" -Raw) -match '"dupGroups"' -and (Get-Content "$dc-manifest.json" -Raw) -match '"sha256"')
+
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

@@ -59,6 +59,8 @@ public sealed class CorpusGenerator
         int nBroad = _o.Eff("BroadTokenFiles", _o.BroadTokenFiles);
         int nLong = _o.Eff("LongLineFiles", _o.LongLineFiles);
         int nEnc = _o.Eff("EncodingMix", _o.EncodingMix);
+        int nPatho = _o.Eff("PathologicalSymbols", _o.PathologicalSymbols);
+        int nDup = _o.Eff("DupGroups", _o.DupGroups);
 
         var giantPaths = Timed("register headers", () => EmitHeaders(tree, nGiant, nBig, nMed, nDense, stats));
         Console.WriteLine($"    ^ {nGiant} giant (<={_o.MaxHeaderMB}MB) + {nBig} big + {nMed} medium + {nDense} dense (<{_o.DenseUnderMb}MB)");
@@ -92,6 +94,20 @@ public sealed class CorpusGenerator
             Console.WriteLine($"    ^ {nEnc} file(s): UTF-16LE/BE, UTF-8-BOM, invalid bytes, non-ASCII idents");
         }
 
+        List<PathoSym>? patho = null;
+        if (nPatho > 0)
+        {
+            patho = Timed("pathological-symbols", () => PathologicalSymbolEmitter.Emit(_o, tree, nPatho, stats));
+            int miss = patho.Count(s => s.ExpectedMiss);
+            Console.WriteLine($"    ^ {patho.Count} symbols across {nPatho} file(s) ({miss} expected-miss token-paste)");
+        }
+        List<DupGroupResult>? dups = null;
+        if (nDup > 0)
+        {
+            dups = Timed("dup-content", () => DupContentEmitter.Emit(_o, tree, nDup, _o.DupCopies, stats));
+            Console.WriteLine($"    ^ {nDup} group(s) x {Math.Max(2, _o.DupCopies)} identical + 1 near-variant");
+        }
+
         Timed("tiny files", () => EmitTinyFiles(tree, nCsv));
 
         Timed("compile_commands", () => CompileDbEmitter.Write(_o, outFull, src.Files));
@@ -100,7 +116,7 @@ public sealed class CorpusGenerator
         {
             var model = Timed("manifest", () =>
             {
-                var m = BuildManifest(outFull, src, unres, broad, stats);
+                var m = BuildManifest(outFull, src, unres, broad, patho, dups, stats);
                 ManifestWriter.Write(m, mpath);
                 return m;
             });
@@ -240,7 +256,7 @@ public sealed class CorpusGenerator
         });
 
     private ManifestModel BuildManifest(string outFull, SourceEmitResult src, UnresolvedEmitResult? unres,
-        BroadTokenEmitResult? broad, PopulationStats stats)
+        BroadTokenEmitResult? broad, List<PathoSym>? patho, List<DupGroupResult>? dups, PopulationStats stats)
     {
         var model = new ManifestModel
         {
@@ -289,6 +305,23 @@ public sealed class CorpusGenerator
             foreach (var r in broad.Refs) bh.Refs.Add(RelSite(outFull, r));
             model.Symbols["broad_hot"] = bh;
         }
+
+        if (patho is not null)
+            foreach (var s in patho)
+                model.Symbols[s.Name] = new SymbolEntry
+                {
+                    Def = $"{PathUtil.Rel(outFull, s.Path)}:{s.Line}",
+                    ExpectedMiss = s.ExpectedMiss,
+                };
+
+        if (dups is not null)
+            foreach (var d in dups)
+            {
+                var g = new DupGroup { Name = d.Name, Sha256 = d.Sha256 };
+                foreach (var p in d.Paths) g.Paths.Add(PathUtil.Rel(outFull, p));
+                foreach (var nv in d.NearVariants) g.NearVariants.Add(PathUtil.Rel(outFull, nv));
+                model.DupGroups.Add(g);
+            }
 
         return model;
     }
