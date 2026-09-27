@@ -39,6 +39,11 @@ verify: PASS (5124 symbols)
 **New here? Read [`docs/USAGE.md`](docs/USAGE.md)** — the complete guide (install, commands, knobs,
 performance, consumer integration, troubleshooting).
 
+## Download
+
+Grab the latest **`codespawner.exe`** from the [Releases](https://github.com/RelentlessOldMan/CodeSpawner/releases)
+page and run it — it's a self-contained Native AOT binary, no .NET runtime required. Or build from source below.
+
 ## Build
 
 Requires the .NET 10 SDK and (for Native AOT) the Visual Studio "Desktop development with C++" workload.
