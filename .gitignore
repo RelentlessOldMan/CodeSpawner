@@ -1,0 +1,14 @@
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# .NET build output
+bin/
+obj/
+dist/
+
+# Generated corpora / test scratch (never commit)
+.corpus/
+*-manifest.json
