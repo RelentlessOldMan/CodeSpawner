@@ -12,6 +12,10 @@ namespace CodeSpawner.Verify;
 /// </summary>
 public static class ManifestVerifier
 {
+    // Max files whose lines we retain at once. Bounds verify memory on corpora with many large carrier
+    // files; access is sequential-by-file so the effective hit rate stays high.
+    private const int LineCacheCap = 16;
+
     public static int Run(VerifyOptions o)
     {
         string corpus = Path.GetFullPath(o.Corpus);
@@ -60,7 +64,8 @@ public static class ManifestVerifier
             // the def site, and the generator macro must be present. They carry no refs/edges to check.
             if (entry.TryGetProperty("expectedMiss", out var emEl) && emEl.ValueKind == JsonValueKind.True)
             {
-                string site = entry.GetProperty("def").GetString()!;
+                if (!entry.TryGetProperty("def", out var emDef) || emDef.GetString() is not { } site)
+                { Console.Error.WriteLine($"FAIL expectedMiss {name}: no def site"); fail++; continue; }
                 if (HonestMissOk(corpus, lineCache, site, name, out string mw)) missOk++;
                 else { Console.Error.WriteLine($"FAIL expectedMiss {name}: {mw}"); fail++; }
                 continue;
@@ -114,8 +119,10 @@ public static class ManifestVerifier
             foreach (var grp in dgEl.EnumerateObject())
             {
                 string gname = grp.Name;
-                string sha = grp.Value.GetProperty("sha256").GetString()!;
-                foreach (var p in grp.Value.GetProperty("paths").EnumerateArray())
+                if (!grp.Value.TryGetProperty("sha256", out var shaEl) || shaEl.GetString() is not { } sha ||
+                    !grp.Value.TryGetProperty("paths", out var pathsEl) || pathsEl.ValueKind != JsonValueKind.Array)
+                { Console.Error.WriteLine($"FAIL dup {gname}: malformed group (need sha256 + paths[])"); fail++; continue; }
+                foreach (var p in pathsEl.EnumerateArray())
                 {
                     if (FileSha(corpus, p.GetString()!, out string got, out string why) && got == sha) dupOk++;
                     else { Console.Error.WriteLine($"FAIL dup {gname} @ {p.GetString()}: {(why.Length > 0 ? why : $"hash {got} != {sha}")}"); fail++; }
@@ -150,6 +157,9 @@ public static class ManifestVerifier
         {
             if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
             lines = File.ReadAllLines(full);
+            // Bound the cache: sites are checked sequentially by file, so a small cap keeps the hit rate
+            // while preventing retention of hundreds of multi-MB carrier files (broad-token) at once.
+            if (cache.Count >= LineCacheCap) cache.Clear();
             cache[full] = lines;
         }
         if (line < 1 || line > lines.Length) { why = $"line {line} out of range"; return false; }
@@ -192,6 +202,9 @@ public static class ManifestVerifier
         {
             if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
             lines = File.ReadAllLines(full);
+            // Bound the cache: sites are checked sequentially by file, so a small cap keeps the hit rate
+            // while preventing retention of hundreds of multi-MB carrier files (broad-token) at once.
+            if (cache.Count >= LineCacheCap) cache.Clear();
             cache[full] = lines;
         }
         if (line < 1 || line > lines.Length) { why = $"line {line} out of range (file has {lines.Length})"; return false; }
