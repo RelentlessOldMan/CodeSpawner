@@ -75,6 +75,11 @@ public static class Program
               --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death")
               --preset ci            ~1/100 counts, keeps >=1 pathology header (fast smoke)
               --preset memory        one giant header + a few includers (preprocessor-memory axis)
+              --preset dense-band    dense sub-threshold headers (posting/trigram memory OOM shape)
+              --preset broad-token   hot token across a 2-8MB band (find_references + sidecar reads)
+              --preset long-lines    pathological long-line / no-newline files
+              --preset encoding-mix  UTF-16/BOM/invalid-byte/non-ASCII encoding stress
+              --preset many-tiny     tiny-file-dominated (walker / stat pressure)
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly):
               --out <dir>            output directory (required; cleared if it exists)

@@ -78,6 +78,19 @@ $mf = "$t-manifest.json"
 & $Exe verify --corpus $t 2>&1 | Out-Null
 Check "negative oracle (tamper detected)" ($LASTEXITCODE -ne 0)
 
+# 4b. PATHOLOGY PRESET (broad-token): verifies + deterministic + records _meta.populations.
+$g1 = Join-Path $Work "bt1"; $g2 = Join-Path $Work "bt2"
+& $Exe gen --out $g1 --preset broad-token --broad-token-files 8 | Out-Null
+& $Exe verify --corpus $g1 | Out-Null
+$btVerify = ($LASTEXITCODE -eq 0)
+& $Exe gen --out $g2 --preset broad-token --broad-token-files 8 | Out-Null
+function StripRoot2($p) { (Get-Content $p -Raw) -replace '"corpusRoot":\s*".*?"', '"corpusRoot":"X"' }
+$btDet = ((StripRoot2 "$g1-manifest.json") -eq (StripRoot2 "$g2-manifest.json"))
+$hasPops = ((Get-Content "$g1-manifest.json" -Raw) -match '"populations"') -and ((Get-Content "$g1-manifest.json" -Raw) -match '"broad-token"')
+Check "broad-token verify" $btVerify
+Check "broad-token deterministic" $btDet
+Check "_meta.populations present" $hasPops
+
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

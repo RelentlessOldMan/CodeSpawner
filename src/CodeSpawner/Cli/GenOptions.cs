@@ -31,6 +31,28 @@ public sealed class GenOptions
     public int UnresolvedIncludes { get; set; } = 0;
     public bool Manifest { get; set; } = true;
 
+    // --- Batch 1 pathologies (all OFF by default; see docs/ROADMAP.md). ---
+
+    /// <summary>Count of dense sub-threshold headers (unique idents, sized just under DenseUnderMb).</summary>
+    public int DenseHeaders { get; set; } = 0;
+    /// <summary>Byte ceiling each dense header sits just under (MB). 127 = just under a 128 MB stream threshold.</summary>
+    public int DenseUnderMb { get; set; } = 127;
+
+    /// <summary>Count of 2-8 MB carrier files for the broad hot token.</summary>
+    public int BroadTokenFiles { get; set; } = 0;
+    /// <summary>Fraction of carrier files that actually contain the hot token (rest are same-size controls).</summary>
+    public double HotTokenShare { get; set; } = 0.5;
+
+    /// <summary>Count of pathological long-line / no-newline files.</summary>
+    public int LongLineFiles { get; set; } = 0;
+    /// <summary>Bytes in the single giant line of each long-line file.</summary>
+    public int MaxLineBytes { get; set; } = 8 * 1024 * 1024;
+    /// <summary>Emit long-line files with NO newline at all (single unterminated line).</summary>
+    public bool NoNewline { get; set; } = false;
+
+    /// <summary>Count of encoding-stress files (UTF-16LE/BE, UTF-8-BOM, invalid bytes, non-ASCII idents).</summary>
+    public int EncodingMix { get; set; } = 0;
+
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;
 

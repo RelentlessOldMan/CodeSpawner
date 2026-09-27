@@ -115,8 +115,17 @@ it says. Setting a count to `0` disables that population. **Principle:** adding 
 must never force another to change; tool-specific knobs stay optional and defaulted.
 
 ### Presets
-`--preset ci` (≈1/100, keeps a giant), `--preset memory` (one giant + includers, nothing else),
-`--preset death` (~90 GB, 12 headers >1 GB). Your own knobs after a preset override it.
+Scale tiers: `--preset ci` (≈1/100, keeps a giant), `--preset memory` (one giant + includers, nothing
+else), `--preset death` (~90 GB, 12 headers >1 GB).
+
+Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.md)):
+`--preset dense-band` (posting/trigram memory OOM), `--preset broad-token` (`find_references` at scale +
+sidecar reads), `--preset long-lines` (long-line / no-newline), `--preset encoding-mix` (UTF-16/BOM/
+invalid bytes / non-ASCII idents), `--preset many-tiny` (walker / stat pressure).
+
+Your own knobs after a preset override it (e.g. `--preset dense-band --dense-headers 80`). Pathology
+corpora record their shape under `_meta.populations` so a consumer can assert the corpus before trusting
+pass/fail.
 
 ---
 

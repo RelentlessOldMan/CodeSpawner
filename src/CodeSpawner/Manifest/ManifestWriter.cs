@@ -21,6 +21,20 @@ public static class ManifestWriter
         w.WriteString("generatorVersion", m.GeneratorVersion);
         w.WriteNumber("seed", m.Seed);
         w.WriteString("corpusRoot", m.CorpusRoot);
+        if (m.Populations.Count > 0)
+        {
+            // Per-population shape so a consumer can assert the corpus is what it expects before pass/fail.
+            w.WriteStartObject("populations");
+            foreach (var p in m.Populations)
+            {
+                w.WriteStartObject(p.Name);
+                w.WriteNumber("fileCount", p.FileCount);
+                w.WriteNumber("totalBytes", p.TotalBytes);
+                w.WriteNumber("identCount", p.IdentCount);
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+        }
         w.WriteEndObject();
 
         w.WriteStartObject("symbols");
