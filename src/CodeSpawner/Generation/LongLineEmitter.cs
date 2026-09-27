@@ -10,8 +10,18 @@ namespace CodeSpawner.Generation;
 /// </summary>
 public static class LongLineEmitter
 {
-    // A benign minified-ish repeating chunk (no unique identifiers — this is a lexer/block stressor, not symbols).
-    private static readonly byte[] Chunk = System.Text.Encoding.ASCII.GetBytes("a.b(c);d=e+f;g[h]=i;");
+    // A benign minified-ish repeating unit (no unique identifiers — a lexer/block stressor, not symbols).
+    private const string Unit = "a.b(c);d=e+f;g[h]=i;";
+    // Pre-tile the unit into a ~64 KB block (a whole multiple of the unit, so tiled blocks stay aligned and
+    // the file is a clean unit repetition) — a multi-MB / multi-GB line becomes a handful of big writes.
+    private static readonly byte[] Block = BuildBlock(64 * 1024 / Unit.Length * Unit.Length);
+
+    private static byte[] BuildBlock(int size)
+    {
+        var b = new byte[size];
+        for (int i = 0; i < size; i++) b[i] = (byte)Unit[i % Unit.Length];
+        return b;
+    }
 
     public static void Emit(GenOptions o, DirTree tree, int nFiles, PopulationStats stats)
     {
@@ -29,8 +39,8 @@ public static class LongLineEmitter
             long written = 0;
             while (written < target)
             {
-                int n = (int)Math.Min(Chunk.Length, target - written);
-                fs.Write(Chunk, 0, n);
+                int n = (int)Math.Min(Block.Length, target - written);
+                fs.Write(Block, 0, n);
                 written += n;
             }
             if (!noNewline) { fs.WriteByte((byte)'\n'); written++; }
