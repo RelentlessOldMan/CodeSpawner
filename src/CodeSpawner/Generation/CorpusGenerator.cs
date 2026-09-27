@@ -45,6 +45,7 @@ public sealed class CorpusGenerator
             $"Fabricating corpus at {outFull} (scale {_o.Scale}, seed {_o.Seed}, compileDb={_o.CompileDb}) ...");
 
         var tree = DirTree.Build(_o, outFull);
+        var stats = new PopulationStats();
 
         // Effective counts (explicit knobs literal; else default * scale). Giants keep >=1 while enabled.
         int nGiant = _o.Eff("GiantHeaders", _o.GiantHeaders, keepOne: true);
@@ -54,9 +55,13 @@ public sealed class CorpusGenerator
         int nC = Math.Max(2, _o.Eff("CFiles", _o.CFiles)); // need >=2 for a cross-file reference edge
         int nCsv = _o.Eff("TinyFiles", _o.TinyFiles);
         int nBlob = _o.Eff("BlobFiles", _o.BlobFiles);
+        int nDense = _o.Eff("DenseHeaders", _o.DenseHeaders);
+        int nBroad = _o.Eff("BroadTokenFiles", _o.BroadTokenFiles);
+        int nLong = _o.Eff("LongLineFiles", _o.LongLineFiles);
+        int nEnc = _o.Eff("EncodingMix", _o.EncodingMix);
 
-        var giantPaths = Timed("register headers", () => EmitHeaders(tree, nGiant, nBig, nMed));
-        Console.WriteLine($"    ^ {nGiant} giant (<={_o.MaxHeaderMB}MB) + {nBig} big + {nMed} medium");
+        var giantPaths = Timed("register headers", () => EmitHeaders(tree, nGiant, nBig, nMed, nDense, stats));
+        Console.WriteLine($"    ^ {nGiant} giant (<={_o.MaxHeaderMB}MB) + {nBig} big + {nMed} medium + {nDense} dense (<{_o.DenseUnderMb}MB)");
 
         Timed("ordinary headers", () => EmitOrdinaryHeaders(tree, nSmallH));
         Timed("data blobs", () => EmitBlobs(tree, nBlob));
@@ -70,6 +75,23 @@ public sealed class CorpusGenerator
             Console.WriteLine(
                 $"    ^ {unres.UnreachableRefs.Count} UNREACHABLE ref(s) to vendor_gated()");
 
+        BroadTokenEmitResult? broad = null;
+        if (nBroad > 0)
+        {
+            broad = Timed("broad-token", () => BroadTokenEmitter.Emit(_o, tree, nBroad, stats));
+            Console.WriteLine($"    ^ {broad.Refs.Count} hot-token ref(s) across {nBroad} carrier(s) (2-8MB)");
+        }
+        if (nLong > 0)
+        {
+            Timed("long-lines", () => LongLineEmitter.Emit(_o, tree, nLong, stats));
+            Console.WriteLine($"    ^ {nLong} file(s), {_o.MaxLineBytes / (1024 * 1024)}MB/line{(_o.NoNewline ? ", no newline" : ", alt newline")}");
+        }
+        if (nEnc > 0)
+        {
+            Timed("encoding-mix", () => EncodingMixEmitter.Emit(_o, tree, nEnc, stats));
+            Console.WriteLine($"    ^ {nEnc} file(s): UTF-16LE/BE, UTF-8-BOM, invalid bytes, non-ASCII idents");
+        }
+
         Timed("tiny files", () => EmitTinyFiles(tree, nCsv));
 
         Timed("compile_commands", () => CompileDbEmitter.Write(_o, outFull, src.Files));
@@ -78,11 +100,11 @@ public sealed class CorpusGenerator
         {
             var model = Timed("manifest", () =>
             {
-                var m = BuildManifest(outFull, src, unres);
+                var m = BuildManifest(outFull, src, unres, broad, stats);
                 ManifestWriter.Write(m, mpath);
                 return m;
             });
-            Console.WriteLine($"    ^ {mpath} ({model.Symbols.Count} symbols)");
+            Console.WriteLine($"    ^ {mpath} ({model.Symbols.Count} symbols, {model.Populations.Count} populations)");
         }
 
         Report(tree, outFull, sw.Elapsed);
@@ -152,7 +174,7 @@ public sealed class CorpusGenerator
         File.WriteAllText(Path.Combine(_o.Out, MarkerName), $"CodeSpawner {Program.Version}\n");
     }
 
-    private List<string> EmitHeaders(DirTree tree, int nGiant, int nBig, int nMed)
+    private List<string> EmitHeaders(DirTree tree, int nGiant, int nBig, int nMed, int nDense, PopulationStats stats)
     {
         // Giants fill to MaxHeaderMB by default; an explicit -macro-density caps the define count instead
         // (the "many macros, few bytes" memory axis). Either way a giant carries ~1M+ #defines.
@@ -164,20 +186,32 @@ public sealed class CorpusGenerator
         {
             var rng = Rng.For(_o.Seed, Category.GiantHeader, i);
             string p = Path.Combine(tree.PickDir(ref rng), $"regmap_block{i}.h");
-            RegHeaderEmitter.Write(p, giantDefineCap, giantMaxBytes, i);
+            var s = RegHeaderEmitter.Write(p, giantDefineCap, giantMaxBytes, i);
+            stats.Add("giant-headers", 1, s.Bytes, s.Idents);
             giantPaths[i] = p;
         });
         Parallel.For(0, nBig, HeaderParallel, i =>
         {
             var rng = Rng.For(_o.Seed, Category.BigHeader, i);
             long bytes = (long)rng.Next(10, 100) * 1024 * 1024;
-            RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regbig_{i}.h"), 2_000_000, bytes, 100 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regbig_{i}.h"), 2_000_000, bytes, 100 + i);
+            stats.Add("big-headers", 1, s.Bytes, s.Idents);
         });
         Parallel.For(0, nMed, HeaderParallel, i =>
         {
             var rng = Rng.For(_o.Seed, Category.MedHeader, i);
             long bytes = (long)rng.Next(1, 10) * 1024 * 1024;
-            RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regmed_{i}.h"), 200_000, bytes, 1000 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regmed_{i}.h"), 200_000, bytes, 1000 + i);
+            stats.Add("med-headers", 1, s.Bytes, s.Idents);
+        });
+        // dense-band: headers parked just under DenseUnderMb with maximally-unique idents (fam base 100000
+        // keeps them distinct from the giant/big/med bands). Fill to the byte ceiling (defines uncapped).
+        long denseMaxBytes = (long)_o.DenseUnderMb * 1024 * 1024;
+        Parallel.For(0, nDense, HeaderParallel, i =>
+        {
+            var rng = Rng.For(_o.Seed, Category.DenseHeader, i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"dense_{i}.h"), long.MaxValue, denseMaxBytes, 100_000 + i);
+            stats.Add("dense-band", 1, s.Bytes, s.Idents);
         });
         return [.. giantPaths];
     }
@@ -205,7 +239,8 @@ public sealed class CorpusGenerator
             TinyFileEmitter.Write(dir, i, ref rng);
         });
 
-    private ManifestModel BuildManifest(string outFull, SourceEmitResult src, UnresolvedEmitResult? unres)
+    private ManifestModel BuildManifest(string outFull, SourceEmitResult src, UnresolvedEmitResult? unres,
+        BroadTokenEmitResult? broad, PopulationStats stats)
     {
         var model = new ManifestModel
         {
@@ -213,6 +248,8 @@ public sealed class CorpusGenerator
             Seed = _o.Seed,
             CorpusRoot = outFull,
         };
+        foreach (var p in stats.Snapshot())
+            model.Populations.Add(new PopulationStat(p.Name, p.Files, p.Bytes, p.Idents));
 
         var byIndex = new Dictionary<int, CFileInfo>(src.Files.Count);
         foreach (var ci in src.Files) byIndex[ci.Index] = ci;
@@ -243,6 +280,14 @@ public sealed class CorpusGenerator
             vg.UnreachableRefs = new List<string>(unres.UnreachableRefs.Count);
             foreach (var u in unres.UnreachableRefs) vg.UnreachableRefs.Add(RelSite(outFull, u));
             model.Symbols["vendor_gated"] = vg;
+        }
+
+        if (broad is not null)
+        {
+            // broad_hot: one def, a large expected ref-set (every hot-token call site across the carriers).
+            var bh = new SymbolEntry { Def = $"{PathUtil.Rel(outFull, broad.DefPath)}:1" };
+            foreach (var r in broad.Refs) bh.Refs.Add(RelSite(outFull, r));
+            model.Symbols["broad_hot"] = bh;
         }
 
         return model;

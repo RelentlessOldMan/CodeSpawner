@@ -13,6 +13,9 @@ public sealed class SymbolEntry
     public List<string>? UnreachableRefs { get; set; }
 }
 
+/// <summary>Per-population shape stats surfaced under <c>_meta.populations</c> (additive, v1).</summary>
+public sealed record PopulationStat(string Name, long FileCount, long TotalBytes, long IdentCount);
+
 /// <summary>The full v1 manifest: <c>_meta</c> + a symbol table keyed by symbol name.</summary>
 public sealed class ManifestModel
 {
@@ -20,6 +23,9 @@ public sealed class ManifestModel
     public required string GeneratorVersion { get; init; }
     public required int Seed { get; init; }
     public required string CorpusRoot { get; init; }
+
+    /// <summary>Optional per-population shape stats for consumer "is this the corpus I expect?" assertions.</summary>
+    public List<PopulationStat> Populations { get; } = new();
 
     // Insertion order preserved for stable, diffable output.
     public Dictionary<string, SymbolEntry> Symbols { get; } = new();

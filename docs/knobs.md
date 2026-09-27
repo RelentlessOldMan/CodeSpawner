@@ -29,6 +29,19 @@ never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` kee
 | `--linked-roots <n>` | `1` | Split output across N sibling trees — multi-root / federation. |
 | `--manifest true\|false` | `true` | Emit the ground-truth manifest. |
 | `--force` | off | Overwrite `--out` even if it exists and was not created by CodeSpawner. Without it, a non-empty directory CodeSpawner didn't create is protected from deletion. |
+
+### Batch 1 pathology knobs (all OFF by default; see [ROADMAP.md](ROADMAP.md))
+
+| Knob | Default | Property it stresses |
+|---|---|---|
+| `--dense-headers <n>` | `0` | Count of dense sub-threshold headers — maximally-unique idents, sized just under `--dense-under-mb`. Posting/trigram memory explosion under parallelism (the OOM shape). |
+| `--dense-under-mb <m>` | `127` | Byte ceiling each dense header sits just under (aim just below the indexer's stream threshold, e.g. 128 MB → 127). |
+| `--broad-token-files <n>` | `0` | Count of 2–8 MB carrier files for the hot token. Result capping/ranking + block-selective (sidecar) reads. |
+| `--hot-token-share <f>` | `0.5` | Fraction of carriers that actually contain the hot token (rest are same-size controls). Token seeded at deterministic offsets incl. near-EOF; every site recorded under `broad_hot`. |
+| `--long-line-files <n>` | `0` | Count of pathological single-long-line files (minified-JS shaped). Line-aligned block building / >2 GB string-materialization guard. |
+| `--max-line-bytes <m>` | `8388608` | Bytes in the single giant line of each long-line file. |
+| `--no-newline` | off | Force ALL long-line files to have no newline at all (default alternates newline / no-newline). |
+| `--encoding-mix <n>` | `0` | Count of encoding-stress files: UTF-16LE/BE + BOM, UTF-8-BOM, invalid byte runs, non-ASCII identifiers. Multibyte trigram extraction / BOM handling. |
 | `--io-parallelism <n>` | `#cores` | Max concurrent large-header writes. Header emission is CPU-bound (~40 MB/s/core) so it scales with cores on SSD; lower it on a spinning disk. |
 
 ## Presets
@@ -38,6 +51,11 @@ never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` kee
 | `--preset death` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale "repo of death". |
 | `--preset ci` | `--scale 0.01` | Fast smoke tier; keeps ≥1 pathology header. |
 | `--preset memory` | one giant + 5 includers, everything else off, 1M macro density | Pure preprocessor-memory repro. |
+| `--preset dense-band` | `--dense-headers 40 --dense-under-mb 127` (noise off) | Posting/trigram memory explosion — the OOM regression (~5 GB). |
+| `--preset broad-token` | `--broad-token-files 200 --hot-token-share 0.5` (noise off) | `find_references`-at-scale + sidecar read amplification (~1 GB). |
+| `--preset long-lines` | `--long-line-files 8 --max-line-bytes 8388608` (noise off) | Long-line / no-newline block-building stress. |
+| `--preset encoding-mix` | `--encoding-mix 40` (noise off) | Multibyte / BOM / invalid-byte extraction. |
+| `--preset many-tiny` | `--tiny-files 500000` (noise off) | Walker throughput / per-file & SMB stat pressure. |
 
 Your own knobs after a `--preset` override it (e.g. `--preset death --giant-headers 4`).
 

@@ -76,7 +76,11 @@ public struct Rng
         minInclusive + Next(maxExclusive - minInclusive);
 }
 
-/// <summary>Distinct RNG streams per generated population, so counts/placement never collide.</summary>
+/// <summary>
+/// Distinct RNG streams per generated population, so counts/placement never collide. Values are STABLE —
+/// only ever APPEND new members; renumbering would change every derived stream and break determinism of
+/// existing corpora.
+/// </summary>
 public enum Category
 {
     DirTree = 1,
@@ -89,4 +93,9 @@ public enum Category
     TinyFile,
     Unresolved,
     Placement,
+    // Batch 1 pathologies (appended — see docs/ROADMAP.md):
+    DenseHeader,
+    BroadToken,
+    LongLine,
+    EncodingMix,
 }

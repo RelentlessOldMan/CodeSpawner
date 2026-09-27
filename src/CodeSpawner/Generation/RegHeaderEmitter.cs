@@ -20,12 +20,15 @@ public static class RegHeaderEmitter
     private const int MaxRegisterBytes = 512;
     private const int BufferCapacity = FlushThreshold + MaxRegisterBytes;
 
+    /// <summary>Bytes written and unique identifiers emitted (3 per register), for the stat block.</summary>
+    public readonly record struct HeaderStats(long Bytes, long Idents);
+
     /// <summary>
     /// Write a register header to <paramref name="path"/>. Stops at whichever comes first:
     /// <paramref name="defines"/> emitted or <paramref name="maxBytes"/> reached. <paramref name="fam"/>
-    /// is the block family number woven into symbol names.
+    /// is the block family number woven into symbol names. Returns the bytes + identifier count emitted.
     /// </summary>
-    public static void Write(string path, long defines, long maxBytes, int fam)
+    public static HeaderStats Write(string path, long defines, long maxBytes, int fam)
     {
         string guard = "REGMAP_" + Path.GetFileNameWithoutExtension(path).ToUpperInvariant() + "_H";
 
@@ -84,7 +87,10 @@ public static class RegHeaderEmitter
         }
 
         len = Ascii(buf, len, "#endif\n");
-        if (len > 0) fs.Write(buf, 0, len);
+        if (len > 0) { fs.Write(buf, 0, len); flushed += len; }
+
+        // idents: 3 unique macro names per register (ADDR/RMSK/IN) == total defines emitted.
+        return new HeaderStats(flushed, emitted);
     }
 
     // Direct ASCII copy of a constant fragment — avoids the per-call overhead of Encoding.ASCII.GetBytes

@@ -21,6 +21,28 @@ public static class Presets
         "--tiny-files", "0", "--blob-files", "0", "--cfiles", "5", "--macro-density", "1000000",
     ];
 
+    // Every pathology preset isolates its shape: the population on, all normal noise off (cfiles floored at 2).
+    private static readonly string[] Bare =
+        ["--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--ordinary-headers", "0",
+         "--tiny-files", "0", "--blob-files", "0", "--cfiles", "2"];
+
+    // dense-band: N headers parked just under the stream threshold, unique idents — the OOM regression.
+    private static readonly string[] DenseBand = [.. Bare, "--dense-headers", "40", "--dense-under-mb", "127"];
+
+    // broad-token: a hot token in 0.5 of a 2-8 MB carrier band (find_references expected-set + sidecar test).
+    private static readonly string[] BroadToken = [.. Bare, "--broad-token-files", "200", "--hot-token-share", "0.5"];
+
+    // long-lines: pathologically long single-line files (emitter alternates newline / no-newline).
+    private static readonly string[] LongLines = [.. Bare, "--long-line-files", "8", "--max-line-bytes", "8388608"];
+
+    // encoding-mix: UTF-16LE/BE, UTF-8-BOM, invalid byte runs, non-ASCII identifiers.
+    private static readonly string[] EncodingMix = [.. Bare, "--encoding-mix", "40"];
+
+    // many-tiny: tiny-file-dominated — walker/stat pressure. Just the existing count knob, made a one-liner.
+    private static readonly string[] ManyTiny =
+        ["--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--ordinary-headers", "0",
+         "--blob-files", "0", "--cfiles", "2", "--tiny-files", "500000"];
+
     public static bool TryGet(string name, out string[] tokens)
     {
         tokens = name.ToLowerInvariant() switch
@@ -28,6 +50,11 @@ public static class Presets
             "death" => Death,
             "ci" => Ci,
             "memory" => Memory,
+            "dense-band" => DenseBand,
+            "broad-token" => BroadToken,
+            "long-lines" => LongLines,
+            "encoding-mix" => EncodingMix,
+            "many-tiny" => ManyTiny,
             _ => [],
         };
         return tokens.Length > 0;
@@ -54,7 +81,8 @@ public static class Presets
         }
 
         if (name is null) return args;
-        if (!TryGet(name, out var tokens)) throw new ArgException($"unknown preset '{name}' (death|ci|memory)");
+        if (!TryGet(name, out var tokens))
+            throw new ArgException($"unknown preset '{name}' (death|ci|memory|dense-band|broad-token|long-lines|encoding-mix|many-tiny)");
 
         // preset first, user args after -> user overrides.
         return [.. tokens, .. rest];

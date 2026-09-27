@@ -60,6 +60,15 @@ public static class ArgParser
                 case "manifest": o.Manifest = B(); break;
                 case "force": o.Force = B(); break;
                 case "io-parallelism": o.IoParallelism = I(); break;
+                // Batch 1 pathologies:
+                case "dense-headers": o.DenseHeaders = I(); break;
+                case "dense-under-mb": o.DenseUnderMb = I(); break;
+                case "broad-token-files": o.BroadTokenFiles = I(); break;
+                case "hot-token-share": o.HotTokenShare = D(); break;
+                case "long-line-files": o.LongLineFiles = I(); break;
+                case "max-line-bytes": o.MaxLineBytes = I(); break;
+                case "no-newline": o.NoNewline = B(); break;
+                case "encoding-mix": o.EncodingMix = I(); break;
                 default: throw new ArgException($"unknown knob --{key}");
             }
         }
@@ -101,6 +110,10 @@ public static class ArgParser
         "blob-files" => "BlobFiles",
         "macro-density" => "MacroDensity",
         "dirs" => "Dirs",
+        "dense-headers" => "DenseHeaders",
+        "broad-token-files" => "BroadTokenFiles",
+        "long-line-files" => "LongLineFiles",
+        "encoding-mix" => "EncodingMix",
         _ => key,
     };
 
