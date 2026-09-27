@@ -11,6 +11,25 @@ public sealed class SymbolEntry
     public List<string> Refs { get; init; } = new();
     public List<string> Edges { get; init; } = new();
     public List<string>? UnreachableRefs { get; set; }
+
+    /// <summary>
+    /// True when a correct lexical / preprocessor-blind indexer is EXPECTED not to resolve this symbol
+    /// (e.g. a token-paste-generated name that never appears literally in the source). The honest-miss dual
+    /// of <see cref="UnreachableRefs"/>: not finding it is correct, not a recall failure.
+    /// </summary>
+    public bool ExpectedMiss { get; set; }
+}
+
+/// <summary>
+/// A set of byte-identical files (the dedup target — they MUST collapse to one posting set) plus optional
+/// near-identical controls (1 line different — they must NOT collapse). Paths are repo-relative.
+/// </summary>
+public sealed class DupGroup
+{
+    public required string Name { get; init; }
+    public required string Sha256 { get; init; }
+    public List<string> Paths { get; init; } = new();
+    public List<string> NearVariants { get; init; } = new();
 }
 
 /// <summary>Per-population shape stats surfaced under <c>_meta.populations</c> (additive, v1).</summary>
@@ -29,4 +48,7 @@ public sealed class ManifestModel
 
     // Insertion order preserved for stable, diffable output.
     public Dictionary<string, SymbolEntry> Symbols { get; } = new();
+
+    /// <summary>Optional duplicate-content groups (dedup / posting-collapse oracle). Empty when unused.</summary>
+    public List<DupGroup> DupGroups { get; } = new();
 }

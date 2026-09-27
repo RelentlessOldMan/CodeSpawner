@@ -121,7 +121,9 @@ else), `--preset death` (~90 GB, 12 headers >1 GB).
 Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.md)):
 `--preset dense-band` (posting/trigram memory OOM), `--preset broad-token` (`find_references` at scale +
 sidecar reads), `--preset long-lines` (long-line / no-newline), `--preset encoding-mix` (UTF-16/BOM/
-invalid bytes / non-ASCII idents), `--preset many-tiny` (walker / stat pressure).
+invalid bytes / non-ASCII idents), `--preset many-tiny` (walker / stat pressure),
+`--preset pathological-symbols` (symbol-extractor cost + `expectedMiss` honest-miss),
+`--preset dup-content` (content-hash dedup / posting collapse).
 
 Your own knobs after a preset override it (e.g. `--preset dense-band --dense-headers 80`). Pathology
 corpora record their shape under `_meta.populations` so a consumer can assert the corpus before trusting

@@ -69,6 +69,9 @@ public static class ArgParser
                 case "max-line-bytes": o.MaxLineBytes = I(); break;
                 case "no-newline": o.NoNewline = B(); break;
                 case "encoding-mix": o.EncodingMix = I(); break;
+                case "pathological-symbols": o.PathologicalSymbols = I(); break;
+                case "dup-groups": o.DupGroups = I(); break;
+                case "dup-copies": o.DupCopies = I(); break;
                 default: throw new ArgException($"unknown knob --{key}");
             }
         }
@@ -114,6 +117,8 @@ public static class ArgParser
         "broad-token-files" => "BroadTokenFiles",
         "long-line-files" => "LongLineFiles",
         "encoding-mix" => "EncodingMix",
+        "pathological-symbols" => "PathologicalSymbols",
+        "dup-groups" => "DupGroups",
         _ => key,
     };
 

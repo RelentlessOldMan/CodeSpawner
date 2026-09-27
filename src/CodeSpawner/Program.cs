@@ -80,6 +80,8 @@ public static class Program
               --preset long-lines    pathological long-line / no-newline files
               --preset encoding-mix  UTF-16/BOM/invalid-byte/non-ASCII encoding stress
               --preset many-tiny     tiny-file-dominated (walker / stat pressure)
+              --preset pathological-symbols  token-paste (expected-miss)/long idents/deep nesting
+              --preset dup-content   byte-identical groups (content-hash dedup / posting collapse)
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly):
               --out <dir>            output directory (required; cleared if it exists)

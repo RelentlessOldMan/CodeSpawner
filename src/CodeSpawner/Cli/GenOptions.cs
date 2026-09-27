@@ -53,6 +53,16 @@ public sealed class GenOptions
     /// <summary>Count of encoding-stress files (UTF-16LE/BE, UTF-8-BOM, invalid bytes, non-ASCII idents).</summary>
     public int EncodingMix { get; set; } = 0;
 
+    // --- Batch 2 pathologies (OFF by default). ---
+
+    /// <summary>Count of files with pathological symbol shapes (token-paste, long idents, deep nesting).</summary>
+    public int PathologicalSymbols { get; set; } = 0;
+
+    /// <summary>Count of duplicate-content groups (byte-identical copies + a near-identical control each).</summary>
+    public int DupGroups { get; set; } = 0;
+    /// <summary>Byte-identical copies per dup group (the set that must collapse under content-hash dedup).</summary>
+    public int DupCopies { get; set; } = 4;
+
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;
 

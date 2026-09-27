@@ -45,7 +45,7 @@ public static class ManifestVerifier
         foreach (var s in symbols.EnumerateObject()) names.Add(s.Name);
 
         var lineCache = new Dictionary<string, string[]>();
-        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0;
+        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0;
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree (the unresolved-include premise).
         bool anyVendorHeaderPresent =
@@ -55,6 +55,16 @@ public static class ManifestVerifier
         {
             string name = sym.Name;
             var entry = sym.Value;
+
+            // Honest-miss (expectedMiss) symbols are macro-generated: the name must NOT appear literally at
+            // the def site, and the generator macro must be present. They carry no refs/edges to check.
+            if (entry.TryGetProperty("expectedMiss", out var emEl) && emEl.ValueKind == JsonValueKind.True)
+            {
+                string site = entry.GetProperty("def").GetString()!;
+                if (HonestMissOk(corpus, lineCache, site, name, out string mw)) missOk++;
+                else { Console.Error.WriteLine($"FAIL expectedMiss {name}: {mw}"); fail++; }
+                continue;
+            }
 
             // def site contains the symbol token.
             if (entry.TryGetProperty("def", out var defEl))
@@ -98,10 +108,69 @@ public static class ManifestVerifier
                 }
         }
 
-        Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs");
+        // dup-content: every path in a group must exist and hash to the recorded sha256 (i.e. be byte-
+        // identical — the dedup target); every near-variant must exist and differ.
+        if (root.TryGetProperty("dupGroups", out var dgEl) && dgEl.ValueKind == JsonValueKind.Object)
+            foreach (var grp in dgEl.EnumerateObject())
+            {
+                string gname = grp.Name;
+                string sha = grp.Value.GetProperty("sha256").GetString()!;
+                foreach (var p in grp.Value.GetProperty("paths").EnumerateArray())
+                {
+                    if (FileSha(corpus, p.GetString()!, out string got, out string why) && got == sha) dupOk++;
+                    else { Console.Error.WriteLine($"FAIL dup {gname} @ {p.GetString()}: {(why.Length > 0 ? why : $"hash {got} != {sha}")}"); fail++; }
+                }
+                if (grp.Value.TryGetProperty("nearVariants", out var nvs))
+                    foreach (var nv in nvs.EnumerateArray())
+                    {
+                        if (!FileSha(corpus, nv.GetString()!, out string got, out string why))
+                        { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: {why}"); fail++; }
+                        else if (got == sha)
+                        { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: identical to group (should differ)"); fail++; }
+                    }
+            }
+
+        Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies");
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
         Console.Error.WriteLine($"verify: FAIL ({fail} problem(s))");
         return 1;
+    }
+
+    /// <summary>Honest-miss check: the symbol name must NOT appear at the def line and the token-paste
+    /// generator macro must — proving the symbol is macro-synthesized, not lexically present.</summary>
+    private static bool HonestMissOk(string corpus, Dictionary<string, string[]> cache, string site, string symbol, out string why)
+    {
+        int c = site.LastIndexOf(':');
+        if (c < 0 || !int.TryParse(site[(c + 1)..], out int line)) { why = "malformed def site"; return false; }
+        string rel = site[..c];
+        string full = Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
+        string prefix = corpus.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { why = $"path escapes corpus root: {rel}"; return false; }
+        if (!cache.TryGetValue(full, out var lines))
+        {
+            if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
+            lines = File.ReadAllLines(full);
+            cache[full] = lines;
+        }
+        if (line < 1 || line > lines.Length) { why = $"line {line} out of range"; return false; }
+        string L = lines[line - 1];
+        if (L.Contains(symbol, StringComparison.Ordinal)) { why = $"symbol appears literally at line {line} (not an honest miss)"; return false; }
+        if (!L.Contains(Generation.PathologicalSymbolEmitter.GenMacro, StringComparison.Ordinal))
+        { why = $"no {Generation.PathologicalSymbolEmitter.GenMacro} generator at line {line}"; return false; }
+        why = "";
+        return true;
+    }
+
+    /// <summary>Hex SHA-256 of a corpus-relative file (with containment check).</summary>
+    private static bool FileSha(string corpus, string rel, out string sha, out string why)
+    {
+        sha = ""; why = "";
+        string full = Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
+        string prefix = corpus.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { why = $"path escapes corpus root: {rel}"; return false; }
+        if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
+        sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(full)));
+        return true;
     }
 
     /// <summary>Assert the line named by "<rel>:<line>" exists and contains "<symbol>(".</summary>

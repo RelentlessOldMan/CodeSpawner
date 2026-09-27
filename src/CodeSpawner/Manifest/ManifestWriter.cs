@@ -57,9 +57,32 @@ public static class ManifestWriter
                 foreach (var u in s.UnreachableRefs) w.WriteStringValue(u);
                 w.WriteEndArray();
             }
+            if (s.ExpectedMiss) w.WriteBoolean("expectedMiss", true);
             w.WriteEndObject();
         }
         w.WriteEndObject();
+
+        if (m.DupGroups.Count > 0)
+        {
+            // Top-level: byte-identical groups (must collapse) + near-variant controls (must not).
+            w.WriteStartObject("dupGroups");
+            foreach (var d in m.DupGroups)
+            {
+                w.WriteStartObject(d.Name);
+                w.WriteString("sha256", d.Sha256);
+                w.WriteStartArray("paths");
+                foreach (var p in d.Paths) w.WriteStringValue(p);
+                w.WriteEndArray();
+                if (d.NearVariants.Count > 0)
+                {
+                    w.WriteStartArray("nearVariants");
+                    foreach (var nv in d.NearVariants) w.WriteStringValue(nv);
+                    w.WriteEndArray();
+                }
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+        }
 
         w.WriteEndObject();
         w.Flush();
