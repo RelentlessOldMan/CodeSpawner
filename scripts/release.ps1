@@ -21,7 +21,7 @@ if (git status --porcelain) { throw "Working tree not clean - commit or stash yo
 
 # 2. Find the current version in Program.cs and decide the new one.
 $src = [System.IO.File]::ReadAllText($verFile)
-if ($src -notmatch 'Version\s*=\s*"(\d+)\.(\d+)\.(\d+)"') { throw "Couldn't find Version = \"X.Y.Z\" in Program.cs" }
+if ($src -notmatch 'Version\s*=\s*"(\d+)\.(\d+)\.(\d+)"') { throw "Could not find a Version = X.Y.Z declaration in Program.cs" }
 if ($Version) {
     if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must look like X.Y.Z" }
     $ver = $Version
