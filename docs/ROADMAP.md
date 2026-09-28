@@ -48,7 +48,10 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
 - Near-identical dedup currently ships one control per group. A `--dup-near <n>` knob for a tunable
   non-collapse population could follow if CodeCompass wants to stress the near-miss boundary harder.
 
-## Longer-term — highest-value after the pathologies
+## Next up — `mutate` / churn (GREEN-LIT by CodeCompass, 2026-09-27)
+
+Gated on the `--preset death` run finishing so its result informs the design; then a design doc precedes any
+code. CodeCompass is the consumer (watcher/reconcile/sidecar-delete); CodeCarver doesn't need it.
 
 - **`mutate` / churn** — `codespawner mutate --corpus X --edits N --seed S`: deterministically edit / add /
   remove files IN PLACE (guarded by the `.codespawner` marker, no clobber) and emit a **delta manifest**
@@ -60,11 +63,11 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
 
 Recorded so we build on real need, not speculation. Nothing below is green-lit; no speculative builds.
 
-| Item | CodeCarver | CodeCompass |
-|---|---|---|
-| **C++ profile** | **Would consume** — highest-leverage of the three (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). But **not urgent**, and *not* worth the v2 bump yet — C firmware is the real target. Build when C++ carving becomes a priority. | TBD (pending death-run + reply). |
-| **mutate / churn** | **Not useful** — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | Likely the main consumer (its watcher/reconcile path) — TBD. |
-| **dup-near** | **Not useful** — content similarity is irrelevant to reachability. | Pure indexer/dedup concern — their call. |
+| Item | CodeCarver | CodeCompass | Decision |
+|---|---|---|---|
+| **mutate / churn** | Not useful — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | **Green-lit** — the one worth building: the incremental-index / watcher oracle CodeCompass currently cannot verify. | ✅ **NEXT** — build it. Gated on the death-run finishing so its result folds into the design. |
+| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). But not urgent, not worth the v2 bump yet. | Park. | ⏸ **PARKED** — revisit when C++ carving becomes a priority (triggers manifest v2). |
+| **dup-near** | Not useful — content similarity is irrelevant to reachability. | Park. | ⏸ **PARKED**. |
 
 **C++ profile — CodeCarver-side plan when green-lit (small):** extend `carver-groundtruth-oracle.ps1` to
 carve `--lang cpp` and assert against the manifest's C++ `edges`, treating virtual/override targets as the
