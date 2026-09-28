@@ -7,7 +7,7 @@ namespace CodeSpawner.Manifest;
 /// </summary>
 public sealed class SymbolEntry
 {
-    public required string Def { get; init; }
+    public required string Def { get; set; }
     public List<string> Refs { get; init; } = new();
     public List<string> Edges { get; init; } = new();
     public List<string>? UnreachableRefs { get; set; }

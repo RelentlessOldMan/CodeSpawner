@@ -101,4 +101,7 @@ public enum Category
     // Batch 2 pathologies (appended):
     PathoSymbol,
     DupContent,
+    // mutate/churn seeds + edit selection (appended):
+    MutateSeed,
+    Mutate,
 }

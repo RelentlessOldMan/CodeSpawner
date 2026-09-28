@@ -1,0 +1,352 @@
+using System.Text;
+using System.Text.Json;
+using CodeSpawner.Cli;
+using CodeSpawner.Generation;
+using CodeSpawner.Manifest;
+
+namespace CodeSpawner.Mutation;
+
+public enum EditType { Remove, LineShift, Add, Grow, Shrink, Restream }
+
+/// <summary>One planned edit: its type, the target file (abs), the primary symbol, and a line hint.</summary>
+public sealed record Edit(EditType Type, string Path, string? Symbol, int DefLine);
+
+/// <summary>FS-effect checklist for a delta (composition never needs it; consumer FS asserts do).</summary>
+public sealed class FileOps
+{
+    public List<string> Added { get; } = new();
+    public List<string> Removed { get; } = new();
+    public List<string> Modified { get; } = new();
+    public List<(string From, string To)> Renamed { get; } = new();
+}
+
+/// <summary>
+/// Deterministically edits a corpus in place and emits symbol-overlay delta manifests (see
+/// docs/mutate-design.md). Guarded by the <c>.codespawner</c> marker. The base manifest stays immutable;
+/// deltas are the record of change. Composition: <c>truth_k = truth_{k-1} ⊕ delta_k</c>.
+/// </summary>
+public static class Mutator
+{
+    private const string MarkerName = ".codespawner";
+    private const int LineShiftLines = 12;         // lines inserted above a def for the line-shift edit
+    private const long GrowTargetBytes = 9L * 1024 * 1024;   // cross the 8 MB sidecar cutoff
+    private const long ShrinkTargetBytes = 1L * 1024 * 1024; // below the 2 MB network cutoff
+    private const long RestreamTargetBytes = 100L * 1024 * 1024;
+
+    public static int Run(MutateOptions o)
+    {
+        string corpus = Path.GetFullPath(o.Corpus);
+        if (!Directory.Exists(corpus)) { Console.Error.WriteLine($"error: corpus not found: {corpus}"); return 2; }
+        if (!File.Exists(Path.Combine(corpus, MarkerName)))
+            throw new ArgException($"--corpus '{corpus}' is not a CodeSpawner corpus (no .codespawner marker); refusing to edit it.");
+
+        string manifestPath = o.Manifest ?? DefaultManifestPath(corpus);
+        if (!File.Exists(manifestPath)) { Console.Error.WriteLine($"error: base manifest not found: {manifestPath}"); return 2; }
+        var basem = ManifestReader.Load(manifestPath);
+
+        var plan = BuildPlan(o, corpus, basem);
+        Console.WriteLine($"mutate: {plan.Count} edit(s), seed {o.Seed}, base {basem.Sha256[..12]}… " +
+                          $"({string.Join(",", plan.Select(e => e.Type))})");
+
+        if (o.Step is { } k)
+        {
+            // Replay edits 1..k-1 on the table only (their disk ops were done by prior --step calls),
+            // then apply edit k for real (disk + table). Delta composes onto truth_{k-1}.
+            var work = Clone(basem.Symbols);
+            for (int j = 0; j < k - 1; j++) ApplyEdit(plan[j], corpus, work, touchDisk: false);
+            string prevSha = TruthDigest.Compute(work);
+            var before = Clone(work);
+            var ops = ApplyEdit(plan[k - 1], corpus, work, touchDisk: true);
+            WriteDelta(corpus, basem, o, k, prevSha, before, work, ops);
+        }
+        else if (o.Through)
+        {
+            var work = Clone(basem.Symbols);
+            string prevSha = TruthDigest.Compute(basem.Symbols); // composes onto base
+            var before = Clone(basem.Symbols);
+            var ops = new FileOps();
+            for (int j = 0; j < plan.Count; j++) Merge(ops, ApplyEdit(plan[j], corpus, work, touchDisk: true));
+            WriteDelta(corpus, basem, o, null, prevSha, before, work, ops);
+        }
+        else
+        {
+            // Default: apply the whole chain to disk and emit per-step deltas (convenience / local test).
+            var work = Clone(basem.Symbols);
+            for (int j = 0; j < plan.Count; j++)
+            {
+                string prevSha = TruthDigest.Compute(work);
+                var before = Clone(work);
+                var ops = ApplyEdit(plan[j], corpus, work, touchDisk: true);
+                WriteDelta(corpus, basem, o, j + 1, prevSha, before, work, ops);
+            }
+        }
+        return 0;
+    }
+
+    // ---- planning -------------------------------------------------------------------------------------
+
+    private static List<Edit> BuildPlan(MutateOptions o, string corpus, BaseManifest basem)
+    {
+        // Removable/shiftable source files: func_i defs (i>=1 so removal leaves a dangling caller ripple).
+        var srcPool = basem.Symbols
+            .Where(kv => kv.Key.StartsWith("func_", StringComparison.Ordinal) && int.TryParse(kv.Key[5..], out int n) && n >= 1)
+            .Select(kv => (name: kv.Key, site: SplitSite(kv.Value.Def)))
+            .Select(x => new Edit(EditType.Remove, AbsOf(corpus, x.site.path), x.name, x.site.line))
+            .OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
+        Shuffle(srcPool, o.Seed, 1);
+
+        var growPool = ScanRel(corpus, "hdr_*.h");
+        var shrinkPool = ScanRel(corpus, "mut_shrink_*.h");
+        var restreamPool = ScanRel(corpus, "mut_restream_*.h");
+
+        var types = new List<EditType> { EditType.Remove, EditType.LineShift, EditType.Add };
+        if (growPool.Count > 0) types.Add(EditType.Grow);
+        if (shrinkPool.Count > 0) types.Add(EditType.Shrink);
+        if (o.Restream && restreamPool.Count > 0) types.Add(EditType.Restream);
+
+        var plan = new List<Edit>(o.Edits);
+        int srcCur = 0, growCur = 0, shrinkCur = 0, restreamCur = 0;
+        for (int k = 0; k < o.Edits; k++)
+        {
+            switch (types[k % types.Count])
+            {
+                case EditType.Remove:
+                    plan.Add(Need(srcPool, ref srcCur, "remove") with { Type = EditType.Remove }); break;
+                case EditType.LineShift:
+                    plan.Add(Need(srcPool, ref srcCur, "line-shift") with { Type = EditType.LineShift }); break;
+                case EditType.Add:
+                    plan.Add(new Edit(EditType.Add, Path.Combine(corpus, $"mut_add_{k}.c"), $"mut_add_{k}", 2)); break;
+                case EditType.Grow:
+                    plan.Add(new Edit(EditType.Grow, AbsOf(corpus, growPool[growCur++ % growPool.Count]), null, 0)); break;
+                case EditType.Shrink:
+                    plan.Add(new Edit(EditType.Shrink, AbsOf(corpus, shrinkPool[shrinkCur++]), null, 0)); break;
+                case EditType.Restream:
+                    plan.Add(new Edit(EditType.Restream, AbsOf(corpus, restreamPool[restreamCur++]), null, 0)); break;
+            }
+        }
+        return plan;
+
+        static Edit Need(List<Edit> pool, ref int cur, string what)
+        {
+            if (cur >= pool.Count) throw new ArgException($"not enough source files for a '{what}' edit; generate a larger corpus (--cfiles) or fewer --edits.");
+            return pool[cur++];
+        }
+    }
+
+    // ---- applying one edit (disk + table) -------------------------------------------------------------
+
+    private static FileOps ApplyEdit(Edit e, string corpus, Dictionary<string, SymbolEntry> work, bool touchDisk)
+    {
+        var ops = new FileOps();
+        string rel = RelOf(corpus, e.Path);
+        switch (e.Type)
+        {
+            case EditType.Remove:
+            {
+                // table: tombstone symbols defined here; drop ref-sites located here from other symbols.
+                foreach (var name in work.Keys.ToList())
+                    if (SplitSite(work[name].Def).path == rel) work.Remove(name);
+                foreach (var s in work.Values)
+                    s.Refs.RemoveAll(r => SplitSite(r).path == rel);
+                if (touchDisk)
+                {
+                    foreach (var f in SiblingSet(e.Path)) if (File.Exists(f)) File.Delete(f);
+                    foreach (var f in SiblingSet(e.Path)) ops.Removed.Add(RelOf(corpus, f));
+                }
+                else ops.Removed.Add(rel);
+                break;
+            }
+            case EditType.LineShift:
+            {
+                int insertPos = e.DefLine;
+                foreach (var s in work.Values)
+                {
+                    s.Def = ShiftSite(s.Def, rel, insertPos, LineShiftLines);
+                    for (int i = 0; i < s.Refs.Count; i++) s.Refs[i] = ShiftSite(s.Refs[i], rel, insertPos, LineShiftLines);
+                }
+                if (touchDisk)
+                {
+                    var lines = new List<string>(File.ReadAllLines(e.Path));
+                    int at = Math.Clamp(insertPos - 1, 0, lines.Count);
+                    var pad = Enumerable.Range(0, LineShiftLines).Select(i => $"// mutate line-shift filler {i}");
+                    lines.InsertRange(at, pad);
+                    File.WriteAllText(e.Path, string.Join('\n', lines), Encodings.Utf8NoBom);
+                }
+                ops.Modified.Add(rel);
+                break;
+            }
+            case EditType.Add:
+            {
+                string body = $"#include <stddef.h>\nint {e.Symbol}(int x) {{ return x + 1; }}\n"; // def on line 2
+                work[e.Symbol!] = new SymbolEntry { Def = $"{rel}:{e.DefLine}" };
+                if (touchDisk) File.WriteAllText(e.Path, body, Encodings.Utf8NoBom);
+                ops.Added.Add(rel);
+                break;
+            }
+            case EditType.Grow:
+                if (touchDisk) GrowTo(e.Path, GrowTargetBytes);
+                ops.Modified.Add(rel);
+                break;
+            case EditType.Shrink:
+                if (touchDisk) OverwriteTo(e.Path, ShrinkTargetBytes);
+                ops.Modified.Add(rel);
+                break;
+            case EditType.Restream:
+                if (touchDisk) OverwriteTo(e.Path, RestreamTargetBytes);
+                ops.Modified.Add(rel);
+                break;
+        }
+        return ops;
+    }
+
+    // ---- delta emission -------------------------------------------------------------------------------
+
+    private static void WriteDelta(string corpus, BaseManifest basem, MutateOptions o, int? step, string prevSha,
+        Dictionary<string, SymbolEntry> before, Dictionary<string, SymbolEntry> after, FileOps ops)
+    {
+        string path = step is { } k ? $"{TrimDir(corpus)}-delta-{k}.json" : $"{TrimDir(corpus)}-delta.json";
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
+        w.WriteStartObject();
+
+        w.WriteStartObject("_meta");
+        w.WriteNumber("manifestVersion", 1);
+        w.WriteNumber("baseSeed", basem.Seed);
+        w.WriteNumber("editSeed", o.Seed);
+        if (step is { } s) w.WriteNumber("step", s);
+        w.WriteString("baseManifestSha", basem.Sha256);
+        w.WriteString("prevTruthSha", prevSha);
+        w.WriteEndObject();
+
+        w.WriteStartObject("fileOps");
+        WriteArray(w, "added", ops.Added);
+        WriteArray(w, "removed", ops.Removed);
+        WriteArray(w, "modified", ops.Modified);
+        if (ops.Renamed.Count > 0)
+        {
+            w.WriteStartArray("renamed");
+            foreach (var (from, to) in ops.Renamed) { w.WriteStartObject(); w.WriteString("from", from); w.WriteString("to", to); w.WriteEndObject(); }
+            w.WriteEndArray();
+        }
+        w.WriteEndObject();
+
+        // symbols overlay = the diff before→after (changed/added full entry, or "TOMBSTONE").
+        w.WriteStartObject("symbols");
+        int changed = 0, tombs = 0;
+        foreach (var name in after.Keys.Concat(before.Keys).Distinct().OrderBy(n => n, StringComparer.Ordinal))
+        {
+            bool inA = after.TryGetValue(name, out var a);
+            bool inB = before.TryGetValue(name, out var b);
+            if (inA && (!inB || !Equal(a!, b!)))
+            {
+                w.WriteStartObject(name);
+                w.WriteString("def", a!.Def);
+                WriteArray(w, "refs", a.Refs);
+                WriteArray(w, "edges", a.Edges);
+                if (inB) { var removed = b!.Refs.Except(a.Refs).ToList(); if (removed.Count > 0) WriteArray(w, "removedSites", removed); }
+                if (a.ExpectedMiss) w.WriteBoolean("expectedMiss", true);
+                w.WriteEndObject();
+                changed++;
+            }
+            else if (inB && !inA) { w.WriteString(name, "TOMBSTONE"); tombs++; }
+        }
+        w.WriteEndObject();
+
+        w.WriteEndObject();
+        w.Flush();
+        Console.WriteLine($"  {Path.GetFileName(path)}: {changed} changed, {tombs} tombstoned, " +
+                          $"+{ops.Added.Count}/-{ops.Removed.Count}/~{ops.Modified.Count} files");
+    }
+
+    // ---- helpers --------------------------------------------------------------------------------------
+
+    private static Dictionary<string, SymbolEntry> Clone(Dictionary<string, SymbolEntry> src)
+    {
+        var d = new Dictionary<string, SymbolEntry>(src.Count, StringComparer.Ordinal);
+        foreach (var (k, v) in src)
+            d[k] = new SymbolEntry
+            {
+                Def = v.Def,
+                ExpectedMiss = v.ExpectedMiss,
+                UnreachableRefs = v.UnreachableRefs is null ? null : new List<string>(v.UnreachableRefs),
+            };
+        foreach (var (k, v) in src) { d[k].Refs.AddRange(v.Refs); d[k].Edges.AddRange(v.Edges); }
+        return d;
+    }
+
+    private static bool Equal(SymbolEntry a, SymbolEntry b) =>
+        a.Def == b.Def && a.ExpectedMiss == b.ExpectedMiss &&
+        a.Refs.Count == b.Refs.Count && !a.Refs.Except(b.Refs).Any() &&
+        a.Edges.Count == b.Edges.Count && !a.Edges.Except(b.Edges).Any();
+
+    private static (string path, int line) SplitSite(string site)
+    {
+        int c = site.LastIndexOf(':');
+        return (site[..c], int.Parse(site[(c + 1)..]));
+    }
+
+    private static string ShiftSite(string site, string relF, int insertPos, int d)
+    {
+        var (p, line) = SplitSite(site);
+        return (p == relF && line >= insertPos) ? $"{p}:{line + d}" : site;
+    }
+
+    private static void Merge(FileOps into, FileOps from)
+    {
+        into.Added.AddRange(from.Added); into.Removed.AddRange(from.Removed);
+        into.Modified.AddRange(from.Modified); into.Renamed.AddRange(from.Renamed);
+    }
+
+    private static void Shuffle(List<Edit> list, int seed, int stream)
+    {
+        var rng = Rng.For(seed, Category.Mutate, stream);
+        for (int i = list.Count - 1; i > 0; i--) { int j = rng.Next(i + 1); (list[i], list[j]) = (list[j], list[i]); }
+    }
+
+    private static List<string> ScanRel(string corpus, string pattern)
+    {
+        var list = Directory.EnumerateFiles(corpus, pattern, SearchOption.AllDirectories)
+            .Select(f => RelOf(corpus, f)).ToList();
+        list.Sort(StringComparer.Ordinal);
+        return list;
+    }
+
+    private static IEnumerable<string> SiblingSet(string cPath)
+    {
+        yield return cPath;
+        string stem = cPath[..^Path.GetExtension(cPath).Length];
+        foreach (var ext in new[] { ".o", ".lst", ".bak" }) yield return stem + ext;
+    }
+
+    private static void GrowTo(string path, long target)
+    {
+        using var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.None, 1 << 20);
+        var block = Encoding.ASCII.GetBytes(new string('/', 4094) + "\n"); // benign comment line
+        while (fs.Length < target) fs.Write(block, 0, block.Length);
+    }
+
+    private static void OverwriteTo(string path, long target)
+    {
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
+        var block = Encoding.ASCII.GetBytes(new string('/', 4094) + "\n");
+        while (fs.Length < target) fs.Write(block, 0, block.Length);
+    }
+
+    private static void WriteArray(Utf8JsonWriter w, string name, List<string> items)
+    {
+        w.WriteStartArray(name);
+        foreach (var i in items) w.WriteStringValue(i);
+        w.WriteEndArray();
+    }
+
+    private static string AbsOf(string corpus, string rel) => Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
+    private static string RelOf(string corpus, string abs) => PathUtil.Rel(corpus, abs);
+    private static string TrimDir(string corpus) => corpus.TrimEnd(Path.DirectorySeparatorChar);
+
+    private static string DefaultManifestPath(string corpus)
+    {
+        string parent = Path.GetDirectoryName(TrimDir(corpus)) ?? Directory.GetCurrentDirectory();
+        string leaf = Path.GetFileName(TrimDir(corpus));
+        return Path.Combine(parent, $"{leaf}-manifest.json");
+    }
+}

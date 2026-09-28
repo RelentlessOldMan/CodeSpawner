@@ -72,6 +72,8 @@ public static class ArgParser
                 case "pathological-symbols": o.PathologicalSymbols = I(); break;
                 case "dup-groups": o.DupGroups = I(); break;
                 case "dup-copies": o.DupCopies = I(); break;
+                case "shrink-seeds": o.ShrinkSeeds = I(); break;
+                case "restream-seeds": o.RestreamSeeds = I(); break;
                 default: throw new ArgException($"unknown knob --{key}");
             }
         }
@@ -98,6 +100,34 @@ public static class ArgParser
             }
         }
         if (string.IsNullOrWhiteSpace(o.Corpus)) throw new ArgException("--corpus <dir> is required");
+        return o;
+    }
+
+    public static Mutation.MutateOptions ParseMutate(string[] args)
+    {
+        var o = new Mutation.MutateOptions { Corpus = "" };
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+            if (!a.StartsWith("--", StringComparison.Ordinal))
+                throw new ArgException($"unexpected argument '{a}'");
+            string key = a[2..].ToLowerInvariant();
+            string Val() { if (i + 1 >= args.Length) throw new ArgException($"--{key} needs a value"); return args[++i]; }
+            switch (key)
+            {
+                case "corpus": o.Corpus = Val(); break;
+                case "manifest": o.Manifest = Val(); break;
+                case "seed": o.Seed = int.Parse(Val(), CultureInfo.InvariantCulture); break;
+                case "edits": o.Edits = int.Parse(Val(), CultureInfo.InvariantCulture); break;
+                case "step": o.Step = int.Parse(Val(), CultureInfo.InvariantCulture); break;
+                case "through": o.Through = true; break;
+                case "restream": o.Restream = true; break;
+                default: throw new ArgException($"unknown option --{key}");
+            }
+        }
+        if (string.IsNullOrWhiteSpace(o.Corpus)) throw new ArgException("--corpus <dir> is required");
+        if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
+        if (o.Step is { } k && (k < 1 || k > o.Edits)) throw new ArgException($"--step must be in 1..{o.Edits}");
         return o;
     }
 

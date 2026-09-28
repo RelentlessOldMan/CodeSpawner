@@ -105,6 +105,17 @@ $dc = Join-Path $Work "dc"
 Check "dup-content verify" ($LASTEXITCODE -eq 0)
 Check "dupGroups present" ((Get-Content "$dc-manifest.json" -Raw) -match '"dupGroups"' -and (Get-Content "$dc-manifest.json" -Raw) -match '"sha256"')
 
+# 4e. MUTATE: digest golden vector + a deterministic delta with correct ripples.
+& $Exe digest-selftest | Out-Null
+Check "digest golden vector" ($LASTEXITCODE -eq 0)
+$mc = Join-Path $Work "mc"
+& $Exe gen --out $mc --scale 0.01 --giant-headers 0 --big-headers 0 --med-headers 0 --cfiles 30 --shrink-seeds 1 | Out-Null
+& $Exe mutate --corpus $mc --seed 42 --edits 5 --through | Out-Null
+$mutOk = ($LASTEXITCODE -eq 0) -and (Test-Path "$mc-delta.json")
+$dj = if (Test-Path "$mc-delta.json") { Get-Content "$mc-delta.json" -Raw } else { "" }
+Check "mutate emits delta" $mutOk
+Check "delta has prevTruthSha + fileOps" (($dj -match '"prevTruthSha"') -and ($dj -match '"fileOps"') -and ($dj -match '"removedSites"'))
+
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

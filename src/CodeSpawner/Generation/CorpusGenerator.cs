@@ -108,6 +108,12 @@ public sealed class CorpusGenerator
             Console.WriteLine($"    ^ {nDup} group(s) x {Math.Max(2, _o.DupCopies)} identical + 1 near-variant");
         }
 
+        if (_o.ShrinkSeeds > 0 || _o.RestreamSeeds > 0)
+        {
+            Timed("mutate seeds", () => EmitMutateSeeds(tree, _o.ShrinkSeeds, _o.RestreamSeeds, stats));
+            Console.WriteLine($"    ^ {_o.ShrinkSeeds} shrink seed(s) (~9MB) + {_o.RestreamSeeds} restream seed(s) (~129MB) for mutate");
+        }
+
         Timed("tiny files", () => EmitTinyFiles(tree, nCsv));
 
         Timed("compile_commands", () => CompileDbEmitter.Write(_o, outFull, src.Files));
@@ -238,6 +244,24 @@ public sealed class CorpusGenerator
             var rng = Rng.For(_o.Seed, Category.OrdinaryHeader, i);
             OrdinaryHeaderEmitter.Write(tree.PickDir(ref rng), i);
         });
+
+    // Sidecar-straddle seeds for mutate's threshold edits: ~9 MB (4-shrink target) and ~129 MB (4-restream).
+    // Reg-header shaped (unique idents) so CodeCompass sidecars them; not tracked as manifest symbols.
+    private void EmitMutateSeeds(DirTree tree, int nShrink, int nRestream, PopulationStats stats)
+    {
+        Parallel.For(0, nShrink, HeaderParallel, i =>
+        {
+            var rng = Rng.For(_o.Seed, Category.MutateSeed, i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"mut_shrink_{i}.h"), long.MaxValue, 9L * 1024 * 1024, 200_000 + i);
+            stats.Add("mutate-shrink-seed", 1, s.Bytes, s.Idents);
+        });
+        Parallel.For(0, nRestream, HeaderParallel, i =>
+        {
+            var rng = Rng.For(_o.Seed, Category.MutateSeed, 1_000_000 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"mut_restream_{i}.h"), long.MaxValue, 129L * 1024 * 1024, 300_000 + i);
+            stats.Add("mutate-restream-seed", 1, s.Bytes, s.Idents);
+        });
+    }
 
     private void EmitBlobs(DirTree tree, int n) =>
         Parallel.For(0, n, SmallFileParallel, i =>

@@ -1,5 +1,7 @@
 using CodeSpawner.Cli;
 using CodeSpawner.Generation;
+using CodeSpawner.Manifest;
+using CodeSpawner.Mutation;
 using CodeSpawner.Verify;
 
 namespace CodeSpawner;
@@ -30,9 +32,15 @@ public static class Program
                 case "verify":
                     return ManifestVerifier.Run(ArgParser.ParseVerify(rest));
 
+                case "mutate":
+                    return Mutator.Run(ArgParser.ParseMutate(rest));
+
                 case "version":
                     Console.WriteLine(Version);
                     return 0;
+
+                case "digest-selftest":
+                    return DigestSelfTest();
 
                 default:
                     Console.Error.WriteLine($"unknown command '{cmd}'. Run 'codespawner --help'.");
@@ -58,6 +66,22 @@ public static class Program
         }
     }
 
+    // Asserts the canonical truth digest still reproduces the golden vector locked with CodeCompass.
+    // A permanent guard against the delta prevTruthSha format silently drifting.
+    private static int DigestSelfTest()
+    {
+        const string golden = "7de5e47c16574fd481e461173401dbbe2c874e8712c61049b8830c3a78775d6e";
+        var truth = new Dictionary<string, SymbolEntry>(StringComparer.Ordinal)
+        {
+            ["func_0"] = new() { Def = "block1/src_0.c:11", Refs = { "block1/src_1.c:14" } },
+            ["func_1"] = new() { Def = "block1/src_1.c:12", Edges = { "func_0" } },
+        };
+        string got = TruthDigest.Compute(truth);
+        if (got == golden) { Console.WriteLine($"digest self-test: OK ({got})"); return 0; }
+        Console.Error.WriteLine($"digest self-test: FAIL\n  expected {golden}\n  got      {got}");
+        return 1;
+    }
+
     private static bool IsHelp(string a) =>
         a is "-h" or "--help" or "help" or "/?";
 
@@ -69,7 +93,17 @@ public static class Program
             USAGE:
               codespawner gen --out <dir> [knobs...]     generate a corpus + ground-truth manifest
               codespawner verify --corpus <dir>          self-check a corpus against its manifest
+              codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest
               codespawner version
+
+            MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
+              --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)
+              --seed <n>       edit-selection seed (default 7)
+              --edits <n>      number of edits (default 5)
+              --step <k>       apply ONLY edit k (the chain driver; emits corpus-delta-k.json)
+              --through        apply all N edits, emit one cumulative <corpus>-delta.json
+              --restream       include 4-restream edits (needs --restream-seeds in the base corpus)
+              (gen the base with --shrink-seeds N [--restream-seeds N] to enable 4-shrink/4-restream)
 
             PRESETS (bundled knob sets; your own knobs still override):
               --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death")
