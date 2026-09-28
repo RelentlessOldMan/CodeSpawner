@@ -63,6 +63,13 @@ public sealed class GenOptions
     /// <summary>Byte-identical copies per dup group (the set that must collapse under content-hash dedup).</summary>
     public int DupCopies { get; set; } = 4;
 
+    // --- mutate/churn seed files (targets for mutate's threshold-crossing edits; OFF by default). ---
+
+    /// <summary>~9 MB sidecar-straddle headers (mut_shrink_*.h) — mutate 4-shrink truncates them below the cutoff.</summary>
+    public int ShrinkSeeds { get; set; } = 0;
+    /// <summary>~129 MB headers (mut_restream_*.h) — mutate 4-restream shrinks them for the streamed→whole-file rewrite.</summary>
+    public int RestreamSeeds { get; set; } = 0;
+
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;
 

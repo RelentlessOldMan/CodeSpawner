@@ -85,6 +85,16 @@ edge chain is intact. Resolves relative paths against `--corpus` (so a **copied*
 the same manifest). Exit 0 = pass, 1 = fail, 2 = bad input. Manifest defaults to the `<corpus>-manifest.json`
 sibling.
 
+### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
+Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
+**delta manifest** that composes with the base: `truth = base ⊕ delta`. The incremental-index / watcher /
+reconcile / sidecar-orphan oracle. `--step k` applies one edit and emits `<corpus>-delta-{k}.json` (the
+chain driver — the consumer runs its incremental `update` and asserts between steps); `--through` applies
+all N and emits one cumulative delta. Edits: remove, line-shift modify, add, 4-grow (sidecar CREATE),
+4-shrink (sidecar DELETE), opt-in 4-restream (REWRITE). Generate the base with
+`--shrink-seeds N [--restream-seeds N]` so the threshold edits have targets. See
+[mutate-design.md](mutate-design.md) for the delta schema, composition rule, and `prevTruthSha` chain guard.
+
 ### `version`
 Prints the generator version (used by the vendoring stamp).
 

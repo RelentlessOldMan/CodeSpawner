@@ -45,6 +45,16 @@ never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` kee
 | `--pathological-symbols <n>` | `0` | Count of files with pathological symbol shapes: token-paste macros (`handler_##id` → **expectedMiss** honest-miss symbols), extreme-length identifiers, deep scope nesting. Symbol-extractor cost + honest-miss correctness. |
 | `--dup-groups <n>` | `0` | Count of duplicate-content groups (byte-identical copies scattered across dirs + a near-identical control each). Content-hash dedup / segment-merge posting collapse. Recorded under top-level `dupGroups`. |
 | `--dup-copies <n>` | `4` | Byte-identical copies per dup group (the set that must collapse). |
+| `--shrink-seeds <n>` | `0` | Emit n ~9 MB sidecar-straddle headers (`mut_shrink_*.h`) — targets for `mutate` **4-shrink** (sidecar DELETE). |
+| `--restream-seeds <n>` | `0` | Emit n ~129 MB headers (`mut_restream_*.h`) — targets for `mutate` **4-restream** (sidecar REWRITE). |
+
+## `mutate` (incremental / watcher oracle)
+
+`mutate` deterministically edits an existing corpus in place and emits **delta manifests** that compose with
+the base (`truth = base ⊕ delta`). See [mutate-design.md](mutate-design.md). Guarded by the `.codespawner`
+marker. Options: `--corpus <dir>`, `--seed <n>` (edit seed), `--edits <n>`, `--step <k>` (apply one edit →
+`<corpus>-delta-{k}.json`, the chain driver), `--through` (all edits → one cumulative delta), `--restream`.
+Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the threshold-crossing edits.
 | `--io-parallelism <n>` | `#cores` | Max concurrent large-header writes. Header emission is CPU-bound (~40 MB/s/core) so it scales with cores on SSD; lower it on a spinning disk. |
 
 ## Presets
