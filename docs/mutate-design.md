@@ -41,16 +41,28 @@ Ranked by how much each stresses a real incremental indexer (top = where increme
 | 1 | **remove** a file others reference | ✅ v1 | Stale entries lingering: reconcile must drop the file's symbols AND every ref site located in it. Absence assertion. |
 | 3 | **modify (line-shift)** — insert lines above a symbol | ✅ v1 | Stale line numbers: symbol still exists at a new `path:line`; ripples to every symbol with a site in the file. |
 | 5 | **add** a new file | ✅ v1 | Basic incremental pickup. |
-| 4-grow | grow a small file **past the 8 MB sidecar threshold** | ✅ v1 | Sidecar **CREATE** path. |
-| 4-shrink | shrink a straddle file **under the 128 MB stream threshold** | ✅ v1 | Sidecar **DELETE** / orphan-cleanup — CodeCompass's riskiest untested path. Needs the straddle seed (below). |
+| 4-grow | grow a small file **past the 8 MB sidecar cutoff** | ✅ v1 | Sidecar **CREATE** path. |
+| 4-shrink | shrink a ~9 MB seed **below the sidecar cutoff (to <2 MB)** | ✅ v1 | Sidecar **DELETE** / orphan-cleanup — CodeCompass's riskiest untested path. Needs the straddle seed (below). |
+| 4-restream | shrink a ~129 MB seed to ~100 MB | ✅ v1 (opt-in) | Sidecar **REWRITE** (streamed → whole-file). Distinct from DELETE. |
 | 2 | **rename / move** | v1.1 | FS-level remove+add; a naive incremental keeps BOTH paths. |
 
-### threshold-straddle seed (enables 4-shrink in v1)
+> **Which threshold gates a sidecar (locked with CodeCompass):** a file has a positional sidecar iff
+> `size >= the SIDECAR cutoff` (**8 MB local / 2 MB network-adaptive**). The **128 MB STREAM threshold**
+> only decides streamed-vs-whole-file indexing, and *both* paths write a sidecar. So a 129 MB→<128 MB
+> shrink only **rewrites** the sidecar (streamed→whole-file); it never orphans one. Only dropping under the
+> **sidecar** cutoff deletes it.
 
-4-shrink needs a deterministic, already-indexed file straddling 128 MB. A gen option emits one deterministic
-**~129 MB** file (just over the stream threshold) into the base corpus so it gets a sidecar; mutate's
-4-shrink truncates it under 128 MB and CodeCompass's orphan-cleanup must delete the now-orphaned sidecar.
-(4-grow needs no seed — mutate appends filler to any small file to cross 8 MB.)
+### threshold-straddle seeds (enable 4-shrink / 4-restream in v1)
+
+- **4-shrink (sidecar DELETE):** a gen option emits one deterministic **~9 MB** file (just over the 8 MB
+  local cutoff, so it's sidecar'd in BOTH local and UNC/2 MB base indexes). mutate's 4-shrink truncates it
+  to **<2 MB** (below both the 8 MB local and 2 MB network cutoffs) → the file no longer qualifies for a
+  sidecar → CodeCompass's orphan-cleanup must **delete** the now-orphaned sidecar; `fileOps` asserts it's
+  gone. Works identically local and over SMB.
+- **4-restream (sidecar REWRITE, opt-in):** a *separate* deterministic **~129 MB** seed shrunk to **~100 MB**
+  — exercises the streamed→whole-file sidecar rewrite. Gated behind a flag (the 129 MB seed bloats the base
+  corpus), so the default mutate corpus stays lean.
+- **4-grow** needs no seed — mutate appends filler to any small file to cross 8 MB (sidecar CREATE).
 
 ## Delta manifest schema
 
@@ -63,7 +75,8 @@ Sibling file, same convention as `<corpus>-manifest.json`:
     "baseSeed": 1337,
     "editSeed": 42,
     "step": 3,
-    "baseManifestSha": "<sha256 of the base manifest this delta composes against>"
+    "baseManifestSha": "<sha256 of the base manifest this delta composes against>",
+    "prevTruthSha": "<canonical digest of truth_{k-1}, the state this delta composes ONTO>"
   },
   "fileOps": {
     "added":    ["blockA/.../new_7.c"],
@@ -109,6 +122,35 @@ for (name, entry) in delta.symbols:
 ```
 
 A trivial dict overlay — no ripple special-casing. Chain: `truth_k = truth_{k-1} ⊕ delta_k`.
+
+## Chain integrity — `prevTruthSha` canonical digest
+
+`baseManifestSha` binds the chain's STARTING base, but `delta_k` (k>1) composes onto `truth_{k-1}`, which
+is never persisted. `_meta.prevTruthSha` is the canonical digest of the truth this delta expects to apply
+ONTO; the adapter hashes its own in-memory composed truth before applying `delta_k` and catches any
+out-of-order / misapplied / skipped delta mid-chain.
+
+**Canonical digest (locked byte-for-byte with CodeCompass):**
+```
+digest = sha256( concat over symbols, ascending ORDINAL by name:
+    name  0x1F  def  0x1F  refsSortedOrdinalJoinedByComma  0x1F  edgesSortedOrdinalJoinedByComma  0x1F  (expectedMiss ? "1" : "0")  0x1E )
+```
+Pins that keep the two implementations from drifting:
+- **Ordinal (byte-wise UTF-8) sort** for BOTH the symbol-name ordering AND the refs/edges sort — never culture-aware.
+- Hash input is the **UTF-8 bytes** of the serialization; separators are the literal bytes **0x1F** (unit) and **0x1E** (record), **including a trailing 0x1E** after the last record.
+- **Paths verbatim** — the manifest's exact repo-relative forward-slash form; no normalization on either side.
+- **`expectedMiss` absent ⇒ `"0"`** (so the near-universal symbols without the field hash identically).
+- Field set (name, def, refs, edges, expectedMiss) is complete for v1; if a future edit adds a symbol
+  field, extend the digest then — the delta `_meta` is versioned so the form can evolve unambiguously.
+
+**Golden vector (unit-test your composer against this before running any chain):**
+Truth = two symbols —
+- `func_0` → def `block1/src_0.c:11`, refs `["block1/src_1.c:14"]`, edges `[]`, no `expectedMiss`
+- `func_1` → def `block1/src_1.c:12`, refs `[]`, edges `["func_0"]`, no `expectedMiss`
+
+Canonical serialization = **81 bytes**;
+**`prevTruthSha = 7de5e47c16574fd481e461173401dbbe2c874e8712c61049b8830c3a78775d6e`** (sha256, lowercase hex).
+CodeCompass independently reproduced this exact hash, so the two composers are confirmed aligned.
 
 ## Adapter flow (CodeCompass side)
 
