@@ -55,3 +55,19 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
   (added/removed/modified files + symbol-level def/ref/edge changes) that composes with the base so a
   consumer can assert *post-edit ground truth = base ⊕ delta*. This is the incremental-index / watcher /
   reconcile / sidecar-delete oracle CodeCompass currently can only eyeball. Gets its own design doc first.
+
+## Consumer demand signals (2026-09-27)
+
+Recorded so we build on real need, not speculation. Nothing below is green-lit; no speculative builds.
+
+| Item | CodeCarver | CodeCompass |
+|---|---|---|
+| **C++ profile** | **Would consume** — highest-leverage of the three (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). But **not urgent**, and *not* worth the v2 bump yet — C firmware is the real target. Build when C++ carving becomes a priority. | TBD (pending death-run + reply). |
+| **mutate / churn** | **Not useful** — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | Likely the main consumer (its watcher/reconcile path) — TBD. |
+| **dup-near** | **Not useful** — content similarity is irrelevant to reachability. | Pure indexer/dedup concern — their call. |
+
+**C++ profile — CodeCarver-side plan when green-lit (small):** extend `carver-groundtruth-oracle.ps1` to
+carve `--lang cpp` and assert against the manifest's C++ `edges`, treating virtual/override targets as the
+**sound over-approximation** set (a soundness-first carver keeps all possible dispatch targets). The
+generator side would emit known vtable/override/template edges as ground truth, mirroring the C `func_i`
+chain. This is the trigger to design the manifest v2 edge semantics for polymorphic dispatch.
