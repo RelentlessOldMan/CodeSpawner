@@ -48,10 +48,13 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
 - Near-identical dedup currently ships one control per group. A `--dup-near <n>` knob for a tunable
   non-collapse population could follow if CodeCompass wants to stress the near-miss boundary harder.
 
-## Next up — `mutate` / churn (GREEN-LIT by CodeCompass, 2026-09-27)
+## Next up — `mutate` / churn (design APPROVED by CodeCompass 2026-09-28 — building v1)
 
-Gated on the `--preset death` run finishing so its result informs the design; then a design doc precedes any
-code. CodeCompass is the consumer (watcher/reconcile/sidecar-delete); CodeCarver doesn't need it.
+Death run done (shape validated, no generator issues). Design signed off in `docs/mutate-design.md`
+(golden vector verified byte-for-byte on both sides). Now building v1. CodeCompass is the consumer
+(watcher/reconcile/sidecar-delete); CodeCarver doesn't need it. v1 edits: remove, line-shift modify, add,
+4-grow (sidecar CREATE), 4-shrink (sidecar DELETE, 9 MB→<2 MB), opt-in 4-restream (sidecar REWRITE);
+rename → v1.1.
 
 - **`mutate` / churn** — `codespawner mutate --corpus X --edits N --seed S`: deterministically edit / add /
   remove files IN PLACE (guarded by the `.codespawner` marker, no clobber) and emit a **delta manifest**
