@@ -48,13 +48,16 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
 - Near-identical dedup currently ships one control per group. A `--dup-near <n>` knob for a tunable
   non-collapse population could follow if CodeCompass wants to stress the near-miss boundary harder.
 
-## Next up — `mutate` / churn (design APPROVED by CodeCompass 2026-09-28 — building v1)
+## `mutate` / churn — SHIPPED v1 (v1.0.4, 2026-09-28)
 
-Death run done (shape validated, no generator issues). Design signed off in `docs/mutate-design.md`
-(golden vector verified byte-for-byte on both sides). Now building v1. CodeCompass is the consumer
-(watcher/reconcile/sidecar-delete); CodeCarver doesn't need it. v1 edits: remove, line-shift modify, add,
-4-grow (sidecar CREATE), 4-shrink (sidecar DELETE, 9 MB→<2 MB), opt-in 4-restream (sidecar REWRITE);
-rename → v1.1.
+Design signed off in `docs/mutate-design.md` (golden vector verified byte-for-byte on both sides), built,
+and released. `mutate` command: deterministic in-place edits emitting symbol-overlay delta manifests
+(`truth = base ⊕ delta`). v1 edits: remove, line-shift modify, add, 4-grow (sidecar CREATE), 4-shrink
+(sidecar DELETE, 9 MB→<2 MB), opt-in 4-restream (sidecar REWRITE). `--step k` chain / `--through` cumulative;
+`baseManifestSha` + `prevTruthSha` chain binding; gen `--shrink-seeds`/`--restream-seeds` targets;
+`digest-selftest` guards the canonical form. Validated: full bench 16/16, restream 129 MB→100 MB smoke,
+prevTruthSha chains across `--step`. CodeCompass consumes it (watcher/reconcile/sidecar-delete);
+CodeCarver doesn't need it. **v1.1 backlog: rename/move edit.**
 
 - **`mutate` / churn** — `codespawner mutate --corpus X --edits N --seed S`: deterministically edit / add /
   remove files IN PLACE (guarded by the `.codespawner` marker, no clobber) and emit a **delta manifest**
