@@ -12,3 +12,6 @@ dist/
 # Generated corpora / test scratch (never commit)
 .corpus/
 *-manifest.json
+
+# Local agent/machine config (ComputeWarden gate, dev notes) — not for the public repo
+CLAUDE.md
