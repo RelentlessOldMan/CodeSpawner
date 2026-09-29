@@ -18,3 +18,10 @@ CLAUDE.md
 
 # Local MCP server config (machine-specific paths) — not for the public repo
 .mcp.json
+
+# Local scan profiles of real/proprietary trees — reference ONLY, NEVER commit.
+# They characterize real trees (numbers-only, but sensitive by association). Belt-and-suspenders:
+# ignore the whole private/ dir AND any *work-profile*.json / *.private.json anywhere in the repo.
+/private/
+*work-profile*.json
+*.private.json
