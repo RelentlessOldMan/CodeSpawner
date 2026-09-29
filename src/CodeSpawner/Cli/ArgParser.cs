@@ -74,6 +74,11 @@ public static class ArgParser
                 case "dup-copies": o.DupCopies = I(); break;
                 case "shrink-seeds": o.ShrinkSeeds = I(); break;
                 case "restream-seeds": o.RestreamSeeds = I(); break;
+                // scan/shape-profile regeneration:
+                case "from-profile": o.FromProfile = Val(); break;
+                case "with-oracle": o.WithOracle = B(); break;
+                case "oracle-scale": o.OracleScale = B(); break;
+                case "oracle-chain": o.OracleChain = I(); break;
                 default: throw new ArgException($"unknown knob --{key}");
             }
         }
@@ -100,6 +105,39 @@ public static class ArgParser
             }
         }
         if (string.IsNullOrWhiteSpace(o.Corpus)) throw new ArgException("--corpus <dir> is required");
+        return o;
+    }
+
+    public static ScanOptions ParseScan(string[] args)
+    {
+        var o = new ScanOptions { Tree = "" };
+        var ci = CultureInfo.InvariantCulture;
+        for (int i = 0; i < args.Length; i++)
+        {
+            string a = args[i];
+            string Val() { if (i + 1 >= args.Length) throw new ArgException($"'{a}' needs a value"); return args[++i]; }
+
+            if (!a.StartsWith("--", StringComparison.Ordinal))
+            {
+                // first positional is the tree to scan
+                if (string.IsNullOrEmpty(o.Tree)) { o.Tree = a; continue; }
+                throw new ArgException($"unexpected argument '{a}'");
+            }
+            string key = a[2..].ToLowerInvariant();
+            switch (key)
+            {
+                case "tree": o.Tree = Val(); break;
+                case "out": o.Out = Val(); break;
+                case "structure-only": o.Posture = Profile.PrivacyPosture.StructureOnly; break;
+                case "content-stats": o.Posture = Profile.PrivacyPosture.ContentStats; break;
+                case "min-cluster": o.MinCluster = int.Parse(Val(), ci); break;
+                case "sample": o.Sample = int.Parse(Val(), ci); break;
+                default: throw new ArgException($"unknown option --{key}");
+            }
+        }
+        if (string.IsNullOrWhiteSpace(o.Tree)) throw new ArgException("scan <tree> is required");
+        if (string.IsNullOrWhiteSpace(o.Out)) throw new ArgException("--out <profile.json> is required");
+        if (o.MinCluster < 1) throw new ArgException("--min-cluster must be >= 1");
         return o;
     }
 

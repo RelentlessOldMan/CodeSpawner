@@ -116,6 +116,26 @@ $dj = if (Test-Path "$mc-delta.json") { Get-Content "$mc-delta.json" -Raw } else
 Check "mutate emits delta" $mutOk
 Check "delta has prevTruthSha + fileOps" (($dj -match '"prevTruthSha"') -and ($dj -match '"fileOps"') -and ($dj -match '"removedSites"'))
 
+# 4f. SCAN round-trip + privacy: characterize a corpus, regenerate a look-alike, verify the oracle.
+$scSrc = Join-Path $Work "sc-src"
+& $Exe gen --out $scSrc --scale 0.01 --giant-headers 0 --cfiles 20 --tiny-files 60 --long-line-files 1 --blob-files 3 | Out-Null
+& $Exe scan $scSrc --out "$Work\prof.json" | Out-Null
+$scanOk = ($LASTEXITCODE -eq 0) -and (Test-Path "$Work\prof.json")
+& $Exe scan $scSrc --out "$Work\prof2.json" | Out-Null
+function StripScannedAt($p) { (Get-Content $p -Raw) -replace '"scannedAt":\s*"[^"]*"', '"scannedAt":"X"' }
+$scanDet = ((StripScannedAt "$Work\prof.json") -eq (StripScannedAt "$Work\prof2.json"))
+# Privacy: the profile must be numbers-only — no absolute path, no generated identifiers, no content tokens.
+$prof = Get-Content "$Work\prof.json" -Raw
+$leak = ($prof -match [regex]::Escape($scSrc)) -or ($prof -match 'HWIO|hot_shared|regmap|vendor_gated|CS_MK_HANDLER|func_\d')
+$scRegen = Join-Path $Work "sc-regen"
+& $Exe gen --from-profile "$Work\prof.json" --out $scRegen --with-oracle | Out-Null
+& $Exe verify --corpus $scRegen | Out-Null
+$scVerify = ($LASTEXITCODE -eq 0)
+Check "scan emits profile" $scanOk
+Check "scan deterministic" $scanDet
+Check "profile leaks nothing (privacy)" (-not $leak)
+Check "gen --from-profile + oracle verify" $scVerify
+
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

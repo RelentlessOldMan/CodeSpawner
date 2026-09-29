@@ -2,6 +2,7 @@ using CodeSpawner.Cli;
 using CodeSpawner.Generation;
 using CodeSpawner.Manifest;
 using CodeSpawner.Mutation;
+using CodeSpawner.Scan;
 using CodeSpawner.Verify;
 
 namespace CodeSpawner;
@@ -26,8 +27,13 @@ public static class Program
             switch (cmd)
             {
                 case "gen":
-                    new CorpusGenerator(ArgParser.ParseGen(Presets.Expand(rest))).Run();
+                    var genOpts = ArgParser.ParseGen(Presets.Expand(rest));
+                    if (genOpts.FromProfile is not null) new ProfileGenerator(genOpts).Run();
+                    else new CorpusGenerator(genOpts).Run();
                     return 0;
+
+                case "scan":
+                    return new Scanner(ArgParser.ParseScan(rest)).Run();
 
                 case "verify":
                     return ManifestVerifier.Run(ArgParser.ParseVerify(rest));
@@ -92,9 +98,20 @@ public static class Program
 
             USAGE:
               codespawner gen --out <dir> [knobs...]     generate a corpus + ground-truth manifest
+              codespawner scan <tree> --out <profile>    measure a real tree -> numbers-only shape profile
+              codespawner gen --from-profile <p> --out <dir>   regenerate a look-alike from a profile
               codespawner verify --corpus <dir>          self-check a corpus against its manifest
               codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest
               codespawner version
+
+            SCAN (privacy-preserving characterize -> regenerate; see docs/scan-design.md):
+              scan <tree> --out <profile.json>   read-only; emits a numbers-only shape/cost profile
+              --structure-only   never opens a byte (size/type/dir only) — max paranoia
+              --content-stats    add numeric content histograms (opt-in; default is class-labeled)
+              --min-cluster <n>  k-anonymity floor (default 5; small clusters fold into "other")
+              --sample <n>       classify up to n files per (ext,size-band) cluster (default 64; 0 = all)
+              gen --from-profile <p> [--with-oracle] [--oracle-scale] [--oracle-chain <n>]
+                                 regenerate; --with-oracle overlays the ground-truth spine + manifest
 
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)

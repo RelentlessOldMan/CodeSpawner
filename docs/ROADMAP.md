@@ -65,7 +65,16 @@ CodeCarver doesn't need it. **v1.1 backlog: rename/move edit.**
   consumer can assert *post-edit ground truth = base ⊕ delta*. This is the incremental-index / watcher /
   reconcile / sidecar-delete oracle CodeCompass currently can only eyeball. Gets its own design doc first.
 
-## Next — `scan` / shape-profile (design draft, for consumer review)
+## `scan` / shape-profile — SHIPPED v1 (2026-09-29)
+
+Both consumers signed off; design frozen and BUILT. `scan <tree> --out profile.json` (read-only, 3 privacy
+postures) → numbers-only profile; `gen --from-profile` regenerates a look-alike (shape replication +
+`--with-oracle` spine + `--oracle-scale` body inflation). Code in `src/CodeSpawner/{Scan,Profile}` +
+`Generation/{ProfileGenerator,ArchetypeSynthesizer,OracleOverlay}.cs`; bench gate added. Validated on the JIT
+path (determinism, privacy-no-leak, round-trip class fidelity, oracle verify PASS); full AOT bench pending a
+free machine (gated). **Backlog:** per-class sub-split of mixed clusters; C++ content classes; profile diff.
+
+### Original design notes (retained)
 
 Privacy-preserving **characterize → regenerate** round-trip: `scan <tree> --out profile.json` measures a
 real tree's *shape and cost* (numbers + category labels only, no names/tokens/content ever stored), and
