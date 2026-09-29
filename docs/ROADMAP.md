@@ -91,9 +91,17 @@ design doc → loop CodeCompass + CodeCarver → build.
   `--structure-only`.
 - scan stat names mirror doctor/probe vocabulary.
 
-**Still open — CodeCarver** (not yet looped): Q1 parsedSourceBytes headline vs inline-fn-header breakout;
-Q2 `--with-oracle` call-graph archetype sizing (track measured `.c` distribution vs compact chain).
-Not yet built.
+**CodeCarver sign-off (2026-09-29, `claudes-chatroom`), thumbs UP:**
+- Q1: `parsedSourceBytes` stays the headline but **class-decomposed** with a `heavy`/`cheap` flag,
+  `inline-function-heavy` surfaced (the node-minting class; `#define`-dense is auto-skipped).
+- Q2: `--with-oracle` spine defaults **compact**; opt-in size knob from the measured `.c` distribution
+  inflates function BODIES only — spine + `expectedMiss` invariant (reachability never perturbed).
+- **New axis (the gap CodeCarver caught):** peak graph RAM tracks **symbol/edge density**, not bytes. Added
+  `symbolDensity` (`functionsPerKB`/`callsPerFunction`/`globalRefsPerFile`) — **coarse low/med/high in the
+  class-labeled default** so the profile people actually run reproduces the memory failure mode; precise
+  numerics under `--content-stats`; fixed+documented thresholds off the same single-pass content-class heuristic.
+
+Both consumers signed off. Design is frozen for v1 build. Not yet built.
 
 ## Consumer demand signals (2026-09-27)
 
