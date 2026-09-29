@@ -69,35 +69,51 @@ public sealed class ProfileGenerator
 
     private List<string> BuildDirs(string outFull, ProfileModel profile)
     {
-        var dirs = new List<string>();
+        // Rebuild a tree whose TOTAL dir count and per-depth distribution match the profile: attach each
+        // depth-d directory under an EXISTING depth-(d-1) directory, so shared parents are reused rather than
+        // recreated per leaf (the bug that inflated the dir count ~depth-fold). Round-robin over the parent
+        // set at each level approximates the fan-out.
+        var pool = new List<string> { outFull };
+        var levels = new Dictionary<int, List<string>> { [0] = new() { outFull } };
         long g = 0;
-        var entries = profile.Dirs.DepthHistogram.Entries;
-        if (entries.Count == 0)
+
+        var byDepth = new SortedDictionary<int, long>();
+        foreach (var (label, cnt) in profile.Dirs.DepthHistogram.Entries)
+            if (int.TryParse(label, NumberStyles.Integer, CultureInfo.InvariantCulture, out int d) && cnt > 0)
+                byDepth[d] = byDepth.TryGetValue(d, out var e) ? e + cnt : cnt;
+
+        if (byDepth.Count == 0)
         {
-            int target = (int)Math.Max(1, profile.Dirs.Count);
-            for (int k = 0; k < target; k++) dirs.Add(MakeDir(outFull, 1, g++));
-        }
-        else
-        {
-            foreach (var (label, cnt) in entries)
+            // No depth model (e.g. an empty histogram): fall back to a flat spread under the root.
+            long flat = Math.Max(1, profile.Dirs.Count);
+            for (long k = 0; k < flat; k++)
             {
-                if (!int.TryParse(label, NumberStyles.Integer, CultureInfo.InvariantCulture, out int depth)) depth = 1;
-                for (long k = 0; k < cnt; k++) dirs.Add(MakeDir(outFull, depth, g++));
+                string dir = Path.Combine(outFull, "d" + g.ToString(CultureInfo.InvariantCulture));
+                Directory.CreateDirectory(dir); pool.Add(dir); g++;
+            }
+            return pool;
+        }
+
+        foreach (var (depth, count) in byDepth)
+        {
+            if (depth <= 0) continue; // depth 0 is the root itself, already present
+            // Parent set = nearest shallower populated level. Real trees are downward-closed so this is
+            // depth-1; the search only matters for a pathological gap in the histogram.
+            List<string>? parents = null;
+            for (int p = depth - 1; p >= 0; p--)
+                if (levels.TryGetValue(p, out parents) && parents.Count > 0) break;
+            parents ??= levels[0];
+
+            var here = levels.TryGetValue(depth, out var lst) ? lst : (levels[depth] = new List<string>());
+            for (long k = 0; k < count; k++)
+            {
+                string parent = parents[(int)(k % parents.Count)];
+                string dir = Path.Combine(parent, "d" + g.ToString(CultureInfo.InvariantCulture));
+                Directory.CreateDirectory(dir);
+                here.Add(dir); pool.Add(dir); g++;
             }
         }
-        if (dirs.Count == 0) dirs.Add(outFull);
-        return dirs;
-    }
-
-    // A directory at the given depth; a unique group segment keeps leaves distinct so the count is honored.
-    private static string MakeDir(string outFull, int depth, long g)
-    {
-        if (depth <= 0) return outFull;
-        var segs = new List<string> { "g" + g.ToString(CultureInfo.InvariantCulture) };
-        for (int s = 1; s < depth; s++) segs.Add("s" + s.ToString(CultureInfo.InvariantCulture));
-        string dir = Path.Combine(outFull, Path.Combine(segs.ToArray()));
-        Directory.CreateDirectory(dir);
-        return dir;
+        return pool;
     }
 
     private void PrepareOutputDir()
