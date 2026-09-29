@@ -104,4 +104,8 @@ public enum Category
     // mutate/churn seeds + edit selection (appended):
     MutateSeed,
     Mutate,
+    // scan/shape-profile regeneration (appended):
+    ProfileGen,
+    ProfileDir,
+    ProfileOracle,
 }

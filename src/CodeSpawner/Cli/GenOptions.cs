@@ -70,6 +70,17 @@ public sealed class GenOptions
     /// <summary>~129 MB headers (mut_restream_*.h) — mutate 4-restream shrinks them for the streamed→whole-file rewrite.</summary>
     public int RestreamSeeds { get; set; } = 0;
 
+    // --- scan/shape-profile regeneration (gen --from-profile). ---
+
+    /// <summary>Path to a scan profile — when set, gen synthesizes a look-alike from it instead of the knobs.</summary>
+    public string? FromProfile { get; set; }
+    /// <summary>Overlay the ground-truth spine (func_i chain, hot_shared, vendor_gated, expectedMiss) + manifest.</summary>
+    public bool WithOracle { get; set; } = false;
+    /// <summary>Opt-in: inflate the oracle spine's function BODIES to the measured .c size (spine invariant).</summary>
+    public bool OracleScale { get; set; } = false;
+    /// <summary>Length of the func_i chain the oracle overlay emits (compact by default).</summary>
+    public int OracleChain { get; set; } = 12;
+
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;
 

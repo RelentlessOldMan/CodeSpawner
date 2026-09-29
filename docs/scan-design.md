@@ -1,6 +1,12 @@
-# `scan` / shape-profile — design doc (draft, for CodeCompass + CodeCarver review)
+# `scan` / shape-profile — design doc
 
-**Status:** design draft. Goal: a privacy-preserving **characterize → regenerate** round-trip. Run `scan`
+**Status:** BUILT (v1, 2026-09-29) — both consumers signed off (CodeCompass + CodeCarver), design frozen and
+implemented. `scan` + `gen --from-profile` (shape replication + `--with-oracle` + `--oracle-scale`) ship in
+`src/CodeSpawner/{Scan,Profile}` and `Generation/{ProfileGenerator,ArchetypeSynthesizer,OracleOverlay}.cs`.
+Validated: profile determinism, privacy (numbers-only, no path/identifier/content leak), round-trip
+class-distribution fidelity, and oracle `verify` PASS. See "Implementation status" at the end.
+
+Goal: a privacy-preserving **characterize → regenerate** round-trip. Run `scan`
 against a real (proprietary) tree, get a numbers-only **shape profile**, carry it out, and
 `gen --from-profile` rebuilds a generic look-alike that reproduces the tree's *cost and shape* — with
 **zero proprietary information** in the profile. The profile is the direct machine interchange (no
@@ -220,7 +226,36 @@ paths, and content are generic and fake.
 
 ## Scope
 
-- **v1:** `scan` (balanced + `--no-content`), profile schema, `gen --from-profile` shape replication with the
-  content-class synthesizer, `--with-oracle` overlay, determinism.
+- **v1:** `scan` (3 postures), profile schema, `gen --from-profile` shape replication with the content-class
+  synthesizer, `--with-oracle` overlay, determinism.
 - **Later:** richer per-include graph modeling; C++-specific content classes; profile "diff" (compare two
   trees / drift over time).
+
+## Implementation status (v1, 2026-09-29)
+
+Built and validated on the JIT path (full AOT bench pending a free machine — gated behind Overwatch):
+
+- **`scan <tree> --out profile.json`** — read-only walk; `--structure-only` / default class-labeled /
+  `--content-stats`; `--min-cluster` (k-anonymity fold into `other`); `--sample` (per-cluster cap).
+  `src/CodeSpawner/Scan/{Scanner,ContentClassifier,TrigramMeter,IncludeAggregate}.cs`.
+- **Profile** (`profileVersion 1`) — `src/CodeSpawner/Profile/{ProfileModel,ContentClass,ProfileWriter,
+  ProfileReader}.cs`. Streaming `Utf8JsonWriter`, posture-gated. Two headlines, per-archetype trigram pair,
+  class-decomposed `parsedSourceByClass`, include fan-out (2-hop) with `unresolvedIncludeRate` +
+  `duplicateBasenameAmbiguity`, coarse `symbolDensity` bands (exact under `--content-stats`).
+- **`gen --from-profile <p> --out <dir> [--with-oracle] [--oracle-scale] [--oracle-chain N]`** —
+  `Generation/{ProfileGenerator,ArchetypeSynthesizer,OracleOverlay}.cs`. Per-class synthesizers emit content
+  that re-classifies to the same class (round-trip stable). `template-metaprogramming` degrades to
+  `inline-function-heavy` with a logged note. Oracle spine is compact by default; `--oracle-scale` inflates
+  function BODIES only (spine + `expectedMiss` invariant). Deterministic via `--seed`.
+- **Content classes:** the taxonomy above, plus a byte-value-entropy split for `data-blob-*`. Trigram
+  cardinality via a 2 MB presence bitset (exact distinct-count, content-free).
+- **Verified:** scan determinism (byte-identical bar `scannedAt`); privacy (profile contains no absolute
+  path, generated identifier, or content token); round-trip class-distribution fidelity; `gen --from-profile`
+  determinism; oracle `verify` PASS (compact + `--oracle-scale`). Bench gate added in `scripts/bench.ps1`.
+
+### Known v1 simplifications (documented, not bugs)
+- Clusters are `(ext, size-band)` with the modal sampled class; per-class sub-splitting of a mixed cluster is
+  "later." Counts stay exact.
+- `distinctTrigramEstimate` is measured on the sampled prefixes (≤4 MB/file); `occurrences` is exact from
+  full byte counts. 2-hop include fan-out expands only over sampled files' include maps (one-hop +
+  `unresolvedIncludeRate` is the floor for unsampled targets), exactly as agreed.
