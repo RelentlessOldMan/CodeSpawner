@@ -58,9 +58,22 @@ Hardening:
 sub-cost, but a whole-tree indexer's total cost is driven more by total bytes + trigram density + symbol
 extraction. So the profile carries a parse headline AND an index headline.
 
-- **`parsedSourceBytes`** *(parse headline)*: total bytes of parseable source = `.c/.cpp` + headers under the
-  streaming cap that are NOT define-dense. Parse-time predictor (~1 MB/s). The number that matters most for a
-  carver / semantic sub-cost.
+- **`parsedSourceBytes`** *(parse headline, class-decomposed)*: total bytes of parseable source = `.c/.cpp` +
+  headers under the streaming cap that are NOT define-dense. Parse-time predictor (~1 MB/s). Reported as ONE
+  headline **decomposed by content class**, each class carrying a `heavy`/`cheap` flag — `inline-function-heavy`
+  surfaced explicitly (CodeCarver, 2026-09-29: `#define`-dense is auto-skipped and mints no graph nodes, but
+  inline-fn parses in full and mints real function/call nodes, so its bytes are the single most predictive
+  number for the blowup; `enum-struct-table` + `template-metaprogramming` also carry `heavy`). Not a second
+  free-floating scalar — a decomposition of the one headline.
+- **`symbolDensity` per archetype** *(graph-RAM axis — peak memory, not parse time)*: `functionsPerKB`,
+  `callsPerFunction`, `globalRefsPerFile`. CodeCarver's real blowup was a NODE-count explosion; peak graph RAM
+  tracks symbol/edge density, so two trees with equal `parsedSourceBytes` but 10× call density cost very
+  different memory. Emitted as a **coarse `low`/`med`/`high` ordinal in the class-labeled DEFAULT** (a 3-way
+  ordinal leaks no more than the content-class label — no names/tokens — so it's consistent with the default
+  posture and reproduces the primary failure mode on the profile people actually run); precise numerics gated
+  behind `--content-stats`. Bucket thresholds are **fixed + documented** so a coarse profile still regenerates
+  a tree in the right RAM ballpark, and are read off the **same single-pass heuristic** that assigns the
+  content class (density + class derived from one read).
 - **`totalIndexedBytes`** *(index headline)*: total bytes the indexer ingests across the whole polyglot tree
   (not just parsed C/C++), so gen doesn't under-shoot index build/size.
 - **Trigram cost, per-archetype (+ global roll-up)** — reproduces index size + merge/flush cadence:
@@ -137,18 +150,23 @@ discarded), encoding, BOM, newline style.
   },
   "dirs": { "count": 5700, "depthHistogram": {…}, "fanoutHistogram": {…}, "filesPerDirHistogram": {…} },
   "archetypes": [
-    { "label": "a1", "extension": ".h", "count": 178, "class": "preprocessor-dense",
+    { "label": "a1", "extension": ".h", "count": 178, "class": "preprocessor-dense", "parseCost": "cheap",
       "sizeDistribution": { "p50": 115000000, "p90": 120000000, "max": 130000000 },
       "trigram": { "distinctEstimate": 4200000, "occurrences": 20800000000 },
+      "symbolDensity": { "functionsPerKB": "low", "callsPerFunction": "low", "globalRefsPerFile": "high" },
       "content": { "defineFrac": 0.98, "commentFrac": 0.01, "identUniqueRatio": 0.96,
-                   "avgIdentLen": 22, "avgLineLen": 60, "encoding": "ascii", "newline": "lf" } },
+                   "avgIdentLen": 22, "avgLineLen": 60, "encoding": "ascii", "newline": "lf",
+                   "symbolDensityExact": { "functionsPerKB": 0.02, "callsPerFunction": 0.3, "globalRefsPerFile": 900 } } },
     …
-  ]
+  ],
+  "parsedSourceByClass": [ { "class": "inline-function-heavy", "bytes": 62000000, "parseCost": "heavy" },
+                           { "class": "preprocessor-dense", "bytes": 0, "parseCost": "cheap" }, … ]
 }
 ```
 
-Note: the `content` block is present only under `--content-stats`; the class-labeled default emits everything
-else (including per-archetype `trigram` and `class`), but drops that numeric `content` object.
+Note: the `content` block (and `symbolDensityExact`) is present only under `--content-stats`; the class-labeled
+default emits everything else — including per-archetype `class`, `parseCost`, `trigram`, and the COARSE
+`symbolDensity` ordinal — but drops the numeric `content` object.
 
 ## `gen --from-profile`
 
@@ -166,6 +184,13 @@ paths, and content are generic and fake.
   `hot_shared`, `vendor_gated`, `expectedMiss`) with a manifest, so `verify` and CodeCarver's
   soundness+precision oracle run *at the real tree's cost/shape*. Lets a carver catch correctness
   regressions that only appear at realistic scale/content — the high-value mode for CodeCarver/CodeCompass.
+  **Spine size (CodeCarver, 2026-09-29):** default **COMPACT** — small correctness-focused files, so the
+  constantly-run correctness tier stays fast. An opt-in **size knob** drives the call-graph archetype's file
+  size from the SAME measured `.c` distribution from scan (not an arbitrary N) for periodic scale runs. **Hard
+  constraint:** the size knob inflates function BODIES ONLY (more intra-fn statements / generic filler carrying
+  the measured `symbolDensity`) and adds ZERO call edges / defs / refs — the `func_i` spine + `expectedMiss`
+  stay invariant to size, so the reachability the oracle exists to check is never perturbed. Size and spine are
+  orthogonal by construction.
 
 ## Open questions for the consumers
 
@@ -182,12 +207,16 @@ paths, and content are generic and fake.
   (`distinctEstimate` + `occurrences`), 2-hop include fan-out with `unresolvedIncludeRate` +
   `duplicateBasenameAmbiguity`.
 
-**CodeCarver — STILL OPEN (not yet in the room):**
-1. Is `parsedSourceBytes` (=.c/.cpp + non-dense-headers-under-cap) the right headline, or do you also want
-   inline-fn-header bytes broken out separately (since those are the expensive ones)?
-2. For `--with-oracle` at profile scale, should the call-graph archetype's SIZE track a real archetype (e.g.
-   make `src_i.c` match the measured `.c` size distribution) so parse cost is realistic, or stay the current
-   compact chain?
+**CodeCarver — RESOLVED 2026-09-29 (via `claudes-chatroom`), thumbs UP:**
+- Q1: keep `parsedSourceBytes` as THE headline, **decomposed by content class** with a per-class
+  `heavy`/`cheap` flag and `inline-function-heavy` surfaced — not a second scalar.
+- Q2: `--with-oracle` spine defaults **compact**; opt-in size knob from the measured `.c` distribution
+  inflates function BODIES only, spine + `expectedMiss` invariant.
+- Gap CodeCarver caught: peak graph RAM tracks **symbol/edge density**, not bytes. Added `symbolDensity`
+  (`functionsPerKB`/`callsPerFunction`/`globalRefsPerFile`) — **coarse low/med/high in the class-labeled
+  default** (so the profile people actually run reproduces the primary failure mode), precise numerics under
+  `--content-stats`, with fixed+documented bucket thresholds read off the same single-pass content-class
+  heuristic.
 
 ## Scope
 
