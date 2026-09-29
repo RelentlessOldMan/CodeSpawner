@@ -65,6 +65,18 @@ CodeCarver doesn't need it. **v1.1 backlog: rename/move edit.**
   consumer can assert *post-edit ground truth = base ⊕ delta*. This is the incremental-index / watcher /
   reconcile / sidecar-delete oracle CodeCompass currently can only eyeball. Gets its own design doc first.
 
+## Next — `scan` / shape-profile (design draft, for consumer review)
+
+Privacy-preserving **characterize → regenerate** round-trip: `scan <tree> --out profile.json` measures a
+real tree's *shape and cost* (numbers + category labels only, no names/tokens/content ever stored), and
+`gen --from-profile` rebuilds a generic look-alike. Default privacy posture: **balanced** (size/type/dir +
+privacy-safe content stats, k-anonymity, `--no-content` opt-out). Fidelity: **shape replication + optional
+`--with-oracle`** overlay (inject the ground-truth spine so verify/carve run at the real tree's cost/shape).
+Design in `docs/scan-design.md`, folding in CodeCarver's cost dimensions (parsed-source volume as the
+headline; header 3-bucket size hist; `#define`-% hist for headers ≥1 MB; **content-class fidelity** so a
+10 MB inline-fn header regenerates as inline fns, not `#define`s — match content, not just bytes). Process:
+design doc → loop CodeCompass + CodeCarver → build. Not yet built.
+
 ## Consumer demand signals (2026-09-27)
 
 Recorded so we build on real need, not speculation. Nothing below is green-lit; no speculative builds.
