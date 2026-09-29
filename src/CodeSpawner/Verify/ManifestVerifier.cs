@@ -179,7 +179,7 @@ public static class ManifestVerifier
         string prefix = corpus.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { why = $"path escapes corpus root: {rel}"; return false; }
         if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
-        sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(full)));
+        sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(full))).ToLowerInvariant();
         return true;
     }
 

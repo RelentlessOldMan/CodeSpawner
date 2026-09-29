@@ -21,7 +21,7 @@ public static class ManifestReader
     public static BaseManifest Load(string path)
     {
         byte[] bytes = File.ReadAllBytes(path);
-        string sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        string sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
         using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
 

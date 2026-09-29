@@ -39,6 +39,6 @@ public static class TruthDigest
               .Append(string.Join(',', edges)).Append(US)
               .Append(s.ExpectedMiss ? '1' : '0').Append(RS);
         }
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString())));
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
     }
 }
