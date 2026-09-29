@@ -71,14 +71,19 @@ public static class ArchetypeSynthesizer
                     len = A(buf, len, "a"); len = I(buf, len, n); len = A(buf, len, "=b"); len = I(buf, len, n); len = A(buf, len, ";");
                     break;
 
+                // Digit-only (no 0x prefix): a hex "0x" tokenizes as an identifier ("x1a"), which inflated
+                // identDensity and mis-classified the blob as text. Pure digits + separators keep identDensity
+                // ~0 so it re-classifies as data-blob; random digits -> high byte-entropy.
                 case ContentClass.DataBlobHighEntropy:
-                    len = A(buf, len, "0x"); len = Hex2(buf, len, (byte)rng.Next(256)); len = A(buf, len, ",");
-                    if ((n & 15) == 15) len = A(buf, len, "\n");
+                    buf[len++] = (byte)('0' + rng.Next(10));
+                    if ((n & 3) == 3) len = A(buf, len, ",");
+                    if ((n & 7) == 7) len = A(buf, len, " ");
+                    if ((n & 63) == 63) len = A(buf, len, "\n");
                     break;
 
                 case ContentClass.DataBlobRepetitive:
-                    len = A(buf, len, "0x00,");
-                    if ((n & 15) == 15) len = A(buf, len, "\n");
+                    len = A(buf, len, "0,");
+                    if ((n & 63) == 63) len = A(buf, len, "\n");
                     break;
 
                 case ContentClass.Text:
@@ -151,9 +156,4 @@ public static class ArchetypeSynthesizer
         return len + w;
     }
 
-    private static int Hex2(byte[] buf, int len, byte v)
-    {
-        Utf8Formatter.TryFormat(v, buf.AsSpan(len), out int w, new System.Buffers.StandardFormat('x', 2));
-        return len + w;
-    }
 }

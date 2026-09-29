@@ -131,10 +131,15 @@ $scRegen = Join-Path $Work "sc-regen"
 & $Exe gen --from-profile "$Work\prof.json" --out $scRegen --with-oracle | Out-Null
 & $Exe verify --corpus $scRegen | Out-Null
 $scVerify = ($LASTEXITCODE -eq 0)
+# Dir-count fidelity: regen must reproduce ~the source dir count (guards the depth-fold inflation bug).
+$srcDirs = (Get-ChildItem $scSrc -Recurse -Directory).Count
+$regenDirs = (Get-ChildItem $scRegen -Recurse -Directory).Count
+$dirFidelityOk = ($srcDirs -gt 0) -and ($regenDirs -ge [math]::Floor($srcDirs * 0.5)) -and ($regenDirs -le [math]::Ceiling($srcDirs * 1.5) + 2)
 Check "scan emits profile" $scanOk
 Check "scan deterministic" $scanDet
 Check "profile leaks nothing (privacy)" (-not $leak)
 Check "gen --from-profile + oracle verify" $scVerify
+Check "regen dir-count fidelity" $dirFidelityOk "(src=$srcDirs regen=$regenDirs)"
 
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
