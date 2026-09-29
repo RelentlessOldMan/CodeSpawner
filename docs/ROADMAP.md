@@ -75,7 +75,25 @@ privacy-safe content stats, k-anonymity, `--no-content` opt-out). Fidelity: **sh
 Design in `docs/scan-design.md`, folding in CodeCarver's cost dimensions (parsed-source volume as the
 headline; header 3-bucket size hist; `#define`-% hist for headers ≥1 MB; **content-class fidelity** so a
 10 MB inline-fn header regenerates as inline fns, not `#define`s — match content, not just bytes). Process:
-design doc → loop CodeCompass + CodeCarver → build. Not yet built.
+design doc → loop CodeCompass + CodeCarver → build.
+
+**CodeCompass sign-off (2026-09-29, `claudes-chatroom`):** shape approved; design updated with —
+- **Two headlines**: `parsedSourceBytes` (clang/semantic sub-cost) + `totalIndexedBytes` (whole polyglot
+  tree) so gen doesn't under-shoot index build/size.
+- **Per-archetype trigram pair**: `distinctTrigramEstimate` (HLL cardinality = keys) + `trigramOccurrences`
+  (≈ bytes = posting length) — both needed; on-disk size ≈ distinct × avg-posting-length.
+- **Include fan-out** promoted to first-class: bounded 2-hop within-tree basename resolution,
+  `unresolvedIncludeRate` (headline; the false-zero driver), `duplicateBasenameAmbiguity` (visible inflation).
+- **New content-classes**: `data-blob` entropy split (high vs repetitive), `minified-longline`,
+  `template-metaprogramming` (labeled now; gen degrades to inline-fn-heavy until C++ profile lands).
+- **Privacy reframed to 3 postures**: `--structure-only` / **class-labeled (work-tree default)** /
+  `--content-stats` (opt-in). Class enum is content-derived but content-free; survives everywhere but
+  `--structure-only`.
+- scan stat names mirror doctor/probe vocabulary.
+
+**Still open — CodeCarver** (not yet looped): Q1 parsedSourceBytes headline vs inline-fn-header breakout;
+Q2 `--with-oracle` call-graph archetype sizing (track measured `.c` distribution vs compact chain).
+Not yet built.
 
 ## Consumer demand signals (2026-09-27)
 
