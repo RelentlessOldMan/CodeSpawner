@@ -37,7 +37,7 @@ public static class DupContentEmitter
                   .Append("(int x) { return dup").Append(g).Append("_seed(x) ^ (").Append(c2).Append(" + ").Append(f).Append("); }\n");
             string content = sb.ToString();
             byte[] bytes = Encodings.Utf8NoBom.GetBytes(content);
-            string sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            string sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
             var paths = new List<string>(copies);
             long groupBytes = 0;
