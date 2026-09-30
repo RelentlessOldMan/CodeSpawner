@@ -197,9 +197,16 @@ public sealed class OracleOverlay
         for (int k = 0; k < count; k++)
         {
             var via = (IndirectVia)(k % 3);
-            bool dispatched = (k % 2 == 0);
+            bool dispatched = (k & 1) == 0;                   // bit 0
             bool resolved = (k % 3 != 2);                     // ~2/3 in-corpus, 1/3 external
-            var pool = (dead.Count > 0 && (k % 2 == 1)) ? dead : reach;  // scatter across reachable/dead
+            // Source pool keyed on an INDEPENDENT bit (bit 1), NOT the dispatched bit, so the four
+            // {reachable, dead} × {dispatched, not} quadrants cycle every 4 edges. Critically this makes the
+            // indirection-TAX case — a REACHABLE source with a never-dispatched edge, a legitimate over-keep
+            // a carver cannot drop — appear at k=1. It was previously impossible: dispatched:false was welded
+            // to the dead pool (both keyed on k%2), so every undispatched edge sat in dead islands the carve
+            // drops anyway, leaving the tax untestable (CodeCarver correctness pass, 2026-09-30).
+            bool wantDead = ((k >> 1) & 1) == 1;
+            var pool = (wantDead && dead.Count > 0) ? dead : reach;
             int src = pool[rng.Next(pool.Count)];
             string target = resolved ? $"itgt_{k}" : $"iext_{k}";
             if (resolved) resolvedTargets.Add(target);

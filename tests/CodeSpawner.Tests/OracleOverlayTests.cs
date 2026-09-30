@@ -103,6 +103,37 @@ public class OracleOverlayTests
     }
 
     [Fact]
+    public void TaxEdge_ReachableSource_HasUndispatchedIndirectEdge()
+    {
+        using var tmp = new TempDir();
+        var o = new GenOptions
+        {
+            Out = "x", Seed = 1337, WithOracle = true,
+            OracleChain = 15, OracleFanout = 2, OracleReachableFrac = 0.5, OracleIndirect = 8,
+        };
+        var m = Emit(tmp, o);
+
+        // Reachable set from the declared roots over direct edges (the same set the carver keeps).
+        var reachable = new HashSet<string>();
+        var q = new Queue<string>(m.Roots);
+        while (q.Count > 0)
+        {
+            var f = q.Dequeue();
+            if (!reachable.Add(f)) continue;
+            foreach (var e in m.Symbols[f].Edges)
+                if (m.Symbols.ContainsKey(e)) q.Enqueue(e);
+        }
+
+        // The indirection TAX: a reachable function that takes the address of a target it never dispatches is
+        // a legitimate over-keep no carver can drop. This quadrant must be non-empty, else the whole
+        // `dispatched` bit is untestable. Regression guard — dispatched:false used to be welded to dead
+        // sources, so no reachable source ever carried one (CodeCarver, 2026-09-30).
+        bool taxPresent = m.Symbols.Any(kv =>
+            reachable.Contains(kv.Key) && kv.Value.IndirectEdges.Any(e => !e.Dispatched));
+        Assert.True(taxPresent, "a reachable source must carry a never-dispatched indirect edge (the tax case)");
+    }
+
+    [Fact]
     public void IndirectTruthSha_SurvivesManifestRoundTrip()
     {
         using var tmp = new TempDir();
