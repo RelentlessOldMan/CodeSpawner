@@ -141,6 +141,23 @@ Check "profile leaks nothing (privacy)" (-not $leak)
 Check "gen --from-profile + oracle verify" $scVerify
 Check "regen dir-count fidelity" $dirFidelityOk "(src=$srcDirs regen=$regenDirs)"
 
+# 4g. ORACLE v1 (non-linear DAG + indirect edges + reachable-fraction dial + byte mass): verify, the new
+# _meta fields, and determinism. Guards docs/oracle-v1-design.md end to end on the native exe.
+$ov1 = Join-Path $Work "ov1"; $ov2 = Join-Path $Work "ov2"
+$oArgs = @("--with-oracle","--oracle-chain","16","--oracle-fanout","3","--oracle-shared-leaves","3",
+           "--oracle-reachable-frac","0.5","--oracle-indirect","8","--oracle-bytes")
+& $Exe gen --from-profile "$Work\prof.json" --out $ov1 @oArgs | Out-Null
+& $Exe verify --corpus $ov1 | Out-Null
+$ov1Verify = ($LASTEXITCODE -eq 0)
+$ov1mf = Get-Content "$ov1-manifest.json" -Raw
+$ov1Fields = ($ov1mf -match '"roots"') -and ($ov1mf -match '"indirectEdges"') -and `
+             ($ov1mf -match '"indirectTruthSha"') -and ($ov1mf -match '"totalOracleBytes"')
+& $Exe gen --from-profile "$Work\prof.json" --out $ov2 @oArgs | Out-Null
+$ov1Det = ((StripRoot2 "$ov1-manifest.json") -eq (StripRoot2 "$ov2-manifest.json"))
+Check "oracle-v1 DAG+indirect+bytes verify" $ov1Verify
+Check "oracle-v1 new _meta fields present" $ov1Fields
+Check "oracle-v1 deterministic" $ov1Det
+
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
