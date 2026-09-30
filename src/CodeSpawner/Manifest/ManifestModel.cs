@@ -1,15 +1,57 @@
 namespace CodeSpawner.Manifest;
 
+/// <summary>How an indirect edge takes its target's address (C profile; vtable/override are the v2 C++ set).</summary>
+public enum IndirectVia { FnPtr, VectorTable, InitArray }
+
+public static class IndirectViaExtensions
+{
+    /// <summary>Stable wire label — part of the indirectTruthSha canonical form; never renumber/rename.</summary>
+    public static string Label(this IndirectVia v) => v switch
+    {
+        IndirectVia.FnPtr => "fnptr",
+        IndirectVia.VectorTable => "vector-table",
+        IndirectVia.InitArray => "init_array",
+        _ => "fnptr",
+    };
+
+    public static bool TryParse(string s, out IndirectVia v)
+    {
+        v = s switch
+        {
+            "fnptr" => IndirectVia.FnPtr,
+            "vector-table" => IndirectVia.VectorTable,
+            "init_array" => IndirectVia.InitArray,
+            _ => (IndirectVia)(-1),
+        };
+        return (int)v >= 0;
+    }
+}
+
 /// <summary>
-/// One ground-truth symbol: where it is defined, where it is referenced, its call-graph edges, and
-/// (for the negative case) references that must NOT resolve. Paths are repo-relative to the corpus root;
-/// the symbol NAME — not the path — is the seed-stable identity.
+/// An indirect call edge (function pointer / dispatch table / init_array) from the owning symbol to
+/// <see cref="Target"/>. <see cref="Dispatched"/> false = address-taken but never invoked (the indirection
+/// tax a sound carve pays); <see cref="Resolved"/> false = external target (terminal, not a declared symbol).
+/// See docs/oracle-v1-design.md.
+/// </summary>
+public sealed class IndirectEdge
+{
+    public required string Target { get; init; }
+    public required IndirectVia Via { get; init; }
+    public bool Dispatched { get; init; }
+    public bool Resolved { get; init; } = true;
+}
+
+/// <summary>
+/// One ground-truth symbol: where it is defined, where it is referenced, its call-graph edges, indirect
+/// edges, and (for the negative case) references that must NOT resolve. Paths are repo-relative to the corpus
+/// root; the symbol NAME — not the path — is the seed-stable identity.
 /// </summary>
 public sealed class SymbolEntry
 {
     public required string Def { get; set; }
     public List<string> Refs { get; init; } = new();
     public List<string> Edges { get; init; } = new();
+    public List<IndirectEdge> IndirectEdges { get; init; } = new();
     public List<string>? UnreachableRefs { get; set; }
 
     /// <summary>

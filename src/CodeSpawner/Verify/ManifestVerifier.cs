@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeSpawner.Cli;
+using CodeSpawner.Manifest;
 
 namespace CodeSpawner.Verify;
 
@@ -62,7 +63,7 @@ public static class ManifestVerifier
         }
 
         var lineCache = new Dictionary<string, string[]>();
-        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0;
+        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0;
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree (the unresolved-include premise).
         bool anyVendorHeaderPresent =
@@ -108,6 +109,21 @@ public static class ManifestVerifier
                     else { Console.Error.WriteLine($"FAIL edge {name} -> {target}: target symbol missing"); fail++; }
                 }
 
+            // indirectEdges: a resolved target must be a declared symbol; an unresolved (external) target must
+            // NOT be (closed-world: external ⇒ resolved:false, terminal). Soundness/tax is the consumer's job.
+            if (entry.TryGetProperty("indirectEdges", out var ieEl) && ieEl.ValueKind == JsonValueKind.Array)
+                foreach (var ie in ieEl.EnumerateArray())
+                {
+                    string target = ie.TryGetProperty("target", out var t) ? t.GetString() ?? "" : "";
+                    bool resolved = !ie.TryGetProperty("resolved", out var rv) || rv.ValueKind != JsonValueKind.False;
+                    bool present = names.Contains(target);
+                    if (resolved && !present)
+                    { Console.Error.WriteLine($"FAIL indirect {name} -> {target}: resolved target is not a declared symbol"); fail++; }
+                    else if (!resolved && present)
+                    { Console.Error.WriteLine($"FAIL indirect {name} -> {target}: unresolved target must not be a declared symbol"); fail++; }
+                    else indirectOk++;
+                }
+
             // unreachableRefs: gated call present, behind #ifdef VENDOR_OK, and the vendor header is absent.
             if (entry.TryGetProperty("unreachableRefs", out var unrefsEl))
                 foreach (var u in unrefsEl.EnumerateArray())
@@ -150,7 +166,17 @@ public static class ManifestVerifier
                     }
             }
 
-        Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies");
+        // indirectTruthSha: recompute the component digest from the manifest and assert it matches _meta —
+        // a third independent reader (generator, this verifier, and the consumer) of the locked canonical form.
+        if (meta.TryGetProperty("indirectTruthSha", out var itsEl) && itsEl.GetString() is { } declaredIts)
+        {
+            var parsed = ManifestReader.Load(manifestPath);
+            string got = IndirectDigest.Compute(parsed.Symbols, parsed.Roots);
+            if (got == declaredIts) Console.WriteLine("  OK  _meta.indirectTruthSha reproduces");
+            else { Console.Error.WriteLine($"FAIL indirectTruthSha: manifest {declaredIts}, recomputed {got}"); fail++; }
+        }
+
+        Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges");
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
         Console.Error.WriteLine($"verify: FAIL ({fail} problem(s))");
         return 1;

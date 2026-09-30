@@ -70,13 +70,26 @@ CodeCompass re-signs). Indirect drift is caught by a **separate component digest
 
 **Canonical form (byte-exact, verbatim from the lock):**
 - Ordinal (byte-wise) sort throughout.
-- `US` = `0x1F` between fields; `RS` = `0x1E` between records.
+- `US` = `0x1F` between fields; `RS` = `0x1E` between records (a trailing `RS` terminates every record).
 - Per-indirect-edge field order: **source · target · via · dispatched · resolved**.
 - Bools serialized as `0` / `1`.
 - Dedup-then-sort each population before hashing.
 - `GS` = `0x1D` between the `indirectEdges` section and the `roots` section.
-- Both sections always emitted (empty section = its header with zero records).
+- Both sections always emitted (empty section = zero records, i.e. it contributes nothing but the `GS` is
+  always present between them).
 - `sha256` of the assembled byte string, lowercase hex.
+
+**Golden vector (frozen; CodeSpawner emits, CodeCompass/CodeCarver reproduce; guarded by `digest-selftest`):**
+```
+roots  = [ func_0 ]
+symbols:
+  func_0.indirectEdges = [ {itgt_0, fnptr,        dispatched, resolved},
+                           {iext_1, vector-table, !dispatched, !resolved} ]
+  func_1.indirectEdges = [ {itgt_0, init_array,   dispatched, resolved} ]
+=> indirectTruthSha = fa9432bd75cd97b7d0a509f885f964b86b8ef41d449cc8c23b1b79df1aa1572f
+```
+(Byte string: three edge records — each `source␟target␟via␟dispatched␟resolved␞` — ordinal-sorted, then `␝`,
+then the one root record `func_0␞`.)
 
 ### 4. Byte-mass ground truth (optional, last)
 Per-symbol byte size + a `_meta` total, for the GB-reduction goal. Additive, only earns its keep alongside
@@ -103,13 +116,13 @@ verifier is extended to check them.
 - [x] `ManifestVerifier`: verifies roots are declared symbols.
 - [x] Tests: `OracleGraphTests` (linear chain, DAG fan-out/diamonds, reachable fraction ≈ target, determinism) + `OracleOverlayTests` (edge/root wiring); 177 pass. `verify` PASS on linear/DAG/frac corpora.
 
-**Phase 2 — indirect edges**
-- [ ] `SymbolEntry.IndirectEdges` model + writer/reader (`{target, via, dispatched, resolved}`).
-- [ ] Emitters: fnptr table / vector-table / init_array constructs, incl. never-dispatched targets.
-- [ ] `_meta.indirectTruthSha` canonical digest + second `digest-selftest` golden vector.
-- [ ] Reachability closure includes indirectEdges; dial scatter across the cross-product.
-- [ ] `ManifestVerifier`: indirectEdges targets exist; constructs present in source; indirectTruthSha reproduces.
-- [ ] Tests: soundness set, tax set (reachable+undispatched), digest vector, resolved-false terminal.
+**Phase 2 — indirect edges — ✅ DONE (2026-09-30)**
+- [x] `IndirectVia` enum + `IndirectEdge` model + `SymbolEntry.IndirectEdges`; writer/reader (`{target, via, dispatched, resolved}`).
+- [x] Emitters: fnptr / vector-table / init_array constructs in the source body, incl. genuine never-dispatched targets; resolved targets defined in `indirect_targets.c`, external targets left undefined.
+- [x] `_meta.indirectTruthSha` canonical digest (`IndirectDigest`) + **second `digest-selftest` golden vector** (`fa9432bd…`).
+- [x] Dial scatter across `{reachable-source, dead-source} × {dispatched, not}` + `--oracle-indirect <n>` knob. (Closure over indirectEdges is the consumer's to compute; the generator keeps the func-node dial as the fraction — noted simplification.)
+- [x] `ManifestVerifier`: resolved target ⇒ declared symbol / unresolved ⇒ not; `indirectTruthSha` recomputed and matched (verifier is the third independent reader).
+- [x] Tests: `IndirectDigestTests` (golden vector, order-independence, each field changes the hash, via round-trip) + `OracleOverlayTests` (scatter, closed-world targets, manifest round-trip, no-indirect default clean); 189 pass. `verify` PASS on an indirect corpus incl. `indirectTruthSha` reproduce.
 
 **Phase 4 — byte-mass (optional)**
 - [ ] Per-symbol byte size + `_meta` total; ties into `--oracle-scale`.

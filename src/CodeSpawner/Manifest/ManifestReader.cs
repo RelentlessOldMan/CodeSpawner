@@ -40,6 +40,18 @@ public static class ManifestReader
                     foreach (var x in r.EnumerateArray()) e.Refs.Add(x.GetString()!);
                 if (p.Value.TryGetProperty("edges", out var g) && g.ValueKind == JsonValueKind.Array)
                     foreach (var x in g.EnumerateArray()) e.Edges.Add(x.GetString()!);
+                if (p.Value.TryGetProperty("indirectEdges", out var ie) && ie.ValueKind == JsonValueKind.Array)
+                    foreach (var x in ie.EnumerateArray())
+                    {
+                        IndirectViaExtensions.TryParse(x.TryGetProperty("via", out var vv) ? vv.GetString() ?? "" : "", out var via);
+                        e.IndirectEdges.Add(new IndirectEdge
+                        {
+                            Target = x.GetProperty("target").GetString()!,
+                            Via = via,
+                            Dispatched = x.TryGetProperty("dispatched", out var d) && d.ValueKind == JsonValueKind.True,
+                            Resolved = !x.TryGetProperty("resolved", out var rv) || rv.ValueKind != JsonValueKind.False,
+                        });
+                    }
                 if (p.Value.TryGetProperty("unreachableRefs", out var u) && u.ValueKind == JsonValueKind.Array)
                 {
                     e.UnreachableRefs = new List<string>();

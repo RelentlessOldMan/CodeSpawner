@@ -91,6 +91,8 @@ public sealed class GenOptions
     public int OracleSharedLeaves { get; set; } = 0;
     /// <summary>Target reachable fraction from the declared root(s), in (0,1). 0 = all reachable (no dead nodes).</summary>
     public double OracleReachableFrac { get; set; } = 0;
+    /// <summary>Count of indirect edges (fnptr/vector-table/init_array) to scatter across the graph. 0 = none.</summary>
+    public int OracleIndirect { get; set; } = 0;
 
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;

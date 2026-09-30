@@ -83,8 +83,34 @@ public static class Program
             ["func_1"] = new() { Def = "block1/src_1.c:12", Edges = { "func_0" } },
         };
         string got = TruthDigest.Compute(truth);
-        if (got == golden) { Console.WriteLine($"digest self-test: OK ({got})"); return 0; }
-        Console.Error.WriteLine($"digest self-test: FAIL\n  expected {golden}\n  got      {got}");
+        bool okPrimary = got == golden;
+        if (!okPrimary) Console.Error.WriteLine($"digest self-test: FAIL primary\n  expected {golden}\n  got      {got}");
+
+        // Second golden vector: the indirectTruthSha canonical form (docs/oracle-v1-design.md). Frozen the
+        // same way — CodeSpawner emits, CodeCompass/CodeCarver reproduce.
+        const string goldenIndirect = "fa9432bd75cd97b7d0a509f885f964b86b8ef41d449cc8c23b1b79df1aa1572f";
+        var isyms = new Dictionary<string, SymbolEntry>(StringComparer.Ordinal)
+        {
+            ["func_0"] = new()
+            {
+                Def = "a:1",
+                IndirectEdges =
+                {
+                    new() { Target = "itgt_0", Via = IndirectVia.FnPtr, Dispatched = true, Resolved = true },
+                    new() { Target = "iext_1", Via = IndirectVia.VectorTable, Dispatched = false, Resolved = false },
+                },
+            },
+            ["func_1"] = new()
+            {
+                Def = "b:1",
+                IndirectEdges = { new() { Target = "itgt_0", Via = IndirectVia.InitArray, Dispatched = true, Resolved = true } },
+            },
+        };
+        string gotI = IndirectDigest.Compute(isyms, new[] { "func_0" });
+        bool okIndirect = gotI == goldenIndirect;
+        if (!okIndirect) Console.Error.WriteLine($"digest self-test: FAIL indirect\n  expected {goldenIndirect}\n  got      {gotI}");
+
+        if (okPrimary && okIndirect) { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI})"); return 0; }
         return 1;
     }
 
@@ -119,6 +145,8 @@ public static class Program
               --oracle-depth <n>           cap DAG depth (layers from the root; 0 = sized by --oracle-chain)
               --oracle-shared-leaves <n>   shared sink nodes multiple callers reach (diamonds)
               --oracle-reachable-frac <f>  target reachable fraction from _meta.roots (adds dead subgraphs)
+              --oracle-indirect <n>        indirect edges (fnptr/vector-table/init_array) scattered across the
+                                           graph; per-symbol indirectEdges + a _meta.indirectTruthSha digest
 
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)
