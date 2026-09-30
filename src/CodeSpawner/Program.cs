@@ -113,6 +113,13 @@ public static class Program
               gen --from-profile <p> [--with-oracle] [--oracle-scale] [--oracle-chain <n>]
                                  regenerate; --with-oracle overlays the ground-truth spine + manifest
 
+            ORACLE CALL-GRAPH SHAPE (with --with-oracle; see docs/oracle-v1-design.md; all default off = linear):
+              --oracle-chain <n>           func_i node budget (default 12)
+              --oracle-fanout <n>          out-degree per node (>0 = seeded DAG instead of a linear chain)
+              --oracle-depth <n>           cap DAG depth (layers from the root; 0 = sized by --oracle-chain)
+              --oracle-shared-leaves <n>   shared sink nodes multiple callers reach (diamonds)
+              --oracle-reachable-frac <f>  target reachable fraction from _meta.roots (adds dead subgraphs)
+
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)
               --seed <n>       edit-selection seed (default 7)

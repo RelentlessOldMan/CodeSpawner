@@ -46,6 +46,12 @@ public sealed class ManifestModel
     /// <summary>Optional per-population shape stats for consumer "is this the corpus I expect?" assertions.</summary>
     public List<PopulationStat> Populations { get; } = new();
 
+    /// <summary>
+    /// Declared entry-point symbol names (oracle overlay). Reachability = closure over (edges ∪ indirectEdges)
+    /// from these. Emitted even for the linear default so a consumer never guesses the chain entry.
+    /// </summary>
+    public List<string> Roots { get; } = new();
+
     // Insertion order preserved for stable, diffable output.
     public Dictionary<string, SymbolEntry> Symbols { get; } = new();
 
