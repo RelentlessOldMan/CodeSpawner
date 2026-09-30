@@ -108,6 +108,27 @@ public class ArgParserTests
     // Regression: a non-numeric knob value used to escape as an unhandled FormatException (ugly stack dump,
     // bypassing Program.Main's error handling). It must now be a clean ArgException like every other arg error.
     [Fact]
+    public void Gen_OracleShapeKnobs_Parse()
+    {
+        var o = ArgParser.ParseGen(new[]
+        {
+            "--out", "c", "--with-oracle",
+            "--oracle-chain", "20", "--oracle-fanout", "3", "--oracle-depth", "4",
+            "--oracle-shared-leaves", "5", "--oracle-reachable-frac", "0.5",
+            "--oracle-indirect", "8", "--oracle-bytes", "--oracle-scale",
+        });
+        Assert.True(o.WithOracle);
+        Assert.Equal(20, o.OracleChain);
+        Assert.Equal(3, o.OracleFanout);
+        Assert.Equal(4, o.OracleDepth);
+        Assert.Equal(5, o.OracleSharedLeaves);
+        Assert.Equal(0.5, o.OracleReachableFrac);
+        Assert.Equal(8, o.OracleIndirect);
+        Assert.True(o.OracleBytes);
+        Assert.True(o.OracleScale);
+    }
+
+    [Fact]
     public void Gen_BadIntValue_ThrowsArgException()
         => Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--seed", "notanumber" }));
 
