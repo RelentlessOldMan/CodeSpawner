@@ -59,6 +59,8 @@ public static class ManifestReader
                 }
                 if (p.Value.TryGetProperty("expectedMiss", out var em) && em.ValueKind == JsonValueKind.True)
                     e.ExpectedMiss = true;
+                if (p.Value.TryGetProperty("bytes", out var by) && by.ValueKind == JsonValueKind.Number)
+                    e.Bytes = by.GetInt64();
                 symbols[p.Name] = e;
             }
 

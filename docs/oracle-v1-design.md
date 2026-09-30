@@ -91,9 +91,17 @@ symbols:
 (Byte string: three edge records — each `source␟target␟via␟dispatched␟resolved␞` — ordinal-sorted, then `␝`,
 then the one root record `func_0␞`.)
 
-### 4. Byte-mass ground truth (optional, last)
-Per-symbol byte size + a `_meta` total, for the GB-reduction goal. Additive, only earns its keep alongside
-`--oracle-scale` body inflation. Built last.
+### 4. Byte-mass ground truth (optional, last) — ✅ BUILT (2026-09-30)
+Per-symbol byte size + a `_meta.totalOracleBytes`, behind **`--oracle-bytes`** (default off, so the default
+manifest stays byte-identical). Lets a carve's reduction target be asserted in **bytes** — the unit the
+GB-reduction goal uses — not just symbol count, and turns the indirection tax into a *cost*. Most useful with
+`--oracle-scale`, where body inflation makes per-symbol sizes non-uniform.
+
+**Granularity choice (flag for CodeCarver to confirm):** `bytes` = the **definition span** of each symbol
+(opener line → closing brace), and `totalOracleBytes` = the exact sum of those. This is self-consistent
+(reachable-bytes / total is well-defined) but excludes inter-function bytes (includes, forward-decls). If
+CodeCarver wants **whole-file** granularity or the full corpus byte total as the denominator instead, that's
+a one-line change — raise it and I'll adjust.
 
 ## Oracle properties this unlocks (CodeCarver)
 - **SOUNDNESS** — a sound carve keeps every direct + indirect reachable target (FAIL if any dropped).
@@ -124,8 +132,8 @@ verifier is extended to check them.
 - [x] `ManifestVerifier`: resolved target ⇒ declared symbol / unresolved ⇒ not; `indirectTruthSha` recomputed and matched (verifier is the third independent reader).
 - [x] Tests: `IndirectDigestTests` (golden vector, order-independence, each field changes the hash, via round-trip) + `OracleOverlayTests` (scatter, closed-world targets, manifest round-trip, no-indirect default clean); 189 pass. `verify` PASS on an indirect corpus incl. `indirectTruthSha` reproduce.
 
-**Phase 4 — byte-mass (optional)**
-- [ ] Per-symbol byte size + `_meta` total; ties into `--oracle-scale`.
+**Phase 4 — byte-mass (optional) — ✅ DONE (2026-09-30)**
+- [x] Per-symbol `bytes` (def span) + `_meta.totalOracleBytes`, behind `--oracle-bytes` (default off → default manifest byte-identical). Writer/reader + tests (per-symbol mass, consistent total, absent-by-default). Granularity (def-span) flagged for CodeCarver to confirm.
 
 **Close-out**
-- [ ] Full AOT `bench.ps1` + new oracle checks; cut a release.
+- [ ] Full AOT `bench.ps1` + new oracle checks; cut a release (also ships the v1.0.8 ArgParser crash fix).

@@ -46,6 +46,8 @@ public static class ManifestWriter
         // indirect-edge / root drift without touching the frozen primary prevTruthSha. Additive, v1.
         if (IndirectDigest.Any(m.Symbols))
             w.WriteString("indirectTruthSha", IndirectDigest.Compute(m.Symbols, m.Roots));
+        if (m.TotalOracleBytes > 0)
+            w.WriteNumber("totalOracleBytes", m.TotalOracleBytes); // byte-mass ground truth (--oracle-bytes)
         w.WriteEndObject();
 
         w.WriteStartObject("symbols");
@@ -83,6 +85,7 @@ public static class ManifestWriter
                 foreach (var u in s.UnreachableRefs) w.WriteStringValue(u);
                 w.WriteEndArray();
             }
+            if (s.Bytes > 0) w.WriteNumber("bytes", s.Bytes); // byte mass of the def span (--oracle-bytes)
             if (s.ExpectedMiss) w.WriteBoolean("expectedMiss", true);
             w.WriteEndObject();
         }

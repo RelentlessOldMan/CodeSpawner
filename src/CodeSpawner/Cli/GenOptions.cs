@@ -93,6 +93,8 @@ public sealed class GenOptions
     public double OracleReachableFrac { get; set; } = 0;
     /// <summary>Count of indirect edges (fnptr/vector-table/init_array) to scatter across the graph. 0 = none.</summary>
     public int OracleIndirect { get; set; } = 0;
+    /// <summary>Emit per-symbol byte-mass + _meta.totalOracleBytes (byte-based reduction ground truth). Off by default.</summary>
+    public bool OracleBytes { get; set; } = false;
 
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;

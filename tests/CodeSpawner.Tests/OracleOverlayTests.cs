@@ -127,4 +127,24 @@ public class OracleOverlayTests
         Assert.All(m.Symbols.Values, s => Assert.Empty(s.IndirectEdges));
         Assert.False(IndirectDigest.Any(m.Symbols));
     }
+
+    [Fact]
+    public void OracleBytes_EmitsPerSymbolMass_AndConsistentTotal()
+    {
+        using var tmp = new TempDir();
+        var o = new GenOptions { Out = "x", Seed = 1337, WithOracle = true, OracleChain = 6, OracleBytes = true };
+        var m = Emit(tmp, o);
+
+        Assert.All(m.Symbols.Where(kv => kv.Key.StartsWith("func_")), kv => Assert.True(kv.Value.Bytes > 0));
+        Assert.Equal(m.Symbols.Values.Sum(s => s.Bytes), m.TotalOracleBytes); // total is the exact denominator
+    }
+
+    [Fact]
+    public void ByteMass_IsAbsent_ByDefault()
+    {
+        using var tmp = new TempDir();
+        var m = Emit(tmp, Opts(chain: 6)); // OracleBytes off
+        Assert.All(m.Symbols.Values, s => Assert.Equal(0, s.Bytes));
+        Assert.Equal(0, m.TotalOracleBytes);
+    }
 }
