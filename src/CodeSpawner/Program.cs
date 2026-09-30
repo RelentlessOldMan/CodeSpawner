@@ -147,6 +147,8 @@ public static class Program
               --oracle-reachable-frac <f>  target reachable fraction from _meta.roots (adds dead subgraphs)
               --oracle-indirect <n>        indirect edges (fnptr/vector-table/init_array) scattered across the
                                            graph; per-symbol indirectEdges + a _meta.indirectTruthSha digest
+              --oracle-bytes               emit per-symbol byte mass + _meta.totalOracleBytes (byte-based
+                                           reduction ground truth; most useful with --oracle-scale)
 
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)

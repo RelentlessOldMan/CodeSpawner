@@ -55,6 +55,13 @@ public sealed class SymbolEntry
     public List<string>? UnreachableRefs { get; set; }
 
     /// <summary>
+    /// Byte mass of this symbol's definition span (phase 4, opt-in via --oracle-bytes). 0 = absent. Lets a
+    /// carve's reduction target be asserted in BYTES — the unit the GB-reduction goal actually uses — not just
+    /// symbol count. Most useful with --oracle-scale, where body inflation makes sizes non-uniform.
+    /// </summary>
+    public long Bytes { get; set; }
+
+    /// <summary>
     /// True when a correct lexical / preprocessor-blind indexer is EXPECTED not to resolve this symbol
     /// (e.g. a token-paste-generated name that never appears literally in the source). The honest-miss dual
     /// of <see cref="UnreachableRefs"/>: not finding it is correct, not a recall failure.
@@ -93,6 +100,9 @@ public sealed class ManifestModel
     /// from these. Emitted even for the linear default so a consumer never guesses the chain entry.
     /// </summary>
     public List<string> Roots { get; } = new();
+
+    /// <summary>Sum of per-symbol <see cref="SymbolEntry.Bytes"/> (phase 4, --oracle-bytes). 0 = absent.</summary>
+    public long TotalOracleBytes { get; set; }
 
     // Insertion order preserved for stable, diffable output.
     public Dictionary<string, SymbolEntry> Symbols { get; } = new();

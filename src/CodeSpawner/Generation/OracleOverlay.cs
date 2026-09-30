@@ -37,11 +37,13 @@ public sealed class OracleOverlay
 
         // hot_shared: defined once, called from every func_i.
         string hotPath = Path.Combine(_dir, "hot_shared.c");
-        File.WriteAllText(hotPath, "int hot_shared(int x) { return x + 1; }\n", Encodings.Utf8NoBom);
+        const string hotContent = "int hot_shared(int x) { return x + 1; }\n";
+        File.WriteAllText(hotPath, hotContent, Encodings.Utf8NoBom);
 
         var defLine = new int[n];
         var hotLine = new int[n];             // site where hot_shared is referenced (in src_i.c)
         var paths = new string[n];
+        var funcBytes = new long[n];          // byte mass of each func_i definition span (--oracle-bytes)
         var refsOf = new List<string>[n];     // refsOf[c] = call sites (in callers' files) invoking func_c
         var indirectOf = new List<IndirectEdge>[n];  // indirect edges owned by func_i
         for (int i = 0; i < n; i++)
@@ -76,13 +78,19 @@ public sealed class OracleOverlay
             lines.Add("    return acc;");
             lines.Add("}");
             File.WriteAllText(paths[i], string.Join('\n', lines) + "\n", Encodings.Utf8NoBom);
+            if (_o.OracleBytes)                       // byte mass = the definition span (opener .. closing brace)
+            {
+                long b = 0;
+                for (int li = defLine[i] - 1; li < lines.Count; li++) b += lines[li].Length + 1;
+                funcBytes[i] = b;
+            }
         }
 
         // vendor_gated: the call is behind #ifdef VENDOR_OK (never defined) with a vendor header absent from
         // the tree -> an UNREACHABLE reference (negative oracle). Matches the verify convention exactly.
         string vendorPath = Path.Combine(_dir, "vendor.c");
-        File.WriteAllText(vendorPath,
-            "int vendor_gated(int x) { return x - 1; }\n", Encodings.Utf8NoBom);
+        const string vendorContent = "int vendor_gated(int x) { return x - 1; }\n";
+        File.WriteAllText(vendorPath, vendorContent, Encodings.Utf8NoBom);
         string consumerPath = Path.Combine(_dir, "vendor_consumer.c");
         var consumerLines = new List<string>
         {
@@ -99,9 +107,10 @@ public sealed class OracleOverlay
         // expectedMiss: a token-paste symbol whose real name a lexical index won't recover. The def line is
         // the CS_MK_HANDLER invocation (line 2) — it carries the generator macro, never the fused name.
         string mkPath = Path.Combine(_dir, "handlers.h");
-        File.WriteAllText(mkPath,
+        string mkContent =
             $"#define {PathologicalSymbolEmitter.GenMacro}(id) int oracle_handler_##id(int x) {{ return x + (id); }}\n"
-            + $"{PathologicalSymbolEmitter.GenMacro}(0)\n", Encodings.Utf8NoBom);
+            + $"{PathologicalSymbolEmitter.GenMacro}(0)\n";
+        File.WriteAllText(mkPath, mkContent, Encodings.Utf8NoBom);
 
         // --- Build the manifest. ---
         var m = new ManifestModel
@@ -118,17 +127,22 @@ public sealed class OracleOverlay
             e.Edges.Add("hot_shared");
             e.Refs.AddRange(refsOf[i]);                                       // sites where callers invoke func_i
             e.IndirectEdges.AddRange(indirectOf[i]);                          // fnptr/vtable/init_array edges
+            if (_o.OracleBytes) e.Bytes = funcBytes[i];
             m.Symbols[$"func_{i}"] = e;
         }
 
         var hot = new SymbolEntry { Def = $"{Rel(hotPath)}:1" };
         for (int i = 0; i < n; i++) hot.Refs.Add($"{Rel(paths[i])}:{hotLine[i]}");
+        if (_o.OracleBytes) hot.Bytes = hotContent.Length;
         m.Symbols["hot_shared"] = hot;
 
         var vg = new SymbolEntry { Def = $"{Rel(vendorPath)}:1", UnreachableRefs = new List<string> { $"{Rel(consumerPath)}:{unreachLine}" } };
+        if (_o.OracleBytes) vg.Bytes = vendorContent.Length;
         m.Symbols["vendor_gated"] = vg;
 
-        m.Symbols["oracle_handler_0"] = new SymbolEntry { Def = $"{Rel(mkPath)}:2", ExpectedMiss = true };
+        var handler = new SymbolEntry { Def = $"{Rel(mkPath)}:2", ExpectedMiss = true };
+        if (_o.OracleBytes) handler.Bytes = mkContent.Length;
+        m.Symbols["oracle_handler_0"] = handler;
 
         // Resolved indirect-edge targets: real functions whose address is taken. Defined in one file so each
         // is a declared symbol with a def site (external/unresolved targets are NOT defined and get no symbol).
@@ -144,7 +158,11 @@ public sealed class OracleOverlay
             }
             File.WriteAllText(itgtPath, string.Join('\n', tlines) + "\n", Encodings.Utf8NoBom);
             foreach (var t in resolvedTargets)
-                m.Symbols[t] = new SymbolEntry { Def = $"{Rel(itgtPath)}:{tgtLine[t]}" };
+            {
+                var sym = new SymbolEntry { Def = $"{Rel(itgtPath)}:{tgtLine[t]}" };
+                if (_o.OracleBytes) sym.Bytes = tlines[tgtLine[t] - 1].Length + 1;
+                m.Symbols[t] = sym;
+            }
         }
 
         // Declared entry points for the reachability closure. Emitted even for the linear default.
@@ -152,6 +170,9 @@ public sealed class OracleOverlay
         foreach (var root in m.Roots)
             if (!m.Symbols.ContainsKey(root))
                 throw new InvalidOperationException($"oracle root '{root}' is not a declared symbol");
+
+        // Byte-mass total (phase 4): the denominator for a byte-based reduction assertion.
+        if (_o.OracleBytes) m.TotalOracleBytes = m.Symbols.Values.Sum(s => s.Bytes);
 
         return m;
     }
