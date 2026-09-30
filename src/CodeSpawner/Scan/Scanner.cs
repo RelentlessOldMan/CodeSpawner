@@ -279,7 +279,7 @@ public sealed class Scanner
             int n = ReadPrefix(f.Path, buf);
             if (n < 0) continue;
             var span = buf.AsSpan(0, n);
-            var st = ContentClassifier.Classify(span, f.Ext);
+            var st = ContentClassifier.Classify(span);
             arch.Add(span, global);
             f.Stats = st;
             result.Add(st);

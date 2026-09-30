@@ -9,6 +9,9 @@ bin/
 obj/
 dist/
 
+# Test coverage artifacts (coverlet cobertura output)
+TestResults/
+
 # Generated corpora / test scratch (never commit)
 .corpus/
 *-manifest.json

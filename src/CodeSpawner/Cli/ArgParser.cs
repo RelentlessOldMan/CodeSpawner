@@ -32,8 +32,8 @@ public static class ArgParser
                 return args[++i];
             }
 
-            int I() { o.Explicit.Add(Canon(key)); return int.Parse(Val(), ci); }
-            double D() { o.Explicit.Add(Canon(key)); return double.Parse(Val(), ci); }
+            int I() { o.Explicit.Add(Canon(key)); return Int(key, Val()); }
+            double D() { o.Explicit.Add(Canon(key)); return Dbl(key, Val()); }
             bool B() { o.Explicit.Add(Canon(key)); return inlineVal == null || ParseBool(inlineVal); }
 
             switch (key.ToLowerInvariant())
@@ -130,8 +130,8 @@ public static class ArgParser
                 case "out": o.Out = Val(); break;
                 case "structure-only": o.Posture = Profile.PrivacyPosture.StructureOnly; break;
                 case "content-stats": o.Posture = Profile.PrivacyPosture.ContentStats; break;
-                case "min-cluster": o.MinCluster = int.Parse(Val(), ci); break;
-                case "sample": o.Sample = int.Parse(Val(), ci); break;
+                case "min-cluster": o.MinCluster = Int(key, Val()); break;
+                case "sample": o.Sample = Int(key, Val()); break;
                 default: throw new ArgException($"unknown option --{key}");
             }
         }
@@ -155,9 +155,9 @@ public static class ArgParser
             {
                 case "corpus": o.Corpus = Val(); break;
                 case "manifest": o.Manifest = Val(); break;
-                case "seed": o.Seed = int.Parse(Val(), CultureInfo.InvariantCulture); break;
-                case "edits": o.Edits = int.Parse(Val(), CultureInfo.InvariantCulture); break;
-                case "step": o.Step = int.Parse(Val(), CultureInfo.InvariantCulture); break;
+                case "seed": o.Seed = Int(key, Val()); break;
+                case "edits": o.Edits = Int(key, Val()); break;
+                case "step": o.Step = Int(key, Val()); break;
                 case "through": o.Through = true; break;
                 case "restream": o.Restream = true; break;
                 default: throw new ArgException($"unknown option --{key}");
@@ -189,6 +189,16 @@ public static class ArgParser
         "dup-groups" => "DupGroups",
         _ => key,
     };
+
+    // Numeric knob values route through these so a malformed value fails as a clean ArgException (→ exit 2,
+    // "error: ...") like every other arg error, instead of an unhandled FormatException stack dump.
+    private static int Int(string key, string val) =>
+        int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v)
+            ? v : throw new ArgException($"--{key} expects an integer, got '{val}'");
+
+    private static double Dbl(string key, string val) =>
+        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
+            ? v : throw new ArgException($"--{key} expects a number, got '{val}'");
 
     private static bool ParseBool(string s) => s.ToLowerInvariant() switch
     {
