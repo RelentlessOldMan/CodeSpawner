@@ -42,7 +42,7 @@ public static class ContentClassifier
     private const int MinifiedMaxLines = 50;
     private const double BlobHighEntropyBits = 3.0;    // Shannon entropy of byte values on the prefix
 
-    public static FileStats Classify(ReadOnlySpan<byte> raw, string ext)
+    public static FileStats Classify(ReadOnlySpan<byte> raw)
     {
         var st = new FileStats();
 
@@ -171,7 +171,7 @@ public static class ContentClassifier
             if (k > 0 && v > modalHits) { modalHits = v; modalCommas = k; }
         if (modalCommas > 0) tabularShare = modalHits / nonBlank;
 
-        st.Class = Decide(ext, printableRatio, digitFrac, entropy, identTotal, total, lineCount, maxLineLen,
+        st.Class = Decide(digitFrac, entropy, identTotal, total, lineCount, maxLineLen,
             st.DefineFrac, xMacroLines / nonBlank, templateLines / nonBlank, st.FunctionsPerKB,
             (enumStructLines + tableRows) / nonBlank, tabularShare);
 
@@ -179,7 +179,7 @@ public static class ContentClassifier
     }
 
     /// <summary>Map the tallies onto a class, in priority order (most-specific first).</summary>
-    private static ContentClass Decide(string ext, double printableRatio, double digitFrac, double entropy,
+    private static ContentClass Decide(double digitFrac, double entropy,
         long identTotal, long total, long lineCount, long maxLineLen, double defineFrac, double xMacroFrac,
         double templateFrac, double fnPerKb, double enumStructFrac, double tabularShare)
     {
