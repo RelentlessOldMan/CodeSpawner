@@ -83,6 +83,7 @@ public static class ArgParser
                 case "oracle-depth": o.OracleDepth = I(); break;
                 case "oracle-shared-leaves": o.OracleSharedLeaves = I(); break;
                 case "oracle-reachable-frac": o.OracleReachableFrac = D(); break;
+                case "oracle-indirect": o.OracleIndirect = I(); break;
                 default: throw new ArgException($"unknown knob --{key}");
             }
         }

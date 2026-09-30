@@ -43,7 +43,17 @@ public sealed class OracleOverlay
         var hotLine = new int[n];             // site where hot_shared is referenced (in src_i.c)
         var paths = new string[n];
         var refsOf = new List<string>[n];     // refsOf[c] = call sites (in callers' files) invoking func_c
-        for (int i = 0; i < n; i++) { paths[i] = Path.Combine(_dir, $"src_{i}.c"); refsOf[i] = new List<string>(); }
+        var indirectOf = new List<IndirectEdge>[n];  // indirect edges owned by func_i
+        for (int i = 0; i < n; i++)
+        {
+            paths[i] = Path.Combine(_dir, $"src_{i}.c");
+            refsOf[i] = new List<string>();
+            indirectOf[i] = new List<IndirectEdge>();
+        }
+
+        // Indirect-edge plan (phase 2): scatter fnptr/vector-table/init_array edges across the graph, spread
+        // over {reachable-source, dead-source} × {dispatched, not}, some resolved (in-corpus) / some external.
+        var indirectBySrc = PlanIndirect(graph, out var resolvedTargets);
 
         for (int i = 0; i < n; i++)
         {
@@ -60,6 +70,8 @@ public sealed class OracleOverlay
                 refsOf[c].Add($"{Rel(paths[i])}:{lines.Count}"); // func_c is referenced here by func_i
             }
             lines.Add("    acc += hot_shared(x);"); hotLine[i] = lines.Count;
+            if (indirectBySrc.TryGetValue(i, out var plan))
+                foreach (var pe in plan) EmitIndirectConstruct(lines, pe, indirectOf[i]);
             for (long k = 0; k < bodyPad; k++) lines.Add($"    acc ^= {k % 97};"); // filler: no calls, spine-invariant
             lines.Add("    return acc;");
             lines.Add("}");
@@ -105,6 +117,7 @@ public sealed class OracleOverlay
             foreach (int c in graph.Children[i]) e.Edges.Add($"func_{c}");   // direct call edges (DAG or chain)
             e.Edges.Add("hot_shared");
             e.Refs.AddRange(refsOf[i]);                                       // sites where callers invoke func_i
+            e.IndirectEdges.AddRange(indirectOf[i]);                          // fnptr/vtable/init_array edges
             m.Symbols[$"func_{i}"] = e;
         }
 
@@ -117,6 +130,23 @@ public sealed class OracleOverlay
 
         m.Symbols["oracle_handler_0"] = new SymbolEntry { Def = $"{Rel(mkPath)}:2", ExpectedMiss = true };
 
+        // Resolved indirect-edge targets: real functions whose address is taken. Defined in one file so each
+        // is a declared symbol with a def site (external/unresolved targets are NOT defined and get no symbol).
+        if (resolvedTargets.Count > 0)
+        {
+            string itgtPath = Path.Combine(_dir, "indirect_targets.c");
+            var tlines = new List<string>();
+            var tgtLine = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var t in resolvedTargets)
+            {
+                tlines.Add($"int {t}(int x) {{ return x + 1; }}");
+                tgtLine[t] = tlines.Count; // 1-based
+            }
+            File.WriteAllText(itgtPath, string.Join('\n', tlines) + "\n", Encodings.Utf8NoBom);
+            foreach (var t in resolvedTargets)
+                m.Symbols[t] = new SymbolEntry { Def = $"{Rel(itgtPath)}:{tgtLine[t]}" };
+        }
+
         // Declared entry points for the reachability closure. Emitted even for the linear default.
         foreach (int r in graph.Roots) m.Roots.Add($"func_{r}");
         foreach (var root in m.Roots)
@@ -124,6 +154,62 @@ public sealed class OracleOverlay
                 throw new InvalidOperationException($"oracle root '{root}' is not a declared symbol");
 
         return m;
+    }
+
+    private readonly record struct IndirectPlan(string Target, IndirectVia Via, bool Dispatched, bool Resolved, int K);
+
+    // Deterministically assign indirect edges to source nodes, scattered across {reachable, dead} sources and
+    // {dispatched, not}, ~2/3 resolved (in-corpus) / ~1/3 external, so a graded corpus carries genuine
+    // over-keep (reachable + never-dispatched) rather than a clean chain. Out: the resolved target names.
+    private Dictionary<int, List<IndirectPlan>> PlanIndirect(OracleGraph graph, out List<string> resolvedTargets)
+    {
+        var bySrc = new Dictionary<int, List<IndirectPlan>>();
+        resolvedTargets = new List<string>();
+        int count = Math.Max(0, _o.OracleIndirect);
+        if (count == 0) return bySrc;
+
+        var reach = new List<int>();
+        var dead = new List<int>();
+        for (int i = 0; i < graph.Count; i++) (graph.Reachable[i] ? reach : dead).Add(i);
+        var rng = Rng.For(_o.Seed, Category.ProfileOracle, 2);
+
+        for (int k = 0; k < count; k++)
+        {
+            var via = (IndirectVia)(k % 3);
+            bool dispatched = (k % 2 == 0);
+            bool resolved = (k % 3 != 2);                     // ~2/3 in-corpus, 1/3 external
+            var pool = (dead.Count > 0 && (k % 2 == 1)) ? dead : reach;  // scatter across reachable/dead
+            int src = pool[rng.Next(pool.Count)];
+            string target = resolved ? $"itgt_{k}" : $"iext_{k}";
+            if (resolved) resolvedTargets.Add(target);
+            if (!bySrc.TryGetValue(src, out var lst)) bySrc[src] = lst = new List<IndirectPlan>();
+            lst.Add(new IndirectPlan(target, via, dispatched, resolved, k));
+        }
+        return bySrc;
+    }
+
+    // Emit the real C construct (address-taken via fnptr / vector table / init_array; dispatched adds an
+    // indirect call through the slot) and record the edge. verify never compiles this, but it is plausible C.
+    private static void EmitIndirectConstruct(List<string> lines, IndirectPlan pe, List<IndirectEdge> record)
+    {
+        lines.Add($"    int {pe.Target}(int);");   // decl; target defined in indirect_targets.c, or external
+        string slot = $"ip_{pe.K}";
+        switch (pe.Via)
+        {
+            case IndirectVia.VectorTable:
+                lines.Add($"    int (*{slot}[1])(int) = {{ &{pe.Target} }};");
+                if (pe.Dispatched) lines.Add($"    acc += {slot}[0](x);");
+                break;
+            case IndirectVia.InitArray:
+                lines.Add($"    int (*{slot})(int) = &{pe.Target}; /* .init_array */");
+                if (pe.Dispatched) lines.Add($"    acc += {slot}(x);");
+                break;
+            default: // FnPtr
+                lines.Add($"    int (*{slot})(int) = &{pe.Target};");
+                if (pe.Dispatched) lines.Add($"    acc += {slot}(x);");
+                break;
+        }
+        record.Add(new IndirectEdge { Target = pe.Target, Via = pe.Via, Dispatched = pe.Dispatched, Resolved = pe.Resolved });
     }
 
     // With --oracle-scale, pad each body to the measured .c size distribution; else compact (no filler).

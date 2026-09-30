@@ -77,4 +77,54 @@ public class OracleOverlayTests
         }
         Assert.Equal(funcs.Count, seen.Count); // no dial → whole graph reachable
     }
+
+    [Fact]
+    public void IndirectEdges_AreEmitted_Scattered_AndTargetsConsistent()
+    {
+        using var tmp = new TempDir();
+        var o = new GenOptions
+        {
+            Out = "x", Seed = 1337, WithOracle = true,
+            OracleChain = 15, OracleFanout = 2, OracleReachableFrac = 0.5, OracleIndirect = 8,
+        };
+        var m = Emit(tmp, o);
+
+        var edges = m.Symbols.SelectMany(kv => kv.Value.IndirectEdges).ToList();
+        Assert.Equal(8, edges.Count);
+        Assert.True(edges.Select(e => e.Via).Distinct().Count() >= 2, "via kinds should be scattered");
+        Assert.Contains(edges, e => e.Dispatched);
+        Assert.Contains(edges, e => !e.Dispatched);
+        Assert.Contains(edges, e => e.Resolved);
+        Assert.Contains(edges, e => !e.Resolved);
+
+        // closed-world: resolved target ⇒ declared symbol; unresolved (external) ⇒ NOT a declared symbol.
+        foreach (var e in edges)
+            Assert.Equal(e.Resolved, m.Symbols.ContainsKey(e.Target));
+    }
+
+    [Fact]
+    public void IndirectTruthSha_SurvivesManifestRoundTrip()
+    {
+        using var tmp = new TempDir();
+        var o = new GenOptions
+        {
+            Out = "x", Seed = 7, WithOracle = true, OracleChain = 12, OracleFanout = 3, OracleIndirect = 6,
+        };
+        var m = Emit(tmp, o);
+        string path = tmp.File("m.json");
+        ManifestWriter.Write(m, path);
+
+        var loaded = ManifestReader.Load(path);
+        // write→read preserves the indirect edges + roots exactly, so the component digest reproduces.
+        Assert.Equal(IndirectDigest.Compute(m.Symbols, m.Roots), IndirectDigest.Compute(loaded.Symbols, loaded.Roots));
+    }
+
+    [Fact]
+    public void NoIndirect_DefaultOracle_HasNoIndirectEdges()
+    {
+        using var tmp = new TempDir();
+        var m = Emit(tmp, Opts(chain: 6));
+        Assert.All(m.Symbols.Values, s => Assert.Empty(s.IndirectEdges));
+        Assert.False(IndirectDigest.Any(m.Symbols));
+    }
 }

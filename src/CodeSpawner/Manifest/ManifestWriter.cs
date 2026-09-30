@@ -42,6 +42,10 @@ public static class ManifestWriter
             foreach (var r in m.Roots) w.WriteStringValue(r);
             w.WriteEndArray();
         }
+        // Component digest over indirect edges + roots — present only when indirect edges exist. Catches
+        // indirect-edge / root drift without touching the frozen primary prevTruthSha. Additive, v1.
+        if (IndirectDigest.Any(m.Symbols))
+            w.WriteString("indirectTruthSha", IndirectDigest.Compute(m.Symbols, m.Roots));
         w.WriteEndObject();
 
         w.WriteStartObject("symbols");
@@ -57,6 +61,21 @@ public static class ManifestWriter
             w.WriteStartArray("edges");
             foreach (var e in s.Edges) w.WriteStringValue(e);
             w.WriteEndArray();
+
+            if (s.IndirectEdges.Count > 0)
+            {
+                w.WriteStartArray("indirectEdges");
+                foreach (var ie in s.IndirectEdges)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("target", ie.Target);
+                    w.WriteString("via", ie.Via.Label());
+                    w.WriteBoolean("dispatched", ie.Dispatched);
+                    w.WriteBoolean("resolved", ie.Resolved);
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+            }
 
             if (s.UnreachableRefs is { Count: > 0 })
             {
