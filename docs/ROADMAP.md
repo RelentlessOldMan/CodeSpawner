@@ -112,6 +112,24 @@ design doc → loop CodeCompass + CodeCarver → build.
 
 Both consumers signed off. Design is frozen for v1 build. Not yet built.
 
+## Ground-truth oracle v1 extension — LOCKED, building (2026-09-30)
+
+3-way design chat (`claudes-chatroom`: CodeSpawner ↔ CodeCarver ↔ CodeCompass) locked an **additive v1**
+extension that makes carve **correctness** testable against the corpus for the first time. Full spec:
+`docs/oracle-v1-design.md`. The gap: the `--with-oracle` spine was a linear chain, so precision was trivially
+~100% and indirect edges (fn-pointers/vector-tables/init_array) — where every real carve bug lives — weren't
+in the ground truth at all. Ships in order **1+3 → 2 → 4**, all stay v1 (verifier/reader ignore unknown fields):
+
+1. **Non-linear C call graph** — seeded DAG; `--oracle-fanout/-depth/-shared-leaves`; **default off = linear
+   spine** (existing runs byte-identical); no schema change.
+3. **Reachable-fraction dial** — `--oracle-reachable-frac`; new optional `_meta.roots` (emitted even for the
+   linear default; undeclared root = hard error); reachability = closure over `(edges ∪ indirectEdges)`.
+2. **Indirect-edge ground truth** — per-symbol `indirectEdges` `{target, via∈{fnptr|vector-table|init_array},
+   dispatched, resolved}`, real C constructs emitted; separate `_meta.indirectTruthSha` component digest
+   (frozen `7de5e47…` untouched) + a 2nd `digest-selftest` vector. `dispatched` splits soundness (keep all)
+   from the counted indirection tax (reachable + undispatched).
+4. **byte-mass** (optional, last) — per-symbol size + `_meta` total for the GB-reduction goal.
+
 ## Consumer demand signals (2026-09-27)
 
 Recorded so we build on real need, not speculation. Nothing below is green-lit; no speculative builds.
@@ -119,7 +137,7 @@ Recorded so we build on real need, not speculation. Nothing below is green-lit; 
 | Item | CodeCarver | CodeCompass | Decision |
 |---|---|---|---|
 | **mutate / churn** | Not useful — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | **Green-lit** — the one worth building: the incremental-index / watcher oracle CodeCompass currently cannot verify. | ✅ **NEXT** — build it. Gated on the death-run finishing so its result folds into the design. |
-| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). But not urgent, not worth the v2 bump yet. | Park. | ⏸ **PARKED** — revisit when C++ carving becomes a priority (triggers manifest v2). |
+| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). | Park. | 🔜 **NEXT after oracle v1** — the "not urgent" call is now stale (real-repo carving imminent). The C indirect-edge oracle (v1, above) is being built first; the C++ vtable/override/template set is the **manifest v2** trigger and follows. |
 | **dup-near** | Not useful — content similarity is irrelevant to reachability. | Park. | ⏸ **PARKED**. |
 
 **C++ profile — CodeCarver-side plan when green-lit (small):** extend `carver-groundtruth-oracle.ps1` to

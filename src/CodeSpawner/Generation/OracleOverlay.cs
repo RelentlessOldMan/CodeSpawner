@@ -5,11 +5,13 @@ using CodeSpawner.Profile;
 namespace CodeSpawner.Generation;
 
 /// <summary>
-/// Overlays the ground-truth spine on a regenerated tree: a <c>func_i</c> call chain, a shared hot symbol,
-/// an unreachable vendor-gated symbol, and an expected-miss token-paste symbol — with a v1 manifest — so
-/// <c>verify</c> and a carve/soundness oracle run at the profile's cost/shape. The spine (edges/refs) is
-/// INVARIANT to size; <c>--oracle-scale</c> only inflates function BODIES with filler that adds no edges,
-/// so reproducing realistic parse cost never perturbs reachability (CodeCarver, 2026-09-29).
+/// Overlays the ground-truth spine on a regenerated tree: a <c>func_i</c> call graph (linear chain by
+/// default; a seeded DAG under --oracle-fanout, see <see cref="OracleGraph"/>), a shared hot symbol, an
+/// unreachable vendor-gated symbol, and an expected-miss token-paste symbol — with a v1 manifest — so
+/// <c>verify</c> and a carve/soundness oracle run at the profile's cost/shape. Declared entry points land in
+/// <c>_meta.roots</c>. The spine (edges/refs) is INVARIANT to size; <c>--oracle-scale</c> only inflates
+/// function BODIES with filler that adds no edges, so reproducing realistic parse cost never perturbs
+/// reachability (CodeCarver, 2026-09-29 / 2026-09-30).
 /// </summary>
 public sealed class OracleOverlay
 {
@@ -29,7 +31,8 @@ public sealed class OracleOverlay
 
     public ManifestModel Emit()
     {
-        int n = Math.Max(2, _o.OracleChain);
+        var graph = OracleGraph.Build(_o);
+        int n = graph.Count;
         long bodyPad = BodyPadStatements();
 
         // hot_shared: defined once, called from every func_i.
@@ -37,26 +40,30 @@ public sealed class OracleOverlay
         File.WriteAllText(hotPath, "int hot_shared(int x) { return x + 1; }\n", Encodings.Utf8NoBom);
 
         var defLine = new int[n];
-        var callLine = new int[n];   // site where func_{i-1} is referenced (in src_i.c)
-        var hotLine = new int[n];    // site where hot_shared is referenced (in src_i.c)
+        var hotLine = new int[n];             // site where hot_shared is referenced (in src_i.c)
         var paths = new string[n];
+        var refsOf = new List<string>[n];     // refsOf[c] = call sites (in callers' files) invoking func_c
+        for (int i = 0; i < n; i++) { paths[i] = Path.Combine(_dir, $"src_{i}.c"); refsOf[i] = new List<string>(); }
 
         for (int i = 0; i < n; i++)
         {
-            string p = Path.Combine(_dir, $"src_{i}.c");
-            paths[i] = p;
+            var children = graph.Children[i];
             var lines = new List<string> { "#include <stddef.h>", $"int func_{i}(int x);", "int hot_shared(int x);" };
-            if (i > 0) lines.Add($"int func_{i - 1}(int x);");
+            foreach (int c in children) lines.Add($"int func_{c}(int x);");
 
             lines.Add($"int func_{i}(int x) {{");
             defLine[i] = lines.Count;                 // 1-based line of the definition opener
             lines.Add("    int acc = x;");
-            if (i > 0) { lines.Add($"    acc += func_{i - 1}(x - 1);"); callLine[i] = lines.Count; }
+            foreach (int c in children)               // one call per direct edge (linear = single child)
+            {
+                lines.Add($"    acc += func_{c}(x - 1);");
+                refsOf[c].Add($"{Rel(paths[i])}:{lines.Count}"); // func_c is referenced here by func_i
+            }
             lines.Add("    acc += hot_shared(x);"); hotLine[i] = lines.Count;
             for (long k = 0; k < bodyPad; k++) lines.Add($"    acc ^= {k % 97};"); // filler: no calls, spine-invariant
             lines.Add("    return acc;");
             lines.Add("}");
-            File.WriteAllText(p, string.Join('\n', lines) + "\n", Encodings.Utf8NoBom);
+            File.WriteAllText(paths[i], string.Join('\n', lines) + "\n", Encodings.Utf8NoBom);
         }
 
         // vendor_gated: the call is behind #ifdef VENDOR_OK (never defined) with a vendor header absent from
@@ -95,10 +102,9 @@ public sealed class OracleOverlay
         for (int i = 0; i < n; i++)
         {
             var e = new SymbolEntry { Def = $"{Rel(paths[i])}:{defLine[i]}" };
-            if (i > 0) e.Edges.Add($"func_{i - 1}");
+            foreach (int c in graph.Children[i]) e.Edges.Add($"func_{c}");   // direct call edges (DAG or chain)
             e.Edges.Add("hot_shared");
-            // func_i is referenced by func_{i+1}'s call site.
-            if (i + 1 < n && callLine[i + 1] > 0) e.Refs.Add($"{Rel(paths[i + 1])}:{callLine[i + 1]}");
+            e.Refs.AddRange(refsOf[i]);                                       // sites where callers invoke func_i
             m.Symbols[$"func_{i}"] = e;
         }
 
@@ -110,6 +116,12 @@ public sealed class OracleOverlay
         m.Symbols["vendor_gated"] = vg;
 
         m.Symbols["oracle_handler_0"] = new SymbolEntry { Def = $"{Rel(mkPath)}:2", ExpectedMiss = true };
+
+        // Declared entry points for the reachability closure. Emitted even for the linear default.
+        foreach (int r in graph.Roots) m.Roots.Add($"func_{r}");
+        foreach (var root in m.Roots)
+            if (!m.Symbols.ContainsKey(root))
+                throw new InvalidOperationException($"oracle root '{root}' is not a declared symbol");
 
         return m;
     }

@@ -35,6 +35,13 @@ public static class ManifestWriter
             }
             w.WriteEndObject();
         }
+        if (m.Roots.Count > 0)
+        {
+            // Declared entry points for the reachability closure (oracle overlay). Additive, v1.
+            w.WriteStartArray("roots");
+            foreach (var r in m.Roots) w.WriteStringValue(r);
+            w.WriteEndArray();
+        }
         w.WriteEndObject();
 
         w.WriteStartObject("symbols");

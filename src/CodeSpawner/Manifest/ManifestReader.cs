@@ -13,6 +13,8 @@ public sealed class BaseManifest
     /// <summary>sha256 of the manifest file bytes — a delta records this to bind to its exact base.</summary>
     public required string Sha256 { get; init; }
     public required Dictionary<string, SymbolEntry> Symbols { get; init; }
+    /// <summary>Declared entry-point symbol names (oracle overlay); empty when absent.</summary>
+    public List<string> Roots { get; init; } = new();
 }
 
 /// <summary>Reads a v1 manifest (produced by <see cref="ManifestWriter"/>) back into a symbol table.</summary>
@@ -48,6 +50,10 @@ public static class ManifestReader
                 symbols[p.Name] = e;
             }
 
+        var roots = new List<string>();
+        if (meta.TryGetProperty("roots", out var rootsEl) && rootsEl.ValueKind == JsonValueKind.Array)
+            foreach (var x in rootsEl.EnumerateArray()) roots.Add(x.GetString()!);
+
         return new BaseManifest
         {
             ManifestVersion = ver,
@@ -56,6 +62,7 @@ public static class ManifestReader
             CorpusRoot = meta.TryGetProperty("corpusRoot", out var cr) ? cr.GetString()! : "",
             Sha256 = sha,
             Symbols = symbols,
+            Roots = roots,
         };
     }
 }

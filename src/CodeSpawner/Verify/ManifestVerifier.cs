@@ -48,6 +48,19 @@ public static class ManifestVerifier
         var names = new HashSet<string>();
         foreach (var s in symbols.EnumerateObject()) names.Add(s.Name);
 
+        // _meta.roots (oracle overlay): every declared entry point must be a real symbol.
+        if (meta.TryGetProperty("roots", out var rootsEl) && rootsEl.ValueKind == JsonValueKind.Array)
+        {
+            int rootsOk = 0;
+            foreach (var r in rootsEl.EnumerateArray())
+            {
+                string rn = r.GetString() ?? "";
+                if (names.Contains(rn)) rootsOk++;
+                else { Console.Error.WriteLine($"FAIL root '{rn}': not a declared symbol"); fail++; }
+            }
+            if (rootsOk > 0) Console.WriteLine($"  OK  _meta.roots ({rootsOk} declared entry point(s))");
+        }
+
         var lineCache = new Dictionary<string, string[]>();
         int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0;
 

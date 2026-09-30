@@ -81,6 +81,17 @@ public sealed class GenOptions
     /// <summary>Length of the func_i chain the oracle overlay emits (compact by default).</summary>
     public int OracleChain { get; set; } = 12;
 
+    // --- Oracle call-graph shape (docs/oracle-v1-design.md). All 0/off by default = linear spine. ---
+
+    /// <summary>Out-degree per node. 0 = linear chain (byte-identical default); &gt;0 = F-ary DAG.</summary>
+    public int OracleFanout { get; set; } = 0;
+    /// <summary>Optional cap on DAG depth (layers from the root). 0 = unbounded (sized by --oracle-chain).</summary>
+    public int OracleDepth { get; set; } = 0;
+    /// <summary>Count of shared sink nodes multiple callers edge into (diamonds), for real precision hazards.</summary>
+    public int OracleSharedLeaves { get; set; } = 0;
+    /// <summary>Target reachable fraction from the declared root(s), in (0,1). 0 = all reachable (no dead nodes).</summary>
+    public double OracleReachableFrac { get; set; } = 0;
+
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;
 

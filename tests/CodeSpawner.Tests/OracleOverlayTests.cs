@@ -1,0 +1,80 @@
+using CodeSpawner.Cli;
+using CodeSpawner.Generation;
+using CodeSpawner.Manifest;
+using CodeSpawner.Profile;
+using Xunit;
+
+namespace CodeSpawner.Tests;
+
+/// <summary>
+/// The emit→manifest wiring for the oracle overlay: the graph model must land as the right edges/refs/roots,
+/// the linear default must keep its exact spine shape (the byte-identical contract with CodeCarver), and a
+/// DAG must actually produce branching + a declared root that reaches the graph.
+/// </summary>
+public class OracleOverlayTests
+{
+    private static ManifestModel Emit(TempDir tmp, GenOptions o)
+    {
+        string outFull = tmp.Path;
+        var overlay = new OracleOverlay(o, new ProfileModel(), outFull, new List<string> { outFull });
+        return overlay.Emit();
+    }
+
+    private static GenOptions Opts(int chain, int fanout = 0)
+        => new() { Out = "x", Seed = 1337, WithOracle = true, OracleChain = chain, OracleFanout = fanout };
+
+    [Fact]
+    public void LinearDefault_HasChainEdges_HotShared_AndTopRoot()
+    {
+        using var tmp = new TempDir();
+        var m = Emit(tmp, Opts(chain: 5));
+
+        // func_0..func_4 + hot_shared + vendor_gated + oracle_handler_0
+        Assert.Equal(8, m.Symbols.Count);
+        Assert.Equal(new[] { "hot_shared" }, m.Symbols["func_0"].Edges.ToArray());
+        for (int i = 1; i < 5; i++)
+            Assert.Equal(new[] { $"func_{i - 1}", "hot_shared" }, m.Symbols[$"func_{i}"].Edges.ToArray());
+
+        Assert.Equal(new[] { "func_4" }, m.Roots.ToArray());   // top of the chain
+        Assert.True(m.Symbols["oracle_handler_0"].ExpectedMiss);
+        Assert.NotNull(m.Symbols["vendor_gated"].UnreachableRefs);
+    }
+
+    [Fact]
+    public void EveryEdgeTarget_IsADeclaredSymbol()
+    {
+        using var tmp = new TempDir();
+        var m = Emit(tmp, Opts(chain: 12, fanout: 3));
+        foreach (var (_, s) in m.Symbols)
+            foreach (var e in s.Edges)
+                Assert.True(m.Symbols.ContainsKey(e), $"edge target {e} missing");
+    }
+
+    [Fact]
+    public void Dag_ProducesBranching_AndRootReachesGraph()
+    {
+        using var tmp = new TempDir();
+        var m = Emit(tmp, Opts(chain: 13, fanout: 3));
+
+        // At least one func has >1 direct call edge (excluding the universal hot_shared) → real branching.
+        bool branched = m.Symbols
+            .Where(kv => kv.Key.StartsWith("func_"))
+            .Any(kv => kv.Value.Edges.Count(e => e != "hot_shared") >= 2);
+        Assert.True(branched, "a DAG oracle must branch");
+
+        Assert.Equal(new[] { "func_0" }, m.Roots.ToArray());
+
+        // BFS over func→func edges from the root reaches every func symbol.
+        var funcs = m.Symbols.Keys.Where(k => k.StartsWith("func_")).ToHashSet();
+        var seen = new HashSet<string>();
+        var q = new Queue<string>(m.Roots);
+        while (q.Count > 0)
+        {
+            var f = q.Dequeue();
+            if (!seen.Add(f)) continue;
+            foreach (var e in m.Symbols[f].Edges)
+                if (e.StartsWith("func_") && !seen.Contains(e)) q.Enqueue(e);
+        }
+        Assert.Equal(funcs.Count, seen.Count); // no dial → whole graph reachable
+    }
+}
