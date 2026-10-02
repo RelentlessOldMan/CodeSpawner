@@ -874,4 +874,25 @@ public class MutatorBulkTests
         int rc = Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, ConflictEdges = true, Seed = 1 });
         Assert.Equal(2, rc);                                         // no eligible file ⇒ error
     }
+
+    [Fact]
+    public void Bulk_Giant_PreservesLoneCrTerminators()
+    {
+        using var tmp = new TempDir();
+        // A >=1 MB "giant" with classic-Mac lone-CR terminators (no LF anywhere). The streaming rewrite must
+        // preserve each '\r' as its own terminator, never pairing or flattening it.
+        var (corpus, _) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+        {
+            var g = new System.Text.StringBuilder();
+            for (int i = 0; i < 60_000; i++) { g.Append($"#define MACRO_{i} {i}"); if (i < 59_999) g.Append('\r'); }
+            File.WriteAllBytes(Path.Combine(c, "big.h"), System.Text.Encoding.UTF8.GetBytes(g.ToString()));
+        });
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, EditDensity = 0.1, Seed = 1 });
+
+        string s = System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(corpus, "big.h")));
+        Assert.Contains("\r", s);
+        Assert.DoesNotContain("\n", s);                 // no LF introduced — every terminator stayed a lone CR
+        Assert.Equal(60_000, s.Split('\r').Length);     // still 60k CR-separated lines
+    }
 }

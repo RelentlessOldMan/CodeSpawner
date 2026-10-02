@@ -30,9 +30,11 @@ public static class Mutator
 {
     private const string MarkerName = ".codespawner";
     private const int LineShiftLines = 12;         // lines inserted above a def for the line-shift edit
-    private const long GrowTargetBytes = 9L * 1024 * 1024;   // cross the 8 MB sidecar cutoff
-    private const long ShrinkTargetBytes = 1L * 1024 * 1024; // below the 2 MB network cutoff
-    private const long RestreamTargetBytes = 100L * 1024 * 1024;
+    // Size targets for the grow/shrink/restream edits. internal (not const) so tests can shrink them to avoid
+    // multi-MB writes; defaults are the production values and are never changed at runtime outside tests.
+    internal static long GrowTargetBytes = 9L * 1024 * 1024;   // cross the 8 MB sidecar cutoff
+    internal static long ShrinkTargetBytes = 1L * 1024 * 1024; // below the 2 MB network cutoff
+    internal static long RestreamTargetBytes = 100L * 1024 * 1024;
 
     public static int Run(MutateOptions o)
     {

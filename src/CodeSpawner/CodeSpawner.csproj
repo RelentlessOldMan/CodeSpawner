@@ -21,4 +21,8 @@
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeSpawner.Tests" />
+  </ItemGroup>
+
 </Project>
