@@ -124,6 +124,35 @@ public class ProgramTests
     }
 
     [Fact]
+    public void FromProfile_WithOracle_AndOutputGuards()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "src");
+        string[] tiny = { "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0",
+                          "--ordinary-headers", "0", "--tiny-files", "0", "--blob-files", "0", "--cfiles", "2" };
+        Assert.Equal(0, Cli(new[] { "gen", "--out", corpus }.Concat(tiny).ToArray()));
+        string prof = Path.Combine(tmp.Path, "prof.json");
+        Assert.Equal(0, Cli("scan", corpus, "--out", prof));
+
+        // --from-profile --with-oracle regenerates a look-alike AND overlays a ground-truth manifest.
+        string regen = Path.Combine(tmp.Path, "regen");
+        Assert.Equal(0, Cli("gen", "--out", regen, "--from-profile", prof, "--with-oracle"));
+        Assert.True(File.Exists(Path.Combine(tmp.Path, "regen-manifest.json")));   // sibling manifest emitted
+
+        // refuses a foreign non-empty dir, honours --force
+        string foreign = Path.Combine(tmp.Path, "foreign");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, "keep.txt"), "mine");
+        Assert.Equal(2, Cli("gen", "--out", foreign, "--from-profile", prof));
+        Assert.Equal(0, Cli("gen", "--out", foreign, "--from-profile", prof, "--force"));
+
+        // --out pointing at an existing FILE is rejected
+        string asFile = Path.Combine(tmp.Path, "afile");
+        File.WriteAllText(asFile, "x");
+        Assert.Equal(2, Cli("gen", "--out", asFile, "--from-profile", prof));
+    }
+
+    [Fact]
     public void Gen_Preset_Parses_AndGenerates()
     {
         using var tmp = new TempDir();
