@@ -181,8 +181,13 @@ public static class Mutator
             var lines = SplitLines(File.ReadAllText(toAbs));
             int toChange = Math.Min(lines.Count, (int)Math.Ceiling((1 - target / 1000.0) * lines.Count));
             var changed = ChangeFirstNLines(toAbs, toChange, i);
+            if (changed.Count == 0)                            // empty file (or band rounds to 0 changed lines):
+            {                                                  // byte-identical ⇒ a PURE rename, NOT a modified
+                renames.Add(new Rename(rel, toRel, 1000));     // record with an empty diff (the honesty guard).
+                continue;
+            }
             var (newSha, newSize) = HashFile(toAbs);
-            int realizedMilli = lines.Count == 0 ? 1000 : (int)Math.Round((lines.Count - toChange) * 1000.0 / lines.Count);
+            int realizedMilli = (int)Math.Round((lines.Count - toChange) * 1000.0 / lines.Count);
             var df = new DiffFile
             {
                 Path = toRel, Reason = "content", OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
@@ -473,21 +478,46 @@ public static class Mutator
     {
         string tmp = path + ".mut.tmp";
         long lineNo = 0;
+        var sb = new StringBuilder();                          // holds the current line's content (sans terminator)
+        bool pendingCr = false;                                // a lone '\r' seen, waiting to see if it's CRLF
         using (var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
         using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
         {
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            var buf = new char[1 << 16];
+            int read;
+            while ((read = reader.Read(buf, 0, buf.Length)) > 0)
             {
-                if (lineNo % stride == 0) line += $" /*mut:{fileIndex}:{lineNo}*/";
-                writer.Write(line);
-                writer.Write('\n');
-                lineNo++;
+                for (int k = 0; k < read; k++)
+                {
+                    char c = buf[k];
+                    if (pendingCr)                             // resolve the pending '\r': CRLF or a lone CR?
+                    {
+                        pendingCr = false;
+                        if (c == '\n') { EmitGiantLine(writer, sb, "\r\n", stride, fileIndex, ref lineNo); continue; }
+                        EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);   // lone CR; c starts next line
+                    }
+                    if (c == '\r') { pendingCr = true; continue; }
+                    if (c == '\n') { EmitGiantLine(writer, sb, "\n", stride, fileIndex, ref lineNo); continue; }
+                    sb.Append(c);
+                }
             }
+            if (pendingCr) EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);  // trailing lone CR
+            if (sb.Length > 0) EmitGiantLine(writer, sb, "", stride, fileIndex, ref lineNo); // final line, no terminator
         }
         File.Delete(path);
         File.Move(tmp, path);
         return lineNo;
+    }
+
+    /// <summary>Write one giant-file line: its preserved content, the stride marker (only on stride-th lines, 0-based),
+    /// then its exact terminator. Clears the builder and advances the line counter.</summary>
+    private static void EmitGiantLine(StreamWriter w, StringBuilder sb, string term, int stride, int fileIndex, ref long lineNo)
+    {
+        w.Write(sb);
+        if (lineNo % stride == 0) w.Write($" /*mut:{fileIndex}:{lineNo}*/");
+        w.Write(term);
+        sb.Clear();
+        lineNo++;
     }
 
     // ---- edit-kind dispatch (step 2: reason classes) --------------------------------------------------

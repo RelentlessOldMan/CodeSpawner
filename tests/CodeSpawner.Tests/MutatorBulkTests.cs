@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using CodeSpawner.Cli;
 using CodeSpawner.Manifest;
 using CodeSpawner.Mutation;
 using Xunit;
@@ -636,5 +637,140 @@ public class MutatorBulkTests
         // and every record in the delta carries real hunks
         var rec = ModifiedRecord(delta, "crlf.c");
         Assert.True(rec.GetProperty("hunks").GetArrayLength() >= 1);
+    }
+
+    // --- coverage: guards, target selection, nested trees, and the two honesty/faithfulness fixes ---
+
+    [Fact]
+    public void Bulk_RefusesDirWithoutCodeSpawnerMarker()
+    {
+        using var tmp = new TempDir();
+        string dir = Path.Combine(tmp.Path, "notcorpus");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "src_0.c"), "int x(void){return 0;}\n");
+        // No .codespawner marker ⇒ refuse to edit (the marker check runs before anything touches disk).
+        var ex = Assert.Throws<ArgException>(() =>
+            Mutator.Run(new MutateOptions { Corpus = dir, Target = "source", EditDensity = 0.5, Seed = 1 }));
+        Assert.Contains(".codespawner", ex.Message);
+    }
+
+    [Fact]
+    public void Bulk_TargetHeaders_SelectsHeaderFamilyOnly()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 2, lines: 20, extra: c =>
+        {
+            File.WriteAllText(Path.Combine(c, "api.h"),
+                string.Join("\n", Enumerable.Range(0, 20).Select(i => $"#define A{i} {i}")));
+            File.WriteAllText(Path.Combine(c, "util.hpp"),
+                string.Join("\n", Enumerable.Range(0, 20).Select(i => $"inline int g{i}(void){{return {i};}}")));
+        });
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "headers", EditDensity = 1.0, Seed = 1 });
+
+        var modified = ModifiedFiles(delta);
+        Assert.NotEmpty(modified);
+        Assert.All(modified, p => Assert.Matches(@"\.(h|hpp|hh|hxx)$", p));   // header family only
+        Assert.Contains(modified, p => p.EndsWith("api.h"));
+        Assert.Contains(modified, p => p.EndsWith("util.hpp"));
+        Assert.DoesNotContain(modified, p => p.EndsWith(".c"));               // .c files left alone
+    }
+
+    [Fact]
+    public void Bulk_TargetAll_SelectsEveryNonMarkerFile()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 3, lines: 15, extra: c =>
+            File.WriteAllText(Path.Combine(c, "readme.txt"),
+                string.Join("\n", Enumerable.Range(0, 15).Select(i => $"line {i}"))));
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "all", EditDensity = 1.0, Seed = 2 });
+
+        var modified = ModifiedFiles(delta);
+        Assert.Equal(4, modified.Count);                                     // 3 .c + 1 .txt
+        Assert.Contains(modified, p => p.EndsWith("readme.txt"));
+        Assert.DoesNotContain(modified, p => p.EndsWith(".codespawner"));    // the marker is never a target
+    }
+
+    [Fact]
+    public void ThreeWay_CopiesNestedSubdirectoriesIntoBothVariants()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 2, lines: 30, extra: c =>
+        {
+            string sub = Path.Combine(c, "sub", "deep");
+            Directory.CreateDirectory(sub);
+            File.WriteAllText(Path.Combine(sub, "nested.c"),
+                string.Join("\n", Enumerable.Range(0, 30).Select(l => $"int n_{l}(void){{return {l};}}")));
+        });
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = 0.5, EditDensity = 0.8, Seed = 9 });
+
+        // CopyTree must recreate the subdir structure in both variant trees (real repos are nested, not flat).
+        Assert.True(File.Exists(Path.Combine(corpus + "_v1", "sub", "deep", "nested.c")));
+        Assert.True(File.Exists(Path.Combine(corpus + "_v2", "sub", "deep", "nested.c")));
+        // base tree stays pristine, nested file included
+        Assert.True(File.Exists(Path.Combine(corpus, "sub", "deep", "nested.c")));
+    }
+
+    [Fact]
+    public void Rename_EmptyFile_IsPureRename_NotAnEmptyDiffRecord()
+    {
+        using var tmp = new TempDir();
+        // Files named so ordinal order puts the empty file at index 1 ⇒ band 900 (a non-pure similarity target).
+        // A non-pure band on a 0-line file changes ceil(0.1*0)=0 lines ⇒ byte-identical. The honesty guard must
+        // record it as a PURE rename, never a `modified` record with equal shas and an empty diff.
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 0, lines: 0, extra: c =>
+        {
+            File.WriteAllText(Path.Combine(c, "f0.c"), "int a(void){return 0;}\n");
+            File.WriteAllText(Path.Combine(c, "f1.c"), "");                                   // empty ⇒ index 1, band 900
+            File.WriteAllText(Path.Combine(c, "f2.c"), "int b(void){return 1;}\nint c(void){return 2;}\n");
+            File.WriteAllText(Path.Combine(c, "f3.c"), "int d(void){return 3;}\n");
+        });
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0, Seed = 5 });
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(delta));
+        foreach (var rec in doc.RootElement.GetProperty("fileOps").GetProperty("modified").EnumerateArray())
+        {
+            Assert.NotEqual(rec.GetProperty("oldSha").GetString(), rec.GetProperty("newSha").GetString());  // honesty
+            Assert.True(rec.GetProperty("hunks").GetArrayLength() >= 1);
+        }
+        // the empty file still shows up as a rename — a pure one (similarity 1000, identical bytes)
+        var r = Renamed(delta).Single(x => x.GetProperty("from").GetString()!.EndsWith("f1.c"));
+        Assert.Equal(1000, r.GetProperty("similarityMilli").GetInt32());
+    }
+
+    [Fact]
+    public void Bulk_Giant_PreservesCrlfTerminators_AndMissingFinalNewline()
+    {
+        using var tmp = new TempDir();
+        // A >=1 MB "giant" with CRLF terminators and NO trailing newline. The giant path must preserve both
+        // (same faithfulness as the normal-file path) rather than flattening every terminator to LF.
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+        {
+            var g = new System.Text.StringBuilder();
+            for (int i = 0; i < 60_000; i++) { g.Append($"#define MACRO_{i} {i}"); if (i < 59_999) g.Append("\r\n"); }
+            File.WriteAllBytes(Path.Combine(c, "big.h"), System.Text.Encoding.UTF8.GetBytes(g.ToString()));
+        });
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, EditDensity = 0.1, Seed = 1 });
+
+        string s = System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(corpus, "big.h")));
+        Assert.Contains("\r\n", s);            // CRLF preserved, not flattened to LF
+        Assert.False(s.EndsWith("\n"));        // no trailing newline manufactured
+        Assert.DoesNotContain("\r\n\n", s);    // and no stray LF injected after a CRLF
+
+        // The run-rule still expands to exactly the stride-th lines marked on disk.
+        var run = ModifiedRecord(delta, "big.h").GetProperty("hunks")[0];
+        Assert.Equal("run", run.GetProperty("kind").GetString());
+        int stride = run.GetProperty("stride").GetInt32(), start = run.GetProperty("rangeStart").GetInt32(),
+            end = run.GetProperty("rangeEnd").GetInt32();
+        var expanded = new SortedSet<int>();
+        for (int ln = start; ln <= end; ln += stride) expanded.Add(ln);
+        var fromDisk = new SortedSet<int>();
+        string[] lines = s.Split("\r\n");
+        for (int i = 0; i < lines.Length; i++) if (lines[i].Contains("/*mut:")) fromDisk.Add(i + 1);
+        Assert.Equal(fromDisk, expanded);
     }
 }
