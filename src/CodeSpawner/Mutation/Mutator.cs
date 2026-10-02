@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CodeSpawner.Cli;
@@ -99,20 +100,74 @@ public static class Mutator
         Console.WriteLine($"mutate(bulk): target={o.Target} files={chosen.Count}/{pool.Count} " +
                           $"density={o.EditDensity:0.###} seed {o.Seed} base {basem.Sha256[..12]}…");
 
-        var ops = new FileOps();
+        long giantFloor = (long)o.GiantMinMb * 1024 * 1024;
+        int stride = Math.Max(1, (int)Math.Round(1.0 / Math.Clamp(o.EditDensity, 1e-6, 1.0)));
+        var files = new List<DiffFile>();
         long touched = 0;
         for (int i = 0; i < chosen.Count; i++)
         {
-            touched += ModifyInPlace(AbsOf(corpus, chosen[i]), o.EditDensity, o.Seed, i);
-            ops.Modified.Add(chosen[i]);
+            string abs = AbsOf(corpus, chosen[i]);
+            var (oldSha, oldSize) = HashFile(abs);
+            DiffFile df;
+            if (oldSize >= giantFloor)
+            {
+                // Giant file: deterministic stride → a single compact run-rule instead of a huge hunk list.
+                long lines = ModifyGiant(abs, stride, i);
+                var (newSha, newSize) = HashFile(abs);
+                touched += (lines + stride - 1) / stride;
+                df = new DiffFile
+                {
+                    Path = chosen[i], OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
+                    Run = new RunHunk(HunkOp.Replace, stride, 1, (int)Math.Min(lines, int.MaxValue), 1),
+                };
+            }
+            else
+            {
+                // Normal file: random per-line selection; coalesce contiguous changed lines into replace hunks.
+                var changed = ModifyContent(abs, o.EditDensity, o.Seed, i);
+                var (newSha, newSize) = HashFile(abs);
+                if (newSha == oldSha) continue;                // honesty: never record a file with no actual change
+                touched += changed.Count;
+                df = new DiffFile
+                {
+                    Path = chosen[i], OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
+                };
+                df.Hunks.AddRange(Coalesce(changed));
+            }
+            files.Add(df);
         }
 
-        // Content-only edits preserve def sites, so the symbol table is unchanged: the delta is pure
-        // file-level truth (fileOps.modified). Line/hunk-level truth is added once the diff-tool contract lands.
+        // Content-only edits preserve def sites, so the symbol table (and prevTruthSha) is unchanged: the 2-way
+        // delta carries file-level + hunk-level truth and its own _meta.diffTruthSha (docs/diff-delta-design.md).
         string prevSha = TruthDigest.Compute(basem.Symbols);
-        WriteDelta(corpus, basem, o, null, prevSha, basem.Symbols, basem.Symbols, ops);
-        Console.WriteLine($"  ~{touched} line(s) changed across {chosen.Count} file(s)");
+        string diffSha = DiffDigest.Compute(files, Array.Empty<Rename>());
+        WriteDiffDelta(corpus, basem, o, prevSha, diffSha, files);
+        Console.WriteLine($"  ~{touched} line(s) changed across {files.Count} file(s); diffTruthSha {diffSha[..12]}…");
         return 0;
+    }
+
+    /// <summary>SHA-256 (lowercase hex) of the raw file bytes + its size — CodeDiffer's size+hash prefilter oracle.</summary>
+    private static (string sha, long size) HashFile(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
+        long size = fs.Length;
+        string sha = Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
+        return (sha, size);
+    }
+
+    /// <summary>Collapse a sorted ascending list of changed 1-based line numbers into coalesced replace hunks.</summary>
+    private static List<Hunk> Coalesce(List<int> changedLines)
+    {
+        var hunks = new List<Hunk>();
+        for (int i = 0; i < changedLines.Count;)
+        {
+            int start = changedLines[i], j = i;
+            while (j + 1 < changedLines.Count && changedLines[j + 1] == changedLines[j] + 1) j++;
+            int run = changedLines[j] - start + 1;
+            hunks.Add(new Hunk(HunkOp.Replace, start, run, start, run));   // in-place edit: old==new coords/length
+            i = j + 1;
+        }
+        return hunks;
     }
 
     /// <summary>Rel paths in the corpus matching the target population, sorted ordinally.</summary>
@@ -138,23 +193,24 @@ public static class Mutator
     }
 
     /// <summary>
-    /// Stream a file line-by-line and append a deterministic marker comment to ~density of its lines — a real
-    /// textual change a diff tool sees, preserving the tokens already on each line (so def sites and the symbol
-    /// table stay put). Streaming keeps the 1 GB headers off the heap. Returns the number of lines changed.
+    /// Stream a normal file line-by-line and append a deterministic marker comment to ~density of its lines —
+    /// a real textual change a diff tool sees, preserving the tokens already on each line (so def sites and the
+    /// symbol table stay put). Returns the 1-based line numbers changed, ascending (for coalescing into hunks).
     /// </summary>
-    private static long ModifyInPlace(string path, double density, int seed, int fileIndex)
+    private static List<int> ModifyContent(string path, double density, int seed, int fileIndex)
     {
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + fileIndex);   // distinct stream per chosen file
+        var changed = new List<int>();
         string tmp = path + ".mut.tmp";
-        long changed = 0, lineNo = 0;
+        long lineNo = 0;
         using (var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
         using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
         {
             string? line;
             while ((line = reader.ReadLine()) is not null)
             {
-                if (rng.Next(10000) < threshold) { line += $" /*mut:{fileIndex}:{lineNo}*/"; changed++; }
+                if (rng.Next(10000) < threshold) { line += $" /*mut:{fileIndex}:{lineNo}*/"; changed.Add((int)(lineNo + 1)); }
                 writer.Write(line);
                 writer.Write('\n');
                 lineNo++;
@@ -163,6 +219,32 @@ public static class Mutator
         File.Delete(path);
         File.Move(tmp, path);
         return changed;
+    }
+
+    /// <summary>
+    /// Stream a giant file and mark every <paramref name="stride"/>-th line (0-based line k*stride ⇒ 1-based
+    /// line 1+k*stride) — the exact pattern a <see cref="RunHunk"/> with rangeStart=1 reproduces. Keeps the
+    /// 1 GB headers off the heap. Returns the total line count (the run-rule's inclusive rangeEnd).
+    /// </summary>
+    private static long ModifyGiant(string path, int stride, int fileIndex)
+    {
+        string tmp = path + ".mut.tmp";
+        long lineNo = 0;
+        using (var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+        using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
+        {
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (lineNo % stride == 0) line += $" /*mut:{fileIndex}:{lineNo}*/";
+                writer.Write(line);
+                writer.Write('\n');
+                lineNo++;
+            }
+        }
+        File.Delete(path);
+        File.Move(tmp, path);
+        return lineNo;
     }
 
     private static void ShufflePaths(List<string> list, int seed, int stream)
@@ -351,6 +433,74 @@ public static class Mutator
         w.Flush();
         Console.WriteLine($"  {Path.GetFileName(path)}: {changed} changed, {tombs} tombstoned, " +
                           $"+{ops.Added.Count}/-{ops.Removed.Count}/~{ops.Modified.Count} files");
+    }
+
+    // ---- diff-delta emission (bulk / diff-oracle mode) ------------------------------------------------
+
+    private static void WriteDiffDelta(string corpus, BaseManifest basem, MutateOptions o, string prevSha,
+        string diffSha, IReadOnlyList<DiffFile> files)
+    {
+        string path = $"{TrimDir(corpus)}-delta.json";
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
+        w.WriteStartObject();
+
+        w.WriteStartObject("_meta");
+        w.WriteNumber("manifestVersion", 1);
+        w.WriteString("deltaKind", "diff");            // distinguishes a diff-delta from a symbol-overlay delta
+        w.WriteNumber("baseSeed", basem.Seed);
+        w.WriteNumber("editSeed", o.Seed);
+        w.WriteString("target", o.Target);
+        w.WriteNumber("editDensity", o.EditDensity);
+        w.WriteString("baseManifestSha", basem.Sha256);
+        w.WriteString("prevTruthSha", prevSha);
+        w.WriteString("diffTruthSha", diffSha);
+        w.WriteEndObject();
+
+        w.WriteStartObject("fileOps");
+        w.WriteStartArray("added"); w.WriteEndArray();
+        w.WriteStartArray("removed"); w.WriteEndArray();
+        w.WriteStartArray("modified");
+        foreach (var f in files)
+        {
+            w.WriteStartObject();
+            w.WriteString("path", f.Path);
+            w.WriteString("reason", f.Reason);
+            w.WriteString("oldSha", f.OldSha);
+            w.WriteString("newSha", f.NewSha);
+            w.WriteNumber("oldSize", f.OldSize);
+            w.WriteNumber("newSize", f.NewSize);
+            w.WriteStartArray("hunks");
+            foreach (var h in f.Hunks)
+            {
+                w.WriteStartObject();
+                w.WriteString("op", h.Op.Label());
+                w.WriteNumber("oldStart", h.OldStart); w.WriteNumber("oldLines", h.OldLines);
+                w.WriteNumber("newStart", h.NewStart); w.WriteNumber("newLines", h.NewLines);
+                w.WriteEndObject();
+            }
+            if (f.Run is { } r)
+            {
+                w.WriteStartObject();
+                w.WriteString("op", r.Op.Label());
+                w.WriteString("kind", "run");
+                w.WriteNumber("stride", r.Stride);
+                w.WriteNumber("rangeStart", r.RangeStart);
+                w.WriteNumber("rangeEnd", r.RangeEnd);
+                w.WriteNumber("perHunk", r.PerHunk);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteStartArray("renamed"); w.WriteEndArray();   // populated in step 3 (rename/move)
+        w.WriteEndObject();
+
+        w.WriteStartObject("symbols"); w.WriteEndObject(); // content-only edits ⇒ empty symbol overlay
+        w.WriteEndObject();
+        w.Flush();
+        Console.WriteLine($"  {Path.GetFileName(path)}: ~{files.Count} file(s) modified");
     }
 
     // ---- helpers --------------------------------------------------------------------------------------
