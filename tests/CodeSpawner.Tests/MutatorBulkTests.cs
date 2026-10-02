@@ -244,9 +244,36 @@ public class MutatorBulkTests
         using var tmp = new TempDir();
         var (corpus, delta) = BuildCorpus(tmp, nSource: 10, lines: 60);
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.2, Seed = 4 });
-        // every recorded file must have oldSha != newSha — the honesty contract (no "modified" with empty diff).
+        // The honesty contract: every recorded file has oldSha != newSha AND at least one hunk (never a
+        // "modified" record with an empty diff).
         using var doc = JsonDocument.Parse(File.ReadAllText(delta));
         foreach (var rec in doc.RootElement.GetProperty("fileOps").GetProperty("modified").EnumerateArray())
+        {
             Assert.NotEqual(rec.GetProperty("oldSha").GetString(), rec.GetProperty("newSha").GetString());
+            Assert.True(rec.GetProperty("hunks").GetArrayLength() >= 1);
+        }
+    }
+
+    [Fact]
+    public void Bulk_PreservesEolAndMissingFinalNewline_NoSpuriousEmptyDiff()
+    {
+        using var tmp = new TempDir();
+        // A CRLF file with NO trailing newline: a naive ReadLine+write-LF rewrite would flip every \r\n and add
+        // a final \n — bytes changed with zero marked lines, i.e. a content record with an empty diff.
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+            File.WriteAllBytes(Path.Combine(c, "crlf.c"),
+                System.Text.Encoding.UTF8.GetBytes("int a(void){return 0;}\r\nint b(void){return 1;}\r\nint c(void){return 2;}")));
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 1.0, Seed = 8 });
+
+        byte[] after = File.ReadAllBytes(Path.Combine(corpus, "crlf.c"));
+        string s = System.Text.Encoding.UTF8.GetString(after);
+        Assert.Contains("\r\n", s);                    // CRLF terminators preserved
+        Assert.False(s.EndsWith("\n"));                // no trailing newline manufactured
+        Assert.Equal(3, s.Split("\r\n").Length);       // still three lines, each marked (density 1.0)
+        Assert.All(s.Split("\r\n"), line => Assert.Contains("/*mut:", line));
+        // and every record in the delta carries real hunks
+        var rec = ModifiedRecord(delta, "crlf.c");
+        Assert.True(rec.GetProperty("hunks").GetArrayLength() >= 1);
     }
 }

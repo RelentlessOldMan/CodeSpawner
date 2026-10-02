@@ -193,31 +193,36 @@ public static class Mutator
     }
 
     /// <summary>
-    /// Stream a normal file line-by-line and append a deterministic marker comment to ~density of its lines —
-    /// a real textual change a diff tool sees, preserving the tokens already on each line (so def sites and the
-    /// symbol table stay put). Returns the 1-based line numbers changed, ascending (for coalescing into hunks).
+    /// Rewrite a normal file appending a deterministic marker comment to ~density of its lines — a real textual
+    /// change a diff tool sees, preserving the tokens already on each line (so def sites and the symbol table
+    /// stay put). Line terminators (LF/CRLF) and a missing final newline are preserved EXACTLY, so a rewrite
+    /// that marks zero lines is a byte-for-byte no-op (caught by the honesty guard) rather than a spurious
+    /// EOL/trailing-newline change recorded as content. Returns the 1-based changed line numbers, ascending.
     /// </summary>
     private static List<int> ModifyContent(string path, double density, int seed, int fileIndex)
     {
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + fileIndex);   // distinct stream per chosen file
         var changed = new List<int>();
-        string tmp = path + ".mut.tmp";
-        long lineNo = 0;
-        using (var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
-        using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
+        string text = File.ReadAllText(path);                            // normal files are < giantFloor
+        var sb = new StringBuilder(text.Length + 64);
+        int i = 0, lineNo = 0;
+        while (i < text.Length)
         {
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            int start = i;
+            while (i < text.Length && text[i] != '\n' && text[i] != '\r') i++;
+            string content = text[start..i];
+            string term = "";                                            // preserve this line's exact terminator
+            if (i < text.Length)
             {
-                if (rng.Next(10000) < threshold) { line += $" /*mut:{fileIndex}:{lineNo}*/"; changed.Add((int)(lineNo + 1)); }
-                writer.Write(line);
-                writer.Write('\n');
-                lineNo++;
+                if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n') { term = "\r\n"; i += 2; }
+                else { term = text[i].ToString(); i++; }
             }
+            if (rng.Next(10000) < threshold) { content += $" /*mut:{fileIndex}:{lineNo}*/"; changed.Add(lineNo + 1); }
+            sb.Append(content).Append(term);
+            lineNo++;
         }
-        File.Delete(path);
-        File.Move(tmp, path);
+        File.WriteAllText(path, sb.ToString(), Encodings.Utf8NoBom);
         return changed;
     }
 
