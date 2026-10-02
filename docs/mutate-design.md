@@ -60,15 +60,18 @@ codespawner mutate --corpus <dir> --target <source|headers|giant|all>
 - **Output:** one cumulative base→variant `<corpus>-delta.json`; the `symbols` overlay is empty (content-only)
   and `fileOps.modified` lists exactly the changed files.
 
-### Ground-truth granularity (coupled to the diff-tool contract — deferred)
+### Ground-truth granularity (contract now LOCKED → see diff-delta-design.md)
 
 Bulk mode records **file-level** truth today (`fileOps.modified` = the exact changed-file set — already a
 precision/recall oracle at file granularity among tens of thousands of files). **Hunk/line-level** truth
 (which line ranges changed), **rename/move**, and **native 3-way** (two divergent variants + a conflict
-manifest) are intentionally **not** frozen yet — their shape depends on what the diff tool asserts against
-(line vs byte vs structural; its conflict model). Those land once the diff-tool session hands over the
-contract. The engine keeps a clean seam: the per-line decision already knows the changed line numbers, so
-emitting a hunk list is a localized add — no rework of the mutation mechanics.
+manifest) were deferred pending the diff-tool contract — that contract is now **locked** with the CodeDiffer
+session (2026-10-02) and frozen in **[diff-delta-design.md](diff-delta-design.md)**: line/hunk truth in
+unified-diff coords + a run-rule for giant files, a `reason` taxonomy (`content|eol|whitespace|encoding|
+binary|metadata`) via `--edit-kind`, rename with a lines-preserved `similarityMilli` + decoys, native 3-way
+via a joint generator with `--overlap-fraction`, and a `_meta.diffTruthSha` reusing the locked
+`indirectTruthSha` canonical form. The engine keeps a clean seam: the per-line decision already knows the
+changed line numbers, so emitting the hunk list is a localized add — no rework of the mutation mechanics.
 
 ## Edit taxonomy
 

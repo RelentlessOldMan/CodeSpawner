@@ -110,7 +110,25 @@ public static class Program
         bool okIndirect = gotI == goldenIndirect;
         if (!okIndirect) Console.Error.WriteLine($"digest self-test: FAIL indirect\n  expected {goldenIndirect}\n  got      {gotI}");
 
-        if (okPrimary && okIndirect) { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI})"); return 0; }
+        // Third golden vector: the diffTruthSha canonical form (docs/diff-delta-design.md). Frozen the same
+        // way — CodeSpawner emits, CodeDiffer reproduces. Exercises all four sections: out-of-order files
+        // (proves the ordinal sort), coalesced + multi explicit hunks, a giant-file run-rule, empty renames.
+        const string goldenDiff = "66c7e62566ee105e63dce7e770d47e1a9fbe71b86d50249e209f5bf41f03d542";
+        var dfiles = new List<DiffFile>
+        {
+            new() { Path = "z/last.c",  OldSha = "o1", NewSha = "n1", OldSize = 100, NewSize = 110,
+                    Hunks = { new Hunk(HunkOp.Replace, 5, 2, 5, 2) } },
+            new() { Path = "a/first.c", OldSha = "o2", NewSha = "n2", OldSize = 200, NewSize = 205,
+                    Hunks = { new Hunk(HunkOp.Replace, 1, 1, 1, 1), new Hunk(HunkOp.Replace, 9, 3, 9, 3) } },
+            new() { Path = "big.h",     OldSha = "o3", NewSha = "n3", OldSize = 1048576, NewSize = 1050000,
+                    Run = new RunHunk(HunkOp.Replace, 20, 1, 5000, 1) },
+        };
+        string gotD = DiffDigest.Compute(dfiles, Array.Empty<Rename>());
+        bool okDiff = gotD == goldenDiff;
+        if (!okDiff) Console.Error.WriteLine($"digest self-test: FAIL diff\n  expected {goldenDiff}\n  got      {gotD}");
+
+        if (okPrimary && okIndirect && okDiff)
+        { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI}, diff {gotD})"); return 0; }
         return 1;
     }
 
@@ -164,8 +182,10 @@ public static class Program
               --files-changed <n>   how many target files to modify (default: all matching)
               --edit-density <f>    fraction of each file's lines to change in place, 0..1 (default 0.05)
               --giant-min-mb <n>    size floor (MB) for --target giant — the big-header case (default 100)
-              (emits one base->variant <corpus>-delta.json; e.g. --target giant --files-changed 3
-               --edit-density 0.5  vs  --target source --files-changed 1000 --edit-density 0.02)
+              (emits one base->variant <corpus>-delta.json with per-file reason + old/new sha+size + unified
+               hunks [a compact run-rule for giant files] + a _meta.diffTruthSha; see docs/diff-delta-design.md.
+               e.g. --target giant --files-changed 3 --edit-density 0.5  vs
+                    --target source --files-changed 1000 --edit-density 0.02)
 
             PRESETS (bundled knob sets; your own knobs still override):
               --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death")
