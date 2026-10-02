@@ -159,6 +159,14 @@ public static class Program
               --restream       include 4-restream edits (needs --restream-seeds in the base corpus)
               (gen the base with --shrink-seeds N [--restream-seeds N] to enable 4-shrink/4-restream)
 
+            MUTATE BULK (diff-oracle: deterministic, targeted, count/density-controlled in-place edits):
+              --target <pop>        population to change: source | headers | giant | all (activates bulk mode)
+              --files-changed <n>   how many target files to modify (default: all matching)
+              --edit-density <f>    fraction of each file's lines to change in place, 0..1 (default 0.05)
+              --giant-min-mb <n>    size floor (MB) for --target giant — the big-header case (default 100)
+              (emits one base->variant <corpus>-delta.json; e.g. --target giant --files-changed 3
+               --edit-density 0.5  vs  --target source --files-changed 1000 --edit-density 0.02)
+
             PRESETS (bundled knob sets; your own knobs still override):
               --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death")
               --preset ci            ~1/100 counts, keeps >=1 pathology header (fast smoke)

@@ -14,4 +14,21 @@ public sealed class MutateOptions
     public bool Through { get; set; }
     /// <summary>Include 4-restream edits (needs mut_restream_*.h seeds in the base corpus).</summary>
     public bool Restream { get; set; }
+
+    // ---- bulk in-place mutation (diff-oracle mode; set --target to activate) -------------------------
+    // Decoupled from the legacy round-robin: pick a population, say how many files to change and how much
+    // of each, and emit one base->variant delta. The delta records file-level truth (fileOps.modified);
+    // hunk/line-level ground truth is deferred until the diff-tool contract is locked.
+
+    /// <summary>Population to perturb in bulk mode: source | headers | giant | all. Null = legacy mode.</summary>
+    public string? Target { get; set; }
+    /// <summary>How many files of the target to modify in place. Null = all matching files.</summary>
+    public int? FilesChanged { get; set; }
+    /// <summary>Fraction of each target file's lines to change in place (0..1]. Default 0.05.</summary>
+    public double EditDensity { get; set; } = 0.05;
+    /// <summary>Size floor in MB for the <c>giant</c> target (the big-header case). Default 100.</summary>
+    public int GiantMinMb { get; set; } = 100;
+
+    /// <summary>True when bulk in-place mutation is requested.</summary>
+    public bool IsBulk => Target is not null;
 }

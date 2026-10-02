@@ -44,6 +44,8 @@ public static class Mutator
         if (!File.Exists(manifestPath)) { Console.Error.WriteLine($"error: base manifest not found: {manifestPath}"); return 2; }
         var basem = ManifestReader.Load(manifestPath);
 
+        if (o.IsBulk) return RunBulk(o, corpus, basem);
+
         var plan = BuildPlan(o, corpus, basem);
         Console.WriteLine($"mutate: {plan.Count} edit(s), seed {o.Seed}, base {basem.Sha256[..12]}… " +
                           $"({string.Join(",", plan.Select(e => e.Type))})");
@@ -81,6 +83,99 @@ public static class Mutator
             }
         }
         return 0;
+    }
+
+    // ---- bulk in-place mutation (diff-oracle mode) ----------------------------------------------------
+
+    private static int RunBulk(MutateOptions o, string corpus, BaseManifest basem)
+    {
+        var pool = SelectTargets(corpus, o.Target!, o.GiantMinMb);
+        if (pool.Count == 0) { Console.Error.WriteLine($"error: no files match --target {o.Target} in {corpus}"); return 2; }
+
+        ShufflePaths(pool, o.Seed, 101);                       // deterministic selection order
+        int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
+        var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
+
+        Console.WriteLine($"mutate(bulk): target={o.Target} files={chosen.Count}/{pool.Count} " +
+                          $"density={o.EditDensity:0.###} seed {o.Seed} base {basem.Sha256[..12]}…");
+
+        var ops = new FileOps();
+        long touched = 0;
+        for (int i = 0; i < chosen.Count; i++)
+        {
+            touched += ModifyInPlace(AbsOf(corpus, chosen[i]), o.EditDensity, o.Seed, i);
+            ops.Modified.Add(chosen[i]);
+        }
+
+        // Content-only edits preserve def sites, so the symbol table is unchanged: the delta is pure
+        // file-level truth (fileOps.modified). Line/hunk-level truth is added once the diff-tool contract lands.
+        string prevSha = TruthDigest.Compute(basem.Symbols);
+        WriteDelta(corpus, basem, o, null, prevSha, basem.Symbols, basem.Symbols, ops);
+        Console.WriteLine($"  ~{touched} line(s) changed across {chosen.Count} file(s)");
+        return 0;
+    }
+
+    /// <summary>Rel paths in the corpus matching the target population, sorted ordinally.</summary>
+    private static List<string> SelectTargets(string corpus, string target, int giantMinMb)
+    {
+        long giantFloor = (long)giantMinMb * 1024 * 1024;
+        var result = new List<string>();
+        foreach (var abs in Directory.EnumerateFiles(corpus, "*", SearchOption.AllDirectories))
+        {
+            if (string.Equals(Path.GetFileName(abs), MarkerName, StringComparison.Ordinal)) continue;
+            bool match = target switch
+            {
+                "source"  => HasExt(abs, ".c", ".cc", ".cpp", ".cxx"),
+                "headers" => HasExt(abs, ".h", ".hpp", ".hh", ".hxx"),
+                "giant"   => new FileInfo(abs).Length >= giantFloor,
+                "all"     => true,
+                _         => false,
+            };
+            if (match) result.Add(RelOf(corpus, abs));
+        }
+        result.Sort(StringComparer.Ordinal);
+        return result;
+    }
+
+    /// <summary>
+    /// Stream a file line-by-line and append a deterministic marker comment to ~density of its lines — a real
+    /// textual change a diff tool sees, preserving the tokens already on each line (so def sites and the symbol
+    /// table stay put). Streaming keeps the 1 GB headers off the heap. Returns the number of lines changed.
+    /// </summary>
+    private static long ModifyInPlace(string path, double density, int seed, int fileIndex)
+    {
+        int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
+        var rng = Rng.For(seed, Category.Mutate, 100_000 + fileIndex);   // distinct stream per chosen file
+        string tmp = path + ".mut.tmp";
+        long changed = 0, lineNo = 0;
+        using (var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+        using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
+        {
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                if (rng.Next(10000) < threshold) { line += $" /*mut:{fileIndex}:{lineNo}*/"; changed++; }
+                writer.Write(line);
+                writer.Write('\n');
+                lineNo++;
+            }
+        }
+        File.Delete(path);
+        File.Move(tmp, path);
+        return changed;
+    }
+
+    private static void ShufflePaths(List<string> list, int seed, int stream)
+    {
+        var rng = Rng.For(seed, Category.Mutate, stream);
+        for (int i = list.Count - 1; i > 0; i--) { int j = rng.Next(i + 1); (list[i], list[j]) = (list[j], list[i]); }
+    }
+
+    private static bool HasExt(string path, params string[] exts)
+    {
+        string ext = Path.GetExtension(path);
+        foreach (var e in exts) if (string.Equals(ext, e, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     // ---- planning -------------------------------------------------------------------------------------

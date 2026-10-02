@@ -32,6 +32,44 @@ codespawner mutate --corpus <dir> --seed <S> --edits <N> [--step <k>] [--through
   point — a byte change under a stale mtime would (correctly) be missed by the incremental path. Remove
   drops the mtime with the file.
 
+## Bulk mode (diff-oracle) — for the large-repo diff tool
+
+A second, additive mode (2026-09-30) for a different consumer: a **2-/3-way diff tool** that needs the *same*
+repo with a **controllable** set of changes, at scale. Where the edit taxonomy below is tuned for CodeCompass's
+incremental/watcher paths (a handful of structural edits), bulk mode is tuned for "generate a variant where I
+dial exactly **which** population changed, **how many** files, and **how much** of each."
+
+```
+codespawner mutate --corpus <dir> --target <source|headers|giant|all>
+                   [--files-changed N] [--edit-density f] [--giant-min-mb N] [--seed S]
+```
+
+- **`--target`** selects a population by file property (corpus-agnostic — works on a `gen` corpus or a
+  `--from-profile` one like `death_1.0.9`): `source` (`.c/.cc/.cpp/.cxx`), `headers` (`.h/.hpp/...`),
+  `giant` (any file ≥ `--giant-min-mb`, default 100 — the 1 GB-header case), `all`.
+- **`--files-changed N`** — how many matching files to change (default: all). The "10 vs 1,000 files" dial;
+  files are chosen deterministically from `S`.
+- **`--edit-density f`** (0..1, default 0.05) — fraction of each file's lines changed in place. The "a few vs
+  a lot of changes within the file" dial — what makes a giant header interesting.
+- **In-place edit:** each chosen file is **streamed** line-by-line (a 1 GB header never loads into the heap);
+  ~`f` of its lines get a deterministic marker comment appended — a real textual change a diff tool sees,
+  while **preserving the tokens already on the line** (def sites and the symbol table stay put, so the change
+  is purely content).
+- **Determinism:** same `(corpus, target, files-changed, density, S)` ⇒ byte-identical variant (same seeded
+  `Rng`, confirmed cross-machine) — so a variant can be **regenerated in place** on another box, not copied.
+- **Output:** one cumulative base→variant `<corpus>-delta.json`; the `symbols` overlay is empty (content-only)
+  and `fileOps.modified` lists exactly the changed files.
+
+### Ground-truth granularity (coupled to the diff-tool contract — deferred)
+
+Bulk mode records **file-level** truth today (`fileOps.modified` = the exact changed-file set — already a
+precision/recall oracle at file granularity among tens of thousands of files). **Hunk/line-level** truth
+(which line ranges changed), **rename/move**, and **native 3-way** (two divergent variants + a conflict
+manifest) are intentionally **not** frozen yet — their shape depends on what the diff tool asserts against
+(line vs byte vs structural; its conflict model). Those land once the diff-tool session hands over the
+contract. The engine keeps a clean seam: the per-line decision already knows the changed line numbers, so
+emitting a hunk list is a localized add — no rework of the mutation mechanics.
+
 ## Edit taxonomy
 
 Ranked by how much each stresses a real incremental indexer (top = where incrementals silently rot).

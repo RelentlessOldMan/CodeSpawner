@@ -212,4 +212,44 @@ public class ArgParserTests
     [Fact]
     public void Mutate_ValidStep_IsAccepted()
         => Assert.Equal(2, ArgParser.ParseMutate(new[] { "--corpus", "c", "--step", "2" }).Step);
+
+    // --- mutate bulk (diff-oracle) mode ---
+
+    [Fact]
+    public void Mutate_Bulk_ParsesKnobs_AndActivatesBulk()
+    {
+        var o = ArgParser.ParseMutate(new[]
+        {
+            "--corpus", "c", "--target", "GIANT", "--files-changed", "1000",
+            "--edit-density", "0.25", "--giant-min-mb", "500", "--seed", "4",
+        });
+        Assert.True(o.IsBulk);
+        Assert.Equal("giant", o.Target);           // lowercased
+        Assert.Equal(1000, o.FilesChanged);
+        Assert.Equal(0.25, o.EditDensity);
+        Assert.Equal(500, o.GiantMinMb);
+    }
+
+    [Fact]
+    public void Mutate_Bulk_DefaultDensity_WhenOmitted()
+        => Assert.Equal(0.05, ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source" }).EditDensity);
+
+    [Fact]
+    public void Mutate_Bulk_BadTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "bogus" }));
+
+    [Fact]
+    public void Mutate_Bulk_FilesChangedWithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--files-changed", "10" }));
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1.5")]
+    [InlineData("-0.1")]
+    public void Mutate_Bulk_BadDensity_Throws(string d)
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "all", "--edit-density", d }));
+
+    [Fact]
+    public void Mutate_Bulk_TargetWithStep_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--step", "1" }));
 }
