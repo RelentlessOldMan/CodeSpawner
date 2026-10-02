@@ -166,10 +166,27 @@ public static class ArgParser
                 case "step": o.Step = Int(key, Val()); break;
                 case "through": o.Through = true; break;
                 case "restream": o.Restream = true; break;
+                case "target": o.Target = Val().ToLowerInvariant(); break;
+                case "files-changed": o.FilesChanged = Int(key, Val()); break;
+                case "edit-density": o.EditDensity = Dbl(key, Val()); break;
+                case "giant-min-mb": o.GiantMinMb = Int(key, Val()); break;
                 default: throw new ArgException($"unknown option --{key}");
             }
         }
         if (string.IsNullOrWhiteSpace(o.Corpus)) throw new ArgException("--corpus <dir> is required");
+
+        if (o.IsBulk)
+        {
+            if (o.Target is not ("source" or "headers" or "giant" or "all"))
+                throw new ArgException($"--target must be one of source|headers|giant|all, got '{o.Target}'");
+            if (o.Step is not null) throw new ArgException("--target (bulk mode) cannot be combined with --step");
+            if (o.EditDensity <= 0 || o.EditDensity > 1) throw new ArgException("--edit-density must be in (0, 1]");
+            if (o.FilesChanged is { } fc && fc < 1) throw new ArgException("--files-changed must be >= 1");
+            if (o.GiantMinMb < 1) throw new ArgException("--giant-min-mb must be >= 1");
+            return o;
+        }
+
+        if (o.FilesChanged is not null) throw new ArgException("--files-changed requires --target (bulk mode)");
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
         if (o.Step is { } k && (k < 1 || k > o.Edits)) throw new ArgException($"--step must be in 1..{o.Edits}");
         return o;
