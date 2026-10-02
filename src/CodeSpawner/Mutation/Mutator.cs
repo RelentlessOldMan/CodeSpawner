@@ -97,7 +97,8 @@ public static class Mutator
         int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
         var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
-        if (o.ThreeWay) return RunThreeWay(o, corpus, basem, chosen);
+        if (o.ThreeWay) return o.ConflictEdges ? RunThreeWayEdges(o, corpus, basem, chosen)
+                                               : RunThreeWay(o, corpus, basem, chosen);
 
         Console.WriteLine($"mutate(bulk): target={o.Target} kind={o.Kind} files={chosen.Count}/{pool.Count} " +
                           $"density={o.EditDensity:0.###} seed {o.Seed} base {basem.Sha256[..12]}…");
@@ -336,6 +337,230 @@ public static class Mutator
             Directory.CreateDirectory(Path.Combine(dst, RelOf(src, dir).Replace('/', Path.DirectorySeparatorChar)));
         foreach (var f in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
             File.Copy(f, Path.Combine(dst, RelOf(src, f).Replace('/', Path.DirectorySeparatorChar)), overwrite: true);
+    }
+
+    // ---- native 3-way EDGE kinds (step 4b: adjacent / modify-delete / add-add / identical-overlap) --------
+
+    private const int EdgeMinLines = 18;   // the fixed region layout spans base lines 1..16 + anchors
+
+    /// <summary>
+    /// Deterministic edge-case 3-way generator. Lays out each conflict kind as a region cleanly SEPARATED by
+    /// base lines untouched by both sides, so the union-span coalescer (diff3 maximal hunk) reproduces exactly
+    /// these regions. One file carries: single-line modify/modify, adjacent multi-line (overlapping replaces),
+    /// modify/delete, add/add, identical-overlap (⇒ clean, side=v1), and one-sided clean on each side. Truth
+    /// classification: a region both sides touched is a conflict UNLESS its rendered content is byte-identical
+    /// in B_v1 and B_v2 (the agreed-edit ⇒ clean, canonical side=v1). See docs/diff-delta-design.md §3-way-edges.
+    /// </summary>
+    private static int RunThreeWayEdges(MutateOptions o, string corpus, BaseManifest basem, List<string> chosen)
+    {
+        string trimmed = TrimDir(corpus);
+        string v1Root = trimmed + "_v1", v2Root = trimmed + "_v2";
+        CopyTree(corpus, v1Root);
+        CopyTree(corpus, v2Root);
+
+        var v1Files = new List<DiffFile>();
+        var v2Files = new List<DiffFile>();
+        var conflicts = new List<Conflict>();
+        var clean = new List<CleanMerge>();
+        int applied = 0;
+
+        foreach (var rel in chosen)                            // chosen is ordinal-sorted
+        {
+            var baseLines = SplitLines(File.ReadAllText(AbsOf(corpus, rel)));
+            if (baseLines.Count < EdgeMinLines) continue;      // too short for the fixed layout
+            applied++;
+
+            var p = EdgePlanFor();
+            var r1 = RenderEdgeSide(baseLines, p, side: 1);
+            var r2 = RenderEdgeSide(baseLines, p, side: 2);
+            File.WriteAllText(AbsOf(v1Root, rel), r1.Text, Encodings.Utf8NoBom);
+            File.WriteAllText(AbsOf(v2Root, rel), r2.Text, Encodings.Utf8NoBom);
+
+            var (oldSha, oldSize) = HashFile(AbsOf(corpus, rel));
+            v1Files.Add(EdgeDiffFile(rel, oldSha, oldSize, AbsOf(v1Root, rel), r1.Hunks));
+            v2Files.Add(EdgeDiffFile(rel, oldSha, oldSize, AbsOf(v2Root, rel), r2.Hunks));
+
+            BuildEdgeTruth(rel, baseLines, p, r1, r2, conflicts, clean);
+        }
+
+        if (applied == 0)
+        {
+            Console.Error.WriteLine($"error: no file in --target {o.Target} has >= {EdgeMinLines} lines for --conflict-edges");
+            return 2;
+        }
+
+        string prevSha = TruthDigest.Compute(basem.Symbols);
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v1Files, Array.Empty<Rename>()), v1Files, Array.Empty<Rename>(), Array.Empty<string>(), "v1");
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v2Files, Array.Empty<Rename>()), v2Files, Array.Empty<Rename>(), Array.Empty<string>(), "v2");
+        string conflictSha = ConflictDigest.Compute(conflicts, clean);
+        WriteConflict(corpus, basem, o, conflictSha, conflicts, clean, Path.GetFileName(v1Root), Path.GetFileName(v2Root));
+
+        Console.WriteLine($"mutate(3way-edges): {applied} file(s), seed {o.Seed} → {conflicts.Count} conflict(s), {clean.Count} clean; conflictTruthSha {conflictSha[..12]}…");
+        Console.WriteLine($"  variants: {Path.GetFileName(v1Root)}/ + {Path.GetFileName(v2Root)}/");
+        return 0;
+    }
+
+    /// <summary>The fixed edge layout over base lines 1..16 (each region bounded by a both-untouched anchor):
+    /// 2 modify/modify · 4-6 adjacent (v1 reps 4,5 / v2 reps 5,6) · 8 modify(v1)/delete(v2) · after-10 add/add
+    /// · 12 identical-overlap · 14 one-sided v1 · 16 one-sided v2.</summary>
+    private sealed class EdgePlanModel
+    {
+        public HashSet<int> V1Replace = new() { 2, 4, 5, 8, 14 };
+        public HashSet<int> V2Replace = new() { 2, 5, 6, 16 };
+        public HashSet<int> V2Delete = new() { 8 };
+        public HashSet<int> Ident = new() { 12 };              // both sides replace with IDENTICAL content
+        public int InsAnchor = 10;                             // add/add: both insert after base line 10
+        public bool V1Acts(int i) => V1Replace.Contains(i) || Ident.Contains(i);
+        public bool V2Acts(int i) => V2Replace.Contains(i) || V2Delete.Contains(i) || Ident.Contains(i);
+        public bool SideReplaces(int side, int i) =>
+            side == 1 ? (V1Replace.Contains(i) || Ident.Contains(i)) : (V2Replace.Contains(i) || Ident.Contains(i));
+    }
+
+    private static EdgePlanModel EdgePlanFor() => new();
+
+    private static string EdgeMarker(EdgePlanModel p, int side, int i)
+    {
+        if (p.Ident.Contains(i)) return $" /*both:{i}*/";      // identical on both sides ⇒ agreed edit
+        if (side == 1 && p.V1Replace.Contains(i)) return $" /*v1e:{i}*/";
+        if (side == 2 && p.V2Replace.Contains(i)) return $" /*v2e:{i}*/";
+        return "";                                             // kept by this side
+    }
+
+    private static List<string> EdgeInserts(int side, int anchor) => side == 1
+        ? new List<string> { $"// v1 add {anchor}:0", $"// v1 add {anchor}:1" }
+        : new List<string> { $"// v2 add {anchor}:0", $"// v2 add {anchor}:1", $"// v2 add {anchor}:2" };
+
+    private sealed class EdgeRender
+    {
+        public string Text = "";
+        public int[] OutStart = Array.Empty<int>();            // 1-based first output line of base i (landing line if deleted)
+        public int[] OutLen = Array.Empty<int>();              // output lines base i occupies (0 if deleted)
+        public int InsOutStart;                                // 1-based output start of the add/add block
+        public int InsLen;
+        public List<Hunk> Hunks = new();
+    }
+
+    /// <summary>Render one variant's bytes from the plan, recording each base line's output coords by
+    /// construction (so conflict/clean coords are self-consistent, never derived).</summary>
+    private static EdgeRender RenderEdgeSide(List<(string content, string term)> baseLines, EdgePlanModel p, int side)
+    {
+        int L = baseLines.Count;
+        var r = new EdgeRender { OutStart = new int[L + 1], OutLen = new int[L + 1] };
+        var sb = new StringBuilder();
+        int outp = 0;
+        for (int i = 1; i <= L; i++)
+        {
+            var (content, term) = baseLines[i - 1];
+            if (side == 2 && p.V2Delete.Contains(i)) { r.OutStart[i] = outp + 1; r.OutLen[i] = 0; }   // deleted: landing line
+            else
+            {
+                sb.Append(content).Append(EdgeMarker(p, side, i)).Append(term);
+                outp++; r.OutStart[i] = outp; r.OutLen[i] = 1;
+            }
+            if (i == p.InsAnchor)                              // add/add inserts after this line (LF, corpus is LF)
+            {
+                var ins = EdgeInserts(side, i);
+                r.InsOutStart = outp + 1; r.InsLen = ins.Count;
+                foreach (var il in ins) { sb.Append(il).Append('\n'); outp++; }
+            }
+        }
+        r.Text = sb.ToString();
+        r.Hunks = EdgeHunks(p, side, r, L);
+        return r;
+    }
+
+    private static List<Hunk> EdgeHunks(EdgePlanModel p, int side, EdgeRender r, int L)
+    {
+        var hunks = new List<Hunk>();
+        int i = 1;
+        while (i <= L)
+        {
+            if (p.SideReplaces(side, i))                       // coalesce a run of consecutive replaced lines
+            {
+                int j = i; while (j + 1 <= L && p.SideReplaces(side, j + 1)) j++;
+                hunks.Add(new Hunk(HunkOp.Replace, i, j - i + 1, r.OutStart[i], j - i + 1));
+                i = j + 1;
+            }
+            else if (side == 2 && p.V2Delete.Contains(i))
+            {
+                int j = i; while (j + 1 <= L && p.V2Delete.Contains(j + 1)) j++;
+                hunks.Add(new Hunk(HunkOp.Delete, i, j - i + 1, r.OutStart[i], 0));
+                i = j + 1;
+            }
+            else i++;
+        }
+        if (r.InsLen > 0) hunks.Add(new Hunk(HunkOp.Insert, p.InsAnchor, 0, r.InsOutStart, r.InsLen));
+        return hunks;
+    }
+
+    private static DiffFile EdgeDiffFile(string rel, string oldSha, long oldSize, string variantAbs, List<Hunk> hunks)
+    {
+        var (newSha, newSize) = HashFile(variantAbs);
+        var df = new DiffFile { Path = rel, Reason = "content", OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize };
+        df.Hunks.AddRange(hunks);
+        return df;
+    }
+
+    /// <summary>Union-span coalescer: group maximal runs of base lines touched by either side (a both-untouched
+    /// line terminates a region), classify each region, and emit the conflict/clean truth with by-construction
+    /// coords. The add/add insert anchor is its own zero-width region.</summary>
+    private static void BuildEdgeTruth(string rel, List<(string content, string term)> baseLines, EdgePlanModel p,
+        EdgeRender r1, EdgeRender r2, List<Conflict> conflicts, List<CleanMerge> clean)
+    {
+        int L = baseLines.Count;
+        int i = 1;
+        while (i <= L)
+        {
+            if (!(p.V1Acts(i) || p.V2Acts(i))) { i++; continue; }
+            int s = i, e = i;
+            while (e + 1 <= L && (p.V1Acts(e + 1) || p.V2Acts(e + 1))) e++;
+
+            bool v1a = false, v2a = false;
+            for (int k = s; k <= e; k++) { v1a |= p.V1Acts(k); v2a |= p.V2Acts(k); }
+            int baseLines0 = e - s + 1;
+            int v1ns = r1.OutStart[s], v1nl = SumLen(r1, s, e);
+            int v2ns = r2.OutStart[s], v2nl = SumLen(r2, s, e);
+
+            if (v1a && v2a)
+            {
+                if (EdgeRegionText(baseLines, p, 1, s, e) == EdgeRegionText(baseLines, p, 2, s, e))
+                    clean.Add(new CleanMerge(rel, "v1", EdgeOp(baseLines0, v1nl), s, baseLines0, v1ns, v1nl));   // identical-overlap
+                else
+                    conflicts.Add(new Conflict(rel, s, baseLines0,
+                        EdgeOp(baseLines0, v1nl), v1ns, v1nl, EdgeOp(baseLines0, v2nl), v2ns, v2nl));
+            }
+            else if (v1a) clean.Add(new CleanMerge(rel, "v1", EdgeOp(baseLines0, v1nl), s, baseLines0, v1ns, v1nl));
+            else clean.Add(new CleanMerge(rel, "v2", EdgeOp(baseLines0, v2nl), s, baseLines0, v2ns, v2nl));
+
+            i = e + 1;
+        }
+
+        if (p.InsAnchor > 0)                                   // add/add: zero-width region at the insert anchor
+        {
+            int a = p.InsAnchor;
+            string c1 = string.Join("\n", EdgeInserts(1, a));
+            string c2 = string.Join("\n", EdgeInserts(2, a));
+            if (c1 == c2) clean.Add(new CleanMerge(rel, "v1", HunkOp.Insert, a, 0, r1.InsOutStart, r1.InsLen));
+            else conflicts.Add(new Conflict(rel, a, 0, HunkOp.Insert, r1.InsOutStart, r1.InsLen, HunkOp.Insert, r2.InsOutStart, r2.InsLen));
+        }
+    }
+
+    private static int SumLen(EdgeRender r, int s, int e) { int n = 0; for (int k = s; k <= e; k++) n += r.OutLen[k]; return n; }
+
+    private static HunkOp EdgeOp(int baseLines, int newLines) =>
+        baseLines == 0 ? HunkOp.Insert : newLines == 0 ? HunkOp.Delete : HunkOp.Replace;
+
+    /// <summary>The rendered (content+marker) text of base lines s..e for one side — deleted lines omitted.
+    /// Used only to decide identical-overlap (both sides' region bytes equal ⇒ agreed edit ⇒ clean).</summary>
+    private static string EdgeRegionText(List<(string content, string term)> baseLines, EdgePlanModel p, int side, int s, int e)
+    {
+        var sb = new StringBuilder();
+        for (int k = s; k <= e; k++)
+        {
+            if (side == 2 && p.V2Delete.Contains(k)) continue;
+            sb.Append(baseLines[k - 1].content).Append(EdgeMarker(p, side, k)).Append('\n');
+        }
+        return sb.ToString();
     }
 
     private static void WriteConflict(string corpus, BaseManifest basem, MutateOptions o, string conflictSha,

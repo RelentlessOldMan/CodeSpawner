@@ -174,6 +174,7 @@ public static class ArgParser
                 case "decoy-fraction": o.DecoyFraction = Dbl(key, Val()); break;
                 case "three-way": o.ThreeWay = true; break;
                 case "overlap-fraction": o.OverlapFraction = Dbl(key, Val()); break;
+                case "conflict-edges": o.ConflictEdges = true; break;
                 default: throw new ArgException($"unknown option --{key}");
             }
         }
@@ -190,6 +191,7 @@ public static class ArgParser
             if (o.DecoyFraction > 0 && o.Kind != "rename") throw new ArgException("--decoy-fraction only applies to --edit-kind rename");
             if (o.OverlapFraction is < 0 or > 1) throw new ArgException("--overlap-fraction must be in [0, 1]");
             if (o.ThreeWay && o.EditKind is not null) throw new ArgException("--three-way cannot be combined with --edit-kind (it uses content edits)");
+            if (o.ConflictEdges && !o.ThreeWay) throw new ArgException("--conflict-edges requires --three-way");
             if (o.EditDensity <= 0 || o.EditDensity > 1) throw new ArgException("--edit-density must be in (0, 1]");
             if (o.FilesChanged is { } fc && fc < 1) throw new ArgException("--files-changed must be >= 1");
             if (o.GiantMinMb < 1) throw new ArgException("--giant-min-mb must be >= 1");
@@ -198,6 +200,7 @@ public static class ArgParser
 
         if (o.EditKind is not null) throw new ArgException("--edit-kind requires --target (bulk mode)");
         if (o.ThreeWay) throw new ArgException("--three-way requires --target (bulk mode)");
+        if (o.ConflictEdges) throw new ArgException("--conflict-edges requires --three-way (bulk mode)");
         if (o.DecoyFraction > 0) throw new ArgException("--decoy-fraction requires --target (bulk mode)");
         if (o.FilesChanged is not null) throw new ArgException("--files-changed requires --target (bulk mode)");
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
