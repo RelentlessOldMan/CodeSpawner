@@ -97,6 +97,8 @@ public static class Mutator
         int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
         var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
+        if (o.ThreeWay) return RunThreeWay(o, corpus, basem, chosen);
+
         Console.WriteLine($"mutate(bulk): target={o.Target} kind={o.Kind} files={chosen.Count}/{pool.Count} " +
                           $"density={o.EditDensity:0.###} seed {o.Seed} base {basem.Sha256[..12]}…");
 
@@ -226,6 +228,160 @@ public static class Mutator
         string ext = dot >= 0 ? file[dot..] : "";
         string name = $"{stem}_{tag}{i}{ext}";
         return dir.Length == 0 ? name : dir + "/" + name;
+    }
+
+    // ---- native 3-way (step 4) ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Leave B pristine; copy it to two variant trees B_v1/B_v2 and edit each independently, with all edits on
+    /// ODD base lines so every even line is a stable anchor (the stable-separator guarantee — region-level
+    /// conflicts ≡ line-level). <c>--overlap-fraction f</c> = fraction of V2's edited lines that coincide with
+    /// V1's ⇒ conflicts; the rest clean-merge. Emits B-delta-v1/v2.json (standard diff-deltas) + B-conflict.json
+    /// with a conflictTruthSha. See docs/diff-delta-design.md §3-way.
+    /// </summary>
+    private static int RunThreeWay(MutateOptions o, string corpus, BaseManifest basem, List<string> chosen)
+    {
+        string trimmed = TrimDir(corpus);
+        string v1Root = trimmed + "_v1", v2Root = trimmed + "_v2";
+        CopyTree(corpus, v1Root);
+        CopyTree(corpus, v2Root);
+
+        int dth = (int)Math.Round(Math.Clamp(o.EditDensity, 0, 1) * 10000);
+        int fth = (int)Math.Round(Math.Clamp(o.OverlapFraction, 0, 1) * 10000);
+        var v1Files = new List<DiffFile>();
+        var v2Files = new List<DiffFile>();
+        var conflicts = new List<Conflict>();
+        var clean = new List<CleanMerge>();
+
+        for (int i = 0; i < chosen.Count; i++)
+        {
+            string rel = chosen[i];
+            int L = SplitLines(File.ReadAllText(AbsOf(corpus, rel))).Count;
+            var rV2 = Rng.For(o.Seed, Category.Mutate, 300_000 + i);
+            var rShare = Rng.For(o.Seed, Category.Mutate, 400_000 + i);
+            var rV1 = Rng.For(o.Seed, Category.Mutate, 500_000 + i);
+            var shared = new HashSet<int>(); var v1only = new HashSet<int>(); var v2only = new HashSet<int>();
+            for (int line = 1; line <= L; line += 2)           // ODD lines only ⇒ even lines are stable anchors
+            {
+                if (rV2.Next(10000) < dth) { if (rShare.Next(10000) < fth) shared.Add(line); else v2only.Add(line); }
+                else if (rV1.Next(10000) < dth) v1only.Add(line);
+            }
+
+            var v1Edit = new HashSet<int>(shared); v1Edit.UnionWith(v1only);
+            var v2Edit = new HashSet<int>(shared); v2Edit.UnionWith(v2only);
+            AppendToLines(AbsOf(v1Root, rel), v1Edit, n => $" /*v1:{i}:{n}*/");
+            AppendToLines(AbsOf(v2Root, rel), v2Edit, n => $" /*v2:{i}:{n}*/");
+
+            var (oldSha, oldSize) = HashFile(AbsOf(corpus, rel));
+            if (v1Edit.Count > 0)
+            {
+                var (ns, nz) = HashFile(AbsOf(v1Root, rel));
+                var df = new DiffFile { Path = rel, Reason = "content", OldSha = oldSha, NewSha = ns, OldSize = oldSize, NewSize = nz };
+                df.Hunks.AddRange(Coalesce(v1Edit.OrderBy(x => x).ToList()));
+                v1Files.Add(df);
+            }
+            if (v2Edit.Count > 0)
+            {
+                var (ns, nz) = HashFile(AbsOf(v2Root, rel));
+                var df = new DiffFile { Path = rel, Reason = "content", OldSha = oldSha, NewSha = ns, OldSize = oldSize, NewSize = nz };
+                df.Hunks.AddRange(Coalesce(v2Edit.OrderBy(x => x).ToList()));
+                v2Files.Add(df);
+            }
+
+            foreach (var line in shared.OrderBy(x => x))       // each shared odd line = a 1-line conflict region
+                conflicts.Add(new Conflict(rel, line, 1, HunkOp.Replace, line, 1, HunkOp.Replace, line, 1));
+            foreach (var line in v1only.OrderBy(x => x))
+                clean.Add(new CleanMerge(rel, "v1", HunkOp.Replace, line, 1, line, 1));
+            foreach (var line in v2only.OrderBy(x => x))
+                clean.Add(new CleanMerge(rel, "v2", HunkOp.Replace, line, 1, line, 1));
+        }
+
+        string prevSha = TruthDigest.Compute(basem.Symbols);
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v1Files, Array.Empty<Rename>()), v1Files, Array.Empty<Rename>(), Array.Empty<string>(), "v1");
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v2Files, Array.Empty<Rename>()), v2Files, Array.Empty<Rename>(), Array.Empty<string>(), "v2");
+        string conflictSha = ConflictDigest.Compute(conflicts, clean);
+        WriteConflict(corpus, basem, o, conflictSha, conflicts, clean, Path.GetFileName(v1Root), Path.GetFileName(v2Root));
+
+        Console.WriteLine($"mutate(3way): {chosen.Count} file(s), overlap={o.OverlapFraction:0.##}, seed {o.Seed} " +
+                          $"→ {conflicts.Count} conflict(s), {clean.Count} clean; conflictTruthSha {conflictSha[..12]}…");
+        Console.WriteLine($"  variants: {Path.GetFileName(v1Root)}/ + {Path.GetFileName(v2Root)}/");
+        return 0;
+    }
+
+    /// <summary>Append <paramref name="marker"/>(line) to each 1-based line in <paramref name="lines"/>,
+    /// preserving terminators (an in-place replace, line count unchanged).</summary>
+    private static void AppendToLines(string abs, HashSet<int> lines, Func<int, string> marker)
+    {
+        var ls = SplitLines(File.ReadAllText(abs));
+        var sb = new StringBuilder();
+        for (int k = 0; k < ls.Count; k++)
+        {
+            string content = ls[k].content;
+            if (lines.Contains(k + 1)) content += marker(k + 1);
+            sb.Append(content).Append(ls[k].term);
+        }
+        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+    }
+
+    private static void CopyTree(string src, string dst)
+    {
+        if (Directory.Exists(dst)) Directory.Delete(dst, true);
+        Directory.CreateDirectory(dst);
+        foreach (var dir in Directory.EnumerateDirectories(src, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(dst, RelOf(src, dir).Replace('/', Path.DirectorySeparatorChar)));
+        foreach (var f in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+            File.Copy(f, Path.Combine(dst, RelOf(src, f).Replace('/', Path.DirectorySeparatorChar)), overwrite: true);
+    }
+
+    private static void WriteConflict(string corpus, BaseManifest basem, MutateOptions o, string conflictSha,
+        IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree)
+    {
+        string path = $"{TrimDir(corpus)}-conflict.json";
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
+        w.WriteStartObject();
+
+        w.WriteStartObject("_meta");
+        w.WriteNumber("manifestVersion", 1);
+        w.WriteString("deltaKind", "conflict-3way");
+        w.WriteNumber("baseSeed", basem.Seed);
+        w.WriteNumber("editSeed", o.Seed);
+        w.WriteNumber("overlapFraction", o.OverlapFraction);
+        w.WriteString("baseManifestSha", basem.Sha256);
+        w.WriteString("v1Tree", v1Tree);
+        w.WriteString("v2Tree", v2Tree);
+        w.WriteString("conflictTruthSha", conflictSha);
+        w.WriteEndObject();
+
+        w.WriteStartArray("conflicts");                        // new* coords reference the respective variant tree
+        foreach (var c in conflicts)
+        {
+            w.WriteStartObject();
+            w.WriteString("path", c.Path);
+            w.WriteNumber("baseStart", c.BaseStart);
+            w.WriteNumber("baseLines", c.BaseLines);
+            w.WriteStartObject("v1"); w.WriteString("op", c.V1Op.Label()); w.WriteNumber("newStart", c.V1NewStart); w.WriteNumber("newLines", c.V1NewLines); w.WriteEndObject();
+            w.WriteStartObject("v2"); w.WriteString("op", c.V2Op.Label()); w.WriteNumber("newStart", c.V2NewStart); w.WriteNumber("newLines", c.V2NewLines); w.WriteEndObject();
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+
+        w.WriteStartArray("mergedClean");                      // each clean hunk's text lives in exactly one tree (side)
+        foreach (var m in clean)
+        {
+            w.WriteStartObject();
+            w.WriteString("path", m.Path);
+            w.WriteString("side", m.Side);
+            w.WriteString("op", m.Op.Label());
+            w.WriteNumber("oldStart", m.OldStart); w.WriteNumber("oldLines", m.OldLines);
+            w.WriteNumber("newStart", m.NewStart); w.WriteNumber("newLines", m.NewLines);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+
+        w.WriteEndObject();
+        w.Flush();
+        Console.WriteLine($"  {Path.GetFileName(path)}: {conflicts.Count} conflict(s), {clean.Count} clean-merge(s)");
     }
 
     /// <summary>SHA-256 (lowercase hex) of the raw file bytes + its size — CodeDiffer's size+hash prefilter oracle.</summary>
@@ -704,9 +860,10 @@ public static class Mutator
     // ---- diff-delta emission (bulk / diff-oracle mode) ------------------------------------------------
 
     private static void WriteDiffDelta(string corpus, BaseManifest basem, MutateOptions o, string prevSha,
-        string diffSha, IReadOnlyList<DiffFile> files, IReadOnlyList<Rename> renames, IReadOnlyList<string> added)
+        string diffSha, IReadOnlyList<DiffFile> files, IReadOnlyList<Rename> renames, IReadOnlyList<string> added,
+        string? variant = null)
     {
-        string path = $"{TrimDir(corpus)}-delta.json";
+        string path = variant is null ? $"{TrimDir(corpus)}-delta.json" : $"{TrimDir(corpus)}-delta-{variant}.json";
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartObject();

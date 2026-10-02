@@ -45,6 +45,14 @@ public sealed class MutateOptions
     /// (original kept) instead of renames — rename false-positive traps. 0..1, default 0.</summary>
     public double DecoyFraction { get; set; }
 
+    /// <summary>Native 3-way: leave B pristine, emit two mutated variant trees B_v1/B_v2, their B→V deltas, and
+    /// a conflict artifact. Edits land only on odd base lines (the stable-separator guarantee).</summary>
+    public bool ThreeWay { get; set; }
+
+    /// <summary>3-way dial: fraction of V2's edited lines that coincide with V1's (⇒ conflicts). 0 = all
+    /// clean-merge, 1 = every V2 edit conflicts. 0..1, default 0.5.</summary>
+    public double OverlapFraction { get; set; } = 0.5;
+
     /// <summary>True when bulk in-place mutation is requested.</summary>
     public bool IsBulk => Target is not null;
 }

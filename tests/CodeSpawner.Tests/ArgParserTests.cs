@@ -297,4 +297,28 @@ public class ArgParserTests
     [Fact]
     public void Mutate_Bulk_EditKindWithoutTarget_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--edit-kind", "eol" }));
+
+    [Fact]
+    public void Mutate_ThreeWay_Parses()
+    {
+        var o = ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--overlap-fraction", "0.25" });
+        Assert.True(o.ThreeWay);
+        Assert.Equal(0.25, o.OverlapFraction);
+    }
+
+    [Fact]
+    public void Mutate_ThreeWay_DefaultOverlap()
+        => Assert.Equal(0.5, ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way" }).OverlapFraction);
+
+    [Fact]
+    public void Mutate_ThreeWay_WithEditKind_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--edit-kind", "eol" }));
+
+    [Fact]
+    public void Mutate_ThreeWay_WithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--three-way" }));
+
+    [Fact]
+    public void Mutate_OverlapFraction_OutOfRange_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--overlap-fraction", "2" }));
 }

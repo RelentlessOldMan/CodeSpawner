@@ -513,6 +513,108 @@ public class MutatorBulkTests
         Assert.Equal(Fingerprint(), Fingerprint());
     }
 
+    // --- step 4: native 3-way ---
+
+    private static JsonElement ConflictRoot(string corpus) =>
+        JsonDocument.Parse(File.ReadAllText(corpus + "-conflict.json")).RootElement;
+
+    [Fact]
+    public void ThreeWay_EmitsVariantsDeltasConflict_BasePristine()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 6, lines: 40);
+        var baseBytes = Directory.GetFiles(corpus, "src_*.c").ToDictionary(f => f, File.ReadAllBytes);
+
+        int rc = Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = 0.5, EditDensity = 0.8, Seed = 9 });
+
+        Assert.Equal(0, rc);
+        Assert.True(Directory.Exists(corpus + "_v1"));
+        Assert.True(Directory.Exists(corpus + "_v2"));
+        Assert.True(File.Exists(corpus + "-delta-v1.json"));
+        Assert.True(File.Exists(corpus + "-delta-v2.json"));
+        Assert.True(File.Exists(corpus + "-conflict.json"));
+        // B is left pristine (3-way never edits the base tree in place)
+        foreach (var (f, bytes) in baseBytes) Assert.Equal(bytes, File.ReadAllBytes(f));
+        Assert.Equal("conflict-3way", ConflictRoot(corpus).GetProperty("_meta").GetProperty("deltaKind").GetString());
+    }
+
+    [Fact]
+    public void ThreeWay_StableSeparator_AllCoordsOdd()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 4, lines: 60);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = 0.5, EditDensity = 0.9, Seed = 3 });
+
+        var root = ConflictRoot(corpus);
+        foreach (var c in root.GetProperty("conflicts").EnumerateArray())
+            Assert.True(c.GetProperty("baseStart").GetInt32() % 2 == 1);   // edits only on odd base lines
+        foreach (var m in root.GetProperty("mergedClean").EnumerateArray())
+            Assert.True(m.GetProperty("newStart").GetInt32() % 2 == 1);
+    }
+
+    [Fact]
+    public void ThreeWay_ConflictsEditedBothSides_CleanEditedOneSide()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 5, lines: 50);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = 0.5, EditDensity = 0.9, Seed = 11 });
+
+        string v1 = corpus + "_v1", v2 = corpus + "_v2";
+        string[] V1(string p) => File.ReadAllLines(Path.Combine(v1, p.Replace('/', Path.DirectorySeparatorChar)));
+        string[] V2(string p) => File.ReadAllLines(Path.Combine(v2, p.Replace('/', Path.DirectorySeparatorChar)));
+        var root = ConflictRoot(corpus);
+
+        foreach (var c in root.GetProperty("conflicts").EnumerateArray())
+        {
+            string path = c.GetProperty("path").GetString()!; int ln = c.GetProperty("baseStart").GetInt32();
+            Assert.Contains("/*v1:", V1(path)[ln - 1]);     // a conflict line is edited in BOTH trees
+            Assert.Contains("/*v2:", V2(path)[ln - 1]);
+        }
+        foreach (var m in root.GetProperty("mergedClean").EnumerateArray())
+        {
+            string path = m.GetProperty("path").GetString()!; int ln = m.GetProperty("newStart").GetInt32();
+            if (m.GetProperty("side").GetString() == "v1")
+            {
+                Assert.Contains("/*v1:", V1(path)[ln - 1]);  // v1-only: present in v1, absent in v2
+                Assert.DoesNotContain("/*v2:", V2(path)[ln - 1]);
+            }
+            else
+            {
+                Assert.Contains("/*v2:", V2(path)[ln - 1]);
+                Assert.DoesNotContain("/*v1:", V1(path)[ln - 1]);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(0.0)]   // every V2 edit lands on a stable (non-V1) line ⇒ all clean-merge
+    [InlineData(1.0)]   // every V2 edit coincides with V1 ⇒ all conflict, no v2-only clean
+    public void ThreeWay_OverlapFraction_DrivesConflictShare(double f)
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 5, lines: 60);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = f, EditDensity = 0.8, Seed = 7 });
+
+        var root = ConflictRoot(corpus);
+        int conflicts = root.GetProperty("conflicts").GetArrayLength();
+        int v2clean = root.GetProperty("mergedClean").EnumerateArray().Count(m => m.GetProperty("side").GetString() == "v2");
+        if (f == 0.0) Assert.Equal(0, conflicts);
+        else Assert.Equal(0, v2clean);     // f=1 ⇒ no V2 edit is one-sided
+    }
+
+    [Fact]
+    public void ThreeWay_IsDeterministic()
+    {
+        string Sha()
+        {
+            using var tmp = new TempDir();
+            var (corpus, _) = BuildCorpus(tmp, nSource: 6, lines: 40);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = 0.5, EditDensity = 0.7, Seed = 4 });
+            return ConflictRoot(corpus).GetProperty("_meta").GetProperty("conflictTruthSha").GetString()!;
+        }
+        Assert.Equal(Sha(), Sha());
+    }
+
     [Fact]
     public void Bulk_PreservesEolAndMissingFinalNewline_NoSpuriousEmptyDiff()
     {

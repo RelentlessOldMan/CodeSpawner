@@ -127,8 +127,25 @@ public static class Program
         bool okDiff = gotD == goldenDiff;
         if (!okDiff) Console.Error.WriteLine($"digest self-test: FAIL diff\n  expected {goldenDiff}\n  got      {gotD}");
 
-        if (okPrimary && okIndirect && okDiff)
-        { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI}, diff {gotD})"); return 0; }
+        // Fourth golden vector: conflictTruthSha (docs/diff-delta-design.md §3-way). Out-of-order records,
+        // a modify/delete conflict (non-replace op), and both clean sides — frozen the same way.
+        const string goldenConflict = "68cd14ac9a54521fc967f8c4632536bb9f0725cd394b8296cd1d62d4a9310e6a";
+        var conflicts = new List<Conflict>
+        {
+            new("f.c", 5, 1, HunkOp.Replace, 5, 1, HunkOp.Replace, 5, 1),
+            new("a.c", 9, 2, HunkOp.Replace, 9, 2, HunkOp.Delete, 9, 0),
+        };
+        var clean = new List<CleanMerge>
+        {
+            new("f.c", "v1", HunkOp.Replace, 3, 1, 3, 1),
+            new("a.c", "v2", HunkOp.Insert, 7, 0, 7, 2),
+        };
+        string gotC = ConflictDigest.Compute(conflicts, clean);
+        bool okConflict = gotC == goldenConflict;
+        if (!okConflict) Console.Error.WriteLine($"digest self-test: FAIL conflict\n  expected {goldenConflict}\n  got      {gotC}");
+
+        if (okPrimary && okIndirect && okDiff && okConflict)
+        { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI}, diff {gotD}, conflict {gotC})"); return 0; }
         return 1;
     }
 
@@ -198,6 +215,14 @@ public static class Program
                hunks [a compact run-rule for giant files] + a _meta.diffTruthSha; see docs/diff-delta-design.md.
                e.g. --target giant --files-changed 3 --edit-density 0.5  vs
                     --target source --files-changed 1000 --edit-density 0.02)
+
+            MUTATE 3-WAY (native diff3 oracle; leaves the base tree pristine):
+              --three-way           produce two variant trees <corpus>_v1/ + <corpus>_v2/ off base B
+              --overlap-fraction <f>  fraction of V2's edits that coincide with V1's ⇒ conflicts (default 0.5;
+                                      0 = all clean-merge, 1 = every V2 edit conflicts). Edits land only on odd
+                                      base lines so even lines are stable anchors (region ≡ line conflicts).
+              (emits <corpus>-delta-v1.json + -delta-v2.json [standard diff-deltas] and <corpus>-conflict.json
+               with a _meta.conflictTruthSha over [conflicts-3way, merged-clean]; see docs/diff-delta-design.md)
 
             PRESETS (bundled knob sets; your own knobs still override):
               --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death")

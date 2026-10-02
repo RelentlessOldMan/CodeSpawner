@@ -118,3 +118,65 @@ public static class DiffDigest
 
     private static string Num(long n) => n.ToString(CultureInfo.InvariantCulture);
 }
+
+/// <summary>A 3-way conflict region: a base line-range both variants edited with differing content. new* coords
+/// reference the respective variant tree (B_v1/B_v2); base* references B. The conflict `kind` (modify/modify,
+/// modify/delete, add/add) is derivable from (ops, baseLines) and is NOT stored.</summary>
+public sealed record Conflict(
+    string Path, int BaseStart, int BaseLines,
+    HunkOp V1Op, int V1NewStart, int V1NewLines,
+    HunkOp V2Op, int V2NewStart, int V2NewLines);
+
+/// <summary>A clean-merged result hunk from exactly one side (its new* coords reference that variant tree).</summary>
+public sealed record CleanMerge(string Path, string Side, HunkOp Op, int OldStart, int OldLines, int NewStart, int NewLines);
+
+/// <summary>
+/// The canonical component digest of 3-way conflict ground truth, surfaced as <c>_meta.conflictTruthSha</c> in
+/// the separate conflict artifact (kept off <c>diffTruthSha</c>, same discipline as the other component digests).
+/// Byte format LOCKED with CodeDiffer (code-spawner chat, 2026-10-02); see docs/diff-delta-design.md:
+///
+///   two sections, GS(0x1D) between, BOTH always present (empty = header + zero records):
+///     1 conflicts-3way: path US baseStart US baseLines US v1Op US v1NewStart US v1NewLines
+///                            US v2Op US v2NewStart US v2NewLines RS
+///     2 merged-clean:   path US side US op US oldStart US oldLines US newStart US newLines RS
+///   each section: dedup then ORDINAL sort. sha256( s1 + GS + s2 ), lowercase hex.
+///
+/// US = 0x1F, RS = 0x1E, GS = 0x1D. op ∈ insert|delete|replace. side ∈ v1|v2. Numbers invariant decimal.
+/// </summary>
+public static class ConflictDigest
+{
+    private const char US = (char)0x1F;
+    private const char RS = (char)0x1E;
+    private const char GS = (char)0x1D;
+
+    public static string Compute(IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean)
+    {
+        var c = new List<string>();
+        foreach (var x in conflicts)
+            c.Add(string.Concat(
+                x.Path, US, Num(x.BaseStart), US, Num(x.BaseLines), US,
+                x.V1Op.Label(), US, Num(x.V1NewStart), US, Num(x.V1NewLines), US,
+                x.V2Op.Label(), US, Num(x.V2NewStart), US, Num(x.V2NewLines)));
+
+        var m = new List<string>();
+        foreach (var x in clean)
+            m.Add(string.Concat(
+                x.Path, US, x.Side, US, x.Op.Label(), US,
+                Num(x.OldStart), US, Num(x.OldLines), US, Num(x.NewStart), US, Num(x.NewLines)));
+
+        var sb = new StringBuilder();
+        Emit(sb, c); sb.Append(GS);
+        Emit(sb, m);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
+    }
+
+    private static void Emit(StringBuilder sb, List<string> records)
+    {
+        var set = new HashSet<string>(records, StringComparer.Ordinal);
+        var list = new List<string>(set);
+        list.Sort(StringComparer.Ordinal);
+        foreach (var r in list) sb.Append(r).Append(RS);
+    }
+
+    private static string Num(long n) => n.ToString(CultureInfo.InvariantCulture);
+}
