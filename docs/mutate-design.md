@@ -41,7 +41,9 @@ dial exactly **which** population changed, **how many** files, and **how much** 
 
 ```
 codespawner mutate --corpus <dir> --target <source|headers|giant|all>
-                   [--files-changed N] [--edit-density f] [--giant-min-mb N] [--seed S]
+                   [--files-changed N] [--edit-density f] [--giant-min-mb N]
+                   [--edit-kind <content|line-insert|line-delete|whitespace|eol|encoding|binary|metadata>]
+                   [--seed S]
 ```
 
 - **`--target`** selects a population by file property (corpus-agnostic — works on a `gen` corpus or a

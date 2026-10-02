@@ -182,6 +182,15 @@ public static class Program
               --files-changed <n>   how many target files to modify (default: all matching)
               --edit-density <f>    fraction of each file's lines to change in place, 0..1 (default 0.05)
               --giant-min-mb <n>    size floor (MB) for --target giant — the big-header case (default 100)
+              --edit-kind <k>       edit mechanism → reason class (default content):
+                                      content      in-place marker (reason content; replace hunks)
+                                      line-insert  add lines      (reason content; insert hunks, renumbers)
+                                      line-delete  remove lines   (reason content; delete hunks, renumbers)
+                                      whitespace   trailing spaces(reason whitespace; replace hunks)
+                                      eol          flip LF<->CRLF (reason eol; no hunks)
+                                      encoding     UTF-8<->UTF-16 (reason encoding; no hunks)
+                                      binary       flip raw bytes (reason binary; no hunks)
+                                      metadata     mode-only      (reason metadata; content identical)
               (emits one base->variant <corpus>-delta.json with per-file reason + old/new sha+size + unified
                hunks [a compact run-rule for giant files] + a _meta.diffTruthSha; see docs/diff-delta-design.md.
                e.g. --target giant --files-changed 3 --edit-density 0.5  vs

@@ -97,48 +97,26 @@ public static class Mutator
         int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
         var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
-        Console.WriteLine($"mutate(bulk): target={o.Target} files={chosen.Count}/{pool.Count} " +
+        Console.WriteLine($"mutate(bulk): target={o.Target} kind={o.Kind} files={chosen.Count}/{pool.Count} " +
                           $"density={o.EditDensity:0.###} seed {o.Seed} base {basem.Sha256[..12]}…");
 
         long giantFloor = (long)o.GiantMinMb * 1024 * 1024;
         int stride = Math.Max(1, (int)Math.Round(1.0 / Math.Clamp(o.EditDensity, 1e-6, 1.0)));
+        string reason = ReasonOf(o.Kind);
         var files = new List<DiffFile>();
         long touched = 0;
         for (int i = 0; i < chosen.Count; i++)
         {
-            string abs = AbsOf(corpus, chosen[i]);
-            var (oldSha, oldSize) = HashFile(abs);
-            DiffFile df;
-            if (oldSize >= giantFloor)
-            {
-                // Giant file: deterministic stride → a single compact run-rule instead of a huge hunk list.
-                long lines = ModifyGiant(abs, stride, i);
-                var (newSha, newSize) = HashFile(abs);
-                touched += (lines + stride - 1) / stride;
-                df = new DiffFile
-                {
-                    Path = chosen[i], OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
-                    Run = new RunHunk(HunkOp.Replace, stride, 1, (int)Math.Min(lines, int.MaxValue), 1),
-                };
-            }
-            else
-            {
-                // Normal file: random per-line selection; coalesce contiguous changed lines into replace hunks.
-                var changed = ModifyContent(abs, o.EditDensity, o.Seed, i);
-                var (newSha, newSize) = HashFile(abs);
-                if (newSha == oldSha) continue;                // honesty: never record a file with no actual change
-                touched += changed.Count;
-                df = new DiffFile
-                {
-                    Path = chosen[i], OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
-                };
-                df.Hunks.AddRange(Coalesce(changed));
-            }
+            var df = BuildDiffFile(AbsOf(corpus, chosen[i]), chosen[i], reason, o, i, giantFloor, stride);
+            if (df is null) continue;                          // honesty: no actual change ⇒ not recorded
+            touched += df.Run is { } r ? (r.RangeEnd - r.RangeStart) / r.Stride + 1
+                                       : df.Hunks.Sum(h => Math.Max(h.OldLines, h.NewLines));
             files.Add(df);
         }
 
-        // Content-only edits preserve def sites, so the symbol table (and prevTruthSha) is unchanged: the 2-way
-        // delta carries file-level + hunk-level truth and its own _meta.diffTruthSha (docs/diff-delta-design.md).
+        // Bulk edits leave the symbol table (and prevTruthSha) alone — line-insert/delete shift def lines but
+        // bulk mode is the DIFF oracle, not the symbol oracle. The 2-way delta carries file+hunk truth and its
+        // own _meta.diffTruthSha (docs/diff-delta-design.md).
         string prevSha = TruthDigest.Compute(basem.Symbols);
         string diffSha = DiffDigest.Compute(files, Array.Empty<Rename>());
         WriteDiffDelta(corpus, basem, o, prevSha, diffSha, files);
@@ -193,20 +171,20 @@ public static class Mutator
     }
 
     /// <summary>
-    /// Rewrite a normal file appending a deterministic marker comment to ~density of its lines — a real textual
+    /// Rewrite a normal file appending <paramref name="suffix"/> to ~density of its lines — a real textual
     /// change a diff tool sees, preserving the tokens already on each line (so def sites and the symbol table
     /// stay put). Line terminators (LF/CRLF) and a missing final newline are preserved EXACTLY, so a rewrite
     /// that marks zero lines is a byte-for-byte no-op (caught by the honesty guard) rather than a spurious
-    /// EOL/trailing-newline change recorded as content. Returns the 1-based changed line numbers, ascending.
+    /// EOL/trailing-newline change. Returns the 1-based changed line numbers, ascending.
     /// </summary>
-    private static List<int> ModifyContent(string path, double density, int seed, int fileIndex)
+    private static List<int> AppendPerLine(string path, double density, int seed, int fileIndex, Func<long, string> suffix)
     {
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + fileIndex);   // distinct stream per chosen file
         var changed = new List<int>();
         string text = File.ReadAllText(path);                            // normal files are < giantFloor
         var sb = new StringBuilder(text.Length + 64);
-        int i = 0, lineNo = 0;
+        int i = 0; long lineNo = 0;
         while (i < text.Length)
         {
             int start = i;
@@ -218,7 +196,7 @@ public static class Mutator
                 if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n') { term = "\r\n"; i += 2; }
                 else { term = text[i].ToString(); i++; }
             }
-            if (rng.Next(10000) < threshold) { content += $" /*mut:{fileIndex}:{lineNo}*/"; changed.Add(lineNo + 1); }
+            if (rng.Next(10000) < threshold) { content += suffix(lineNo); changed.Add((int)(lineNo + 1)); }
             sb.Append(content).Append(term);
             lineNo++;
         }
@@ -250,6 +228,185 @@ public static class Mutator
         File.Delete(path);
         File.Move(tmp, path);
         return lineNo;
+    }
+
+    // ---- edit-kind dispatch (step 2: reason classes) --------------------------------------------------
+
+    /// <summary>The CLI edit mechanism mapped to the CodeDiffer `reason` classification it produces.</summary>
+    private static string ReasonOf(string kind) => kind switch
+    {
+        "content" or "line-insert" or "line-delete" => "content",
+        "eol"        => "eol",
+        "whitespace" => "whitespace",
+        "encoding"   => "encoding",
+        "binary"     => "binary",
+        "metadata"   => "metadata",
+        _            => "content",
+    };
+
+    private readonly record struct EditResult(List<Hunk> Hunks, RunHunk? Run);
+    private static EditResult NoHunks() => new(new List<Hunk>(), null);
+
+    /// <summary>Apply one file's edit per the chosen kind; hash before/after; return its truth record (or null
+    /// if the edit produced no actual byte change — the honesty guard).</summary>
+    private static DiffFile? BuildDiffFile(string abs, string rel, string reason, MutateOptions o, int idx,
+        long giantFloor, int stride)
+    {
+        var (oldSha, oldSize) = HashFile(abs);
+
+        if (o.Kind == "metadata")
+        {
+            // Content-identical: NTFS has no POSIX mode, so this is a SYNTHETIC mode flip — oldSha == newSha,
+            // only the metadata field differs. Proves CodeDiffer classifies metadata_only (not "modified").
+            return new DiffFile
+            {
+                Path = rel, Reason = reason, OldSha = oldSha, NewSha = oldSha, OldSize = oldSize, NewSize = oldSize,
+                Metadata = ("mode", "100644", "100755"),
+            };
+        }
+
+        EditResult r = o.Kind switch
+        {
+            "content"     => oldSize >= giantFloor ? GiantContentEdit(abs, stride, idx)
+                                                   : new EditResult(Coalesce(AppendPerLine(abs, o.EditDensity, o.Seed, idx, n => $" /*mut:{idx}:{n}*/")), null),
+            "whitespace"  => new EditResult(Coalesce(AppendPerLine(abs, o.EditDensity, o.Seed, idx, _ => "   ")), null),
+            "line-insert" => LineInsertEdit(abs, o.EditDensity, o.Seed, idx),
+            "line-delete" => LineDeleteEdit(abs, o.EditDensity, o.Seed, idx),
+            "eol"         => EolEdit(abs),
+            "encoding"    => EncodingEdit(abs),
+            "binary"      => BinaryEdit(abs, o.EditDensity, o.Seed, idx),
+            _             => throw new ArgException($"unsupported --edit-kind '{o.Kind}'"),
+        };
+
+        var (newSha, newSize) = HashFile(abs);
+        if (newSha == oldSha) return null;                     // honesty: no actual change ⇒ not recorded
+
+        var df = new DiffFile
+        {
+            Path = rel, Reason = reason, OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
+            Run = r.Run,
+        };
+        df.Hunks.AddRange(r.Hunks);
+        return df;
+    }
+
+    private static EditResult GiantContentEdit(string abs, int stride, int idx)
+    {
+        long lines = ModifyGiant(abs, stride, idx);
+        return new EditResult(new List<Hunk>(), new RunHunk(HunkOp.Replace, stride, 1, (int)Math.Min(lines, int.MaxValue), 1));
+    }
+
+    /// <summary>Insert a fixed block of filler lines before ~density of the lines → insert hunks that renumber
+    /// everything after them (delta carries NEW coords). Inserted lines use LF (corpus is LF).</summary>
+    private static EditResult LineInsertEdit(string abs, double density, int seed, int idx)
+    {
+        const int K = 2;
+        var lines = SplitLines(File.ReadAllText(abs));
+        var sel = Selection(lines.Count, density, seed, idx);
+        var hunks = new List<Hunk>();
+        var sb = new StringBuilder();
+        int newLine = 0;
+        for (int k = 0; k < lines.Count; k++)
+        {
+            if (sel[k])
+            {
+                int newStart = newLine + 1;
+                for (int j = 0; j < K; j++) { sb.Append($"// mutate inserted {idx}:{k + 1}:{j}").Append('\n'); newLine++; }
+                hunks.Add(new Hunk(HunkOp.Insert, k + 1, 0, newStart, K));
+            }
+            sb.Append(lines[k].content).Append(lines[k].term);
+            newLine++;
+        }
+        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        return new EditResult(hunks, null);
+    }
+
+    /// <summary>Delete ~density of the lines (consecutive runs coalesced) → delete hunks that renumber what
+    /// follows.</summary>
+    private static EditResult LineDeleteEdit(string abs, double density, int seed, int idx)
+    {
+        var lines = SplitLines(File.ReadAllText(abs));
+        var sel = Selection(lines.Count, density, seed, idx);
+        var hunks = new List<Hunk>();
+        var sb = new StringBuilder();
+        int newLine = 0, k = 0;
+        while (k < lines.Count)
+        {
+            if (sel[k])
+            {
+                int runStart = k + 1, j = k;
+                while (j < lines.Count && sel[j]) j++;
+                hunks.Add(new Hunk(HunkOp.Delete, runStart, j - k, newLine + 1, 0));
+                k = j;                                          // skip emitting the deleted lines
+            }
+            else
+            {
+                sb.Append(lines[k].content).Append(lines[k].term);
+                newLine++; k++;
+            }
+        }
+        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        return new EditResult(hunks, null);
+    }
+
+    /// <summary>Flip every line terminator LF↔CRLF: bytes differ, ZERO textual hunks (the eol honesty case).</summary>
+    private static EditResult EolEdit(string abs)
+    {
+        var sb = new StringBuilder();
+        foreach (var (content, term) in SplitLines(File.ReadAllText(abs)))
+            sb.Append(content).Append(term switch { "\n" => "\r\n", "\r\n" => "\n", "\r" => "\n", _ => term });
+        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        return NoHunks();
+    }
+
+    /// <summary>Re-encode UTF-8(no BOM) → UTF-16LE(with BOM): bytes differ, decoded text identical, ZERO hunks.</summary>
+    private static EditResult EncodingEdit(string abs)
+    {
+        string text = File.ReadAllText(abs);
+        File.WriteAllText(abs, text, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        return NoHunks();
+    }
+
+    /// <summary>Flip ~density of the raw bytes: a real binary change tracked by shas+sizes only (no text hunks).</summary>
+    private static EditResult BinaryEdit(string abs, double density, int seed, int idx)
+    {
+        byte[] bytes = File.ReadAllBytes(abs);
+        int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
+        var rng = Rng.For(seed, Category.Mutate, 100_000 + idx);
+        for (int k = 0; k < bytes.Length; k++) if (rng.Next(10000) < threshold) bytes[k] ^= 0x5A;
+        File.WriteAllBytes(abs, bytes);
+        return NoHunks();
+    }
+
+    /// <summary>Split text into (content, terminator) pairs, preserving LF/CRLF and a missing final newline.</summary>
+    private static List<(string content, string term)> SplitLines(string text)
+    {
+        var lines = new List<(string, string)>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            int start = i;
+            while (i < text.Length && text[i] != '\n' && text[i] != '\r') i++;
+            string content = text[start..i];
+            string term = "";
+            if (i < text.Length)
+            {
+                if (text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n') { term = "\r\n"; i += 2; }
+                else { term = text[i].ToString(); i++; }
+            }
+            lines.Add((content, term));
+        }
+        return lines;
+    }
+
+    /// <summary>Deterministic per-line selection matching AppendPerLine's rng pattern (one draw per line, in order).</summary>
+    private static bool[] Selection(int count, double density, int seed, int fileIndex)
+    {
+        int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
+        var rng = Rng.For(seed, Category.Mutate, 100_000 + fileIndex);
+        var sel = new bool[count];
+        for (int k = 0; k < count; k++) sel[k] = rng.Next(10000) < threshold;
+        return sel;
     }
 
     private static void ShufflePaths(List<string> list, int seed, int stream)
@@ -496,6 +653,14 @@ public static class Mutator
                 w.WriteEndObject();
             }
             w.WriteEndArray();
+            if (f.Metadata is { } meta)                        // reason=metadata: content-identical, opt-in diff track
+            {
+                w.WriteStartObject("metadata");
+                w.WriteString("field", meta.Field);
+                w.WriteString("old", meta.Old);
+                w.WriteString("new", meta.New);
+                w.WriteEndObject();
+            }
             w.WriteEndObject();
         }
         w.WriteEndArray();

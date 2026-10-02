@@ -29,6 +29,18 @@ public sealed class MutateOptions
     /// <summary>Size floor in MB for the <c>giant</c> target (the big-header case). Default 100.</summary>
     public int GiantMinMb { get; set; } = 100;
 
+    /// <summary>
+    /// The mechanism of the bulk edit (null = content). Maps to a <c>reason</c> classification CodeDiffer
+    /// asserts against (see docs/diff-delta-design.md):
+    ///   content | line-insert | line-delete -> reason "content" (line-insert/delete exercise insert/delete
+    ///     hunks + renumbering); eol -> "eol"; whitespace -> "whitespace"; encoding -> "encoding";
+    ///     binary -> "binary"; metadata -> "metadata".
+    /// </summary>
+    public string? EditKind { get; set; }
+
+    /// <summary>The edit mechanism, defaulted. See <see cref="EditKind"/>.</summary>
+    public string Kind => EditKind ?? "content";
+
     /// <summary>True when bulk in-place mutation is requested.</summary>
     public bool IsBulk => Target is not null;
 }
