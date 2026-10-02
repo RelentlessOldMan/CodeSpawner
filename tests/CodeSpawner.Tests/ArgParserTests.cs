@@ -333,4 +333,91 @@ public class ArgParserTests
     [Fact]
     public void Mutate_ConflictEdges_WithoutTarget_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--conflict-edges" }));
+
+    // --- remaining gen knobs (the half not in the spread tests) + the ParseBool false arm ---
+
+    [Fact]
+    public void Gen_BoolFlag_InlineTrue_Parses()   // --flag=true routes through ParseBool's true arm (bare --flag short-circuits)
+        => Assert.True(ArgParser.ParseGen(new[] { "--out", "c", "--build-output=true" }).BuildOutput);
+
+    [Fact]
+    public void Gen_RemainingKnobs_Parse()
+    {
+        var o = ArgParser.ParseGen(new[]
+        {
+            "--out", "c",
+            "--big-headers", "2", "--med-headers", "3", "--ordinary-headers", "4", "--giant-includers", "5",
+            "--max-header-mb", "7", "--build-output=false", "--dirs", "8", "--depth", "2", "--linked-roots", "1",
+            "--unresolved-includes", "3", "--manifest", "--io-parallelism", "4",
+            "--dense-headers", "2", "--dense-under-mb", "1", "--max-line-bytes", "1000", "--encoding-mix", "2",
+            "--shrink-seeds", "1", "--restream-seeds", "1",
+        });
+        Assert.Equal(2, o.BigHeaders);
+        Assert.Equal(3, o.MedHeaders);
+        Assert.Equal(4, o.OrdinaryHeaders);
+        Assert.Equal(5, o.GiantIncluders);
+        Assert.Equal(7, o.MaxHeaderMB);
+        Assert.False(o.BuildOutput);                 // --flag=false (the ParseBool false arm)
+        Assert.Equal(8, o.Dirs);
+        Assert.Equal(2, o.Depth);
+        Assert.Equal(1, o.LinkedRoots);
+        Assert.Equal(3, o.UnresolvedIncludes);
+        Assert.True(o.Manifest);                     // bare --flag ⇒ true
+        Assert.Equal(4, o.IoParallelism);
+        Assert.Equal(2, o.DenseHeaders);
+        Assert.Equal(1, o.DenseUnderMb);
+        Assert.Equal(1000, o.MaxLineBytes);
+        Assert.Equal(2, o.EncodingMix);
+        Assert.Equal(1, o.ShrinkSeeds);
+        Assert.Equal(1, o.RestreamSeeds);
+        // Canon maps these CLI spellings to their Eff knob names for scale-skipping.
+        Assert.True(o.WasSet("BigHeaders") && o.WasSet("MedHeaders") && o.WasSet("OrdinaryHeaders"));
+        Assert.True(o.WasSet("Dirs") && o.WasSet("DenseHeaders") && o.WasSet("EncodingMix"));
+    }
+
+    // --- verify: manifest + both error branches ---
+
+    [Fact]
+    public void Verify_ParsesManifest()
+        => Assert.Equal("m.json", ArgParser.ParseVerify(new[] { "--corpus", "c", "--manifest", "m.json" }).Manifest);
+
+    [Fact]
+    public void Verify_UnexpectedArg_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseVerify(new[] { "positional" }));
+
+    [Fact]
+    public void Verify_UnknownOption_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseVerify(new[] { "--corpus", "c", "--bogus", "x" }));
+
+    // --- scan: --tree flag form + --sample + unknown option ---
+
+    [Fact]
+    public void Scan_TreeFlag_AndSample()
+    {
+        var o = ArgParser.ParseScan(new[] { "--tree", "t", "--out", "p.json", "--sample", "5" });
+        Assert.Equal("t", o.Tree);
+        Assert.Equal(5, o.Sample);
+    }
+
+    [Fact]
+    public void Scan_UnknownOption_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "--tree", "t", "--out", "p.json", "--bogus" }));
+
+    // --- mutate: manifest, restream, and both arg-error branches ---
+
+    [Fact]
+    public void Mutate_ParsesManifest()
+        => Assert.Equal("m.json", ArgParser.ParseMutate(new[] { "--corpus", "c", "--manifest", "m.json" }).Manifest);
+
+    [Fact]
+    public void Mutate_Restream_Parses()
+        => Assert.True(ArgParser.ParseMutate(new[] { "--corpus", "c", "--restream" }).Restream);
+
+    [Fact]
+    public void Mutate_UnexpectedArg_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "positional" }));
+
+    [Fact]
+    public void Mutate_UnknownOption_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--bogus", "x" }));
 }
