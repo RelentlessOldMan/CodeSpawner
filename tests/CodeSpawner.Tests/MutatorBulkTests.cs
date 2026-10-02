@@ -396,6 +396,123 @@ public class MutatorBulkTests
         Assert.Equal(before, File.ReadAllBytes(Path.Combine(corpus, "src_0.c")));                     // bytes untouched on disk
     }
 
+    // --- step 3: rename / move + decoys ---
+
+    private static List<JsonElement> Renamed(string deltaPath)
+    {
+        var doc = JsonDocument.Parse(File.ReadAllText(deltaPath));
+        return doc.RootElement.GetProperty("fileOps").GetProperty("renamed").EnumerateArray().ToList();
+    }
+
+    private static List<string> Added(string deltaPath)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllText(deltaPath));
+        return doc.RootElement.GetProperty("fileOps").GetProperty("added").EnumerateArray().Select(e => e.GetString()!).ToList();
+    }
+
+    [Fact]
+    public void Rename_GradedRenames_PureIdenticalBytes_EditKeyedByToPath()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 8, lines: 20);
+        // capture each source file's original bytes by stem (src_0, src_1, ...)
+        var origin = Directory.GetFiles(corpus, "src_*.c")
+            .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => File.ReadAllBytes(f));
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0, Seed = 5 });
+
+        var renamed = Renamed(delta);
+        Assert.Equal(8, renamed.Count);
+        Assert.Empty(Added(delta));
+        var modifiedByPath = JsonDocument.Parse(File.ReadAllText(delta)).RootElement
+            .GetProperty("fileOps").GetProperty("modified").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("path").GetString()!);
+
+        int pure = 0, edited = 0;
+        foreach (var r in renamed)
+        {
+            string from = r.GetProperty("from").GetString()!, to = r.GetProperty("to").GetString()!;
+            int sim = r.GetProperty("similarityMilli").GetInt32();
+            Assert.InRange(sim, 0, 1000);
+            Assert.False(File.Exists(Path.Combine(corpus, from.Replace('/', Path.DirectorySeparatorChar))));  // from gone
+            string toAbs = Path.Combine(corpus, to.Replace('/', Path.DirectorySeparatorChar));
+            Assert.True(File.Exists(toAbs));                                                                  // to exists
+            string stem = Path.GetFileNameWithoutExtension(from);
+            if (sim >= 1000)
+            {
+                pure++;
+                Assert.False(modifiedByPath.ContainsKey(to));                       // pure rename ⇒ no modified record
+                Assert.Equal(origin[stem], File.ReadAllBytes(toAbs));              // identical bytes
+            }
+            else
+            {
+                edited++;
+                Assert.True(modifiedByPath.ContainsKey(to));                        // rename+edit hunks keyed by `to`
+                var rec = modifiedByPath[to];
+                Assert.Equal("content", rec.GetProperty("reason").GetString());
+                Assert.True(rec.GetProperty("hunks").GetArrayLength() >= 1);
+            }
+        }
+        Assert.True(pure >= 1 && edited >= 1);   // band cycles {1000,900,600,300} ⇒ both kinds present
+    }
+
+    [Fact]
+    public void Rename_SimilarityMilli_MatchesRealizedLineOverlap()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 6, lines: 40);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", Seed = 5 });
+
+        // For each rename+edit, (lines - changed)/lines * 1000 (rounded) must equal the emitted similarityMilli.
+        var modifiedByPath = JsonDocument.Parse(File.ReadAllText(delta)).RootElement
+            .GetProperty("fileOps").GetProperty("modified").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("path").GetString()!);
+        foreach (var r in Renamed(delta))
+        {
+            int sim = r.GetProperty("similarityMilli").GetInt32();
+            if (sim >= 1000) continue;
+            string to = r.GetProperty("to").GetString()!;
+            var lines = File.ReadAllLines(Path.Combine(corpus, to.Replace('/', Path.DirectorySeparatorChar)));
+            int changed = lines.Count(l => l.Contains("/*ren:"));
+            int expected = (int)Math.Round((lines.Length - changed) * 1000.0 / lines.Length);
+            Assert.Equal(expected, sim);
+        }
+    }
+
+    [Fact]
+    public void Rename_Decoys_AreAddsNotRenames_OriginalKept()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 6, lines: 20);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 1.0, Seed = 5 });
+
+        var added = Added(delta);
+        Assert.Empty(Renamed(delta));                 // decoy-fraction 1.0 ⇒ no renames
+        Assert.Equal(6, added.Count);
+        var renamedTo = Renamed(delta).Select(r => r.GetProperty("to").GetString()).ToHashSet();
+        foreach (var dup in added)
+        {
+            Assert.Contains("_dup", dup);
+            Assert.DoesNotContain(dup, renamedTo);     // a decoy is an ADD, never a rename target
+            Assert.True(File.Exists(Path.Combine(corpus, dup.Replace('/', Path.DirectorySeparatorChar))));
+        }
+        // every original source file is still present (a decoy copies, it does not move)
+        Assert.Equal(6, Directory.GetFiles(corpus, "src_*.c").Count(f => !Path.GetFileName(f).Contains("_dup")));
+    }
+
+    [Fact]
+    public void Rename_IsDeterministic()
+    {
+        string Fingerprint()
+        {
+            using var tmp = new TempDir();
+            var (corpus, delta) = BuildCorpus(tmp, nSource: 8, lines: 25);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0.3, Seed = 5 });
+            return JsonDocument.Parse(File.ReadAllText(delta)).RootElement.GetProperty("_meta").GetProperty("diffTruthSha").GetString()!;
+        }
+        Assert.Equal(Fingerprint(), Fingerprint());
+    }
+
     [Fact]
     public void Bulk_PreservesEolAndMissingFinalNewline_NoSpuriousEmptyDiff()
     {

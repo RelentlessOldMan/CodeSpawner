@@ -102,6 +102,9 @@ public static class Mutator
 
         long giantFloor = (long)o.GiantMinMb * 1024 * 1024;
         int stride = Math.Max(1, (int)Math.Round(1.0 / Math.Clamp(o.EditDensity, 1e-6, 1.0)));
+
+        if (o.Kind == "rename") return RunRename(o, corpus, basem, chosen);
+
         string reason = ReasonOf(o.Kind);
         var files = new List<DiffFile>();
         long touched = 0;
@@ -119,9 +122,110 @@ public static class Mutator
         // own _meta.diffTruthSha (docs/diff-delta-design.md).
         string prevSha = TruthDigest.Compute(basem.Symbols);
         string diffSha = DiffDigest.Compute(files, Array.Empty<Rename>());
-        WriteDiffDelta(corpus, basem, o, prevSha, diffSha, files);
+        WriteDiffDelta(corpus, basem, o, prevSha, diffSha, files, Array.Empty<Rename>(), Array.Empty<string>());
         Console.WriteLine($"  ~{touched} line(s) changed across {files.Count} file(s); diffTruthSha {diffSha[..12]}…");
         return 0;
+    }
+
+    // ---- rename / move (step 3) -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Rename chosen files with GRADED similarity (a rotating band incl. pure 1.0 + a spread around the ~0.5
+    /// detector threshold), rename+edit emitting hunks keyed by the <c>to</c> path, plus <c>--decoy-fraction</c>
+    /// near-duplicate ADDs (original kept) as rename false-positive traps. Truth = the {from,to,similarity} set
+    /// in <c>renamed</c> + the decoys in <c>added</c>: a precision/recall oracle (docs/diff-delta-design.md §3).
+    /// </summary>
+    private static int RunRename(MutateOptions o, string corpus, BaseManifest basem, List<string> chosen)
+    {
+        int[] band = { 1000, 900, 600, 300 };                  // similarityMilli targets, cycled
+        var decoyRng = Rng.For(o.Seed, Category.Mutate, 202);
+        int decoyThreshold = (int)Math.Round(Math.Clamp(o.DecoyFraction, 0, 1) * 1000);
+
+        var renames = new List<Rename>();
+        var modified = new List<DiffFile>();
+        var added = new List<string>();
+
+        for (int i = 0; i < chosen.Count; i++)
+        {
+            string rel = chosen[i];
+            string abs = AbsOf(corpus, rel);
+
+            if (decoyRng.Next(1000) < decoyThreshold)
+            {
+                // Decoy: near-duplicate COPY at a new path, original left in place ⇒ an ADD, NOT a rename.
+                string dupRel = RenamedPath(rel, "dup", i);
+                string dupAbs = AbsOf(corpus, dupRel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dupAbs)!);
+                File.Copy(abs, dupAbs, overwrite: true);
+                AppendPerLine(dupAbs, 0.1, o.Seed, 10_000 + i, n => $" /*decoy:{i}:{n}*/");
+                added.Add(dupRel);
+                continue;
+            }
+
+            int target = band[i % band.Length];
+            string toRel = RenamedPath(rel, "moved", i);
+            string toAbs = AbsOf(corpus, toRel);
+            Directory.CreateDirectory(Path.GetDirectoryName(toAbs)!);
+            var (oldSha, oldSize) = HashFile(abs);
+            File.Move(abs, toAbs);                             // the rename
+
+            if (target >= 1000)
+            {
+                renames.Add(new Rename(rel, toRel, 1000));     // pure rename: identical bytes
+                continue;
+            }
+
+            // rename+edit: change ceil((1-sim)*L) lines so realized similarity lands on the band.
+            var lines = SplitLines(File.ReadAllText(toAbs));
+            int toChange = Math.Min(lines.Count, (int)Math.Ceiling((1 - target / 1000.0) * lines.Count));
+            var changed = ChangeFirstNLines(toAbs, toChange, i);
+            var (newSha, newSize) = HashFile(toAbs);
+            int realizedMilli = lines.Count == 0 ? 1000 : (int)Math.Round((lines.Count - toChange) * 1000.0 / lines.Count);
+            var df = new DiffFile
+            {
+                Path = toRel, Reason = "content", OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
+            };
+            df.Hunks.AddRange(Coalesce(changed));
+            modified.Add(df);
+            renames.Add(new Rename(rel, toRel, realizedMilli));
+        }
+
+        string prevSha = TruthDigest.Compute(basem.Symbols);
+        string diffSha = DiffDigest.Compute(modified, renames);
+        WriteDiffDelta(corpus, basem, o, prevSha, diffSha, modified, renames, added);
+        Console.WriteLine($"  {renames.Count} rename(s) ({renames.Count(r => r.SimilarityMilli >= 1000)} pure), " +
+                          $"{added.Count} decoy add(s); diffTruthSha {diffSha[..12]}…");
+        return 0;
+    }
+
+    /// <summary>Append a marker to the first <paramref name="n"/> lines (contiguous ⇒ one coalesced hunk),
+    /// preserving terminators. Returns the 1-based changed line numbers.</summary>
+    private static List<int> ChangeFirstNLines(string abs, int n, int idx)
+    {
+        var lines = SplitLines(File.ReadAllText(abs));
+        var changed = new List<int>();
+        var sb = new StringBuilder();
+        for (int k = 0; k < lines.Count; k++)
+        {
+            string content = lines[k].content;
+            if (k < n) { content += $" /*ren:{idx}:{k}*/"; changed.Add(k + 1); }
+            sb.Append(content).Append(lines[k].term);
+        }
+        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        return changed;
+    }
+
+    /// <summary>A sibling path with a tagged stem (same dir + extension), forward-slash relative form.</summary>
+    private static string RenamedPath(string rel, string tag, int i)
+    {
+        int slash = rel.LastIndexOf('/');
+        string dir = slash >= 0 ? rel[..slash] : "";
+        string file = slash >= 0 ? rel[(slash + 1)..] : rel;
+        int dot = file.LastIndexOf('.');
+        string stem = dot >= 0 ? file[..dot] : file;
+        string ext = dot >= 0 ? file[dot..] : "";
+        string name = $"{stem}_{tag}{i}{ext}";
+        return dir.Length == 0 ? name : dir + "/" + name;
     }
 
     /// <summary>SHA-256 (lowercase hex) of the raw file bytes + its size — CodeDiffer's size+hash prefilter oracle.</summary>
@@ -600,7 +704,7 @@ public static class Mutator
     // ---- diff-delta emission (bulk / diff-oracle mode) ------------------------------------------------
 
     private static void WriteDiffDelta(string corpus, BaseManifest basem, MutateOptions o, string prevSha,
-        string diffSha, IReadOnlyList<DiffFile> files)
+        string diffSha, IReadOnlyList<DiffFile> files, IReadOnlyList<Rename> renames, IReadOnlyList<string> added)
     {
         string path = $"{TrimDir(corpus)}-delta.json";
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
@@ -610,6 +714,7 @@ public static class Mutator
         w.WriteStartObject("_meta");
         w.WriteNumber("manifestVersion", 1);
         w.WriteString("deltaKind", "diff");            // distinguishes a diff-delta from a symbol-overlay delta
+        w.WriteString("editKind", o.Kind);
         w.WriteNumber("baseSeed", basem.Seed);
         w.WriteNumber("editSeed", o.Seed);
         w.WriteString("target", o.Target);
@@ -620,7 +725,9 @@ public static class Mutator
         w.WriteEndObject();
 
         w.WriteStartObject("fileOps");
-        w.WriteStartArray("added"); w.WriteEndArray();
+        w.WriteStartArray("added");                    // decoy near-duplicate ADDs (rename false-positive traps)
+        foreach (var a in added) w.WriteStringValue(a);
+        w.WriteEndArray();
         w.WriteStartArray("removed"); w.WriteEndArray();
         w.WriteStartArray("modified");
         foreach (var f in files)
@@ -664,13 +771,22 @@ public static class Mutator
             w.WriteEndObject();
         }
         w.WriteEndArray();
-        w.WriteStartArray("renamed"); w.WriteEndArray();   // populated in step 3 (rename/move)
+        w.WriteStartArray("renamed");                      // {from,to,similarityMilli}; rename+edit hunks live
+        foreach (var r in renames)                         // in `modified` keyed by the `to` path
+        {
+            w.WriteStartObject();
+            w.WriteString("from", r.From);
+            w.WriteString("to", r.To);
+            w.WriteNumber("similarityMilli", r.SimilarityMilli);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
         w.WriteEndObject();
 
         w.WriteStartObject("symbols"); w.WriteEndObject(); // content-only edits ⇒ empty symbol overlay
         w.WriteEndObject();
         w.Flush();
-        Console.WriteLine($"  {Path.GetFileName(path)}: ~{files.Count} file(s) modified");
+        Console.WriteLine($"  {Path.GetFileName(path)}: {files.Count} modified, {renames.Count} renamed, {added.Count} added");
     }
 
     // ---- helpers --------------------------------------------------------------------------------------

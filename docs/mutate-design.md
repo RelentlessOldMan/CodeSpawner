@@ -42,7 +42,8 @@ dial exactly **which** population changed, **how many** files, and **how much** 
 ```
 codespawner mutate --corpus <dir> --target <source|headers|giant|all>
                    [--files-changed N] [--edit-density f] [--giant-min-mb N]
-                   [--edit-kind <content|line-insert|line-delete|whitespace|eol|encoding|binary|metadata>]
+                   [--edit-kind <content|line-insert|line-delete|whitespace|eol|encoding|binary|metadata|rename>]
+                   [--decoy-fraction f]   # rename only: near-duplicate ADD false-positive traps
                    [--seed S]
 ```
 

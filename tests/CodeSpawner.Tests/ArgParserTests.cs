@@ -262,12 +262,29 @@ public class ArgParserTests
     [InlineData("encoding")]
     [InlineData("binary")]
     [InlineData("metadata")]
+    [InlineData("rename")]
     public void Mutate_Bulk_EditKind_Parses(string kind)
     {
         var o = ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "all", "--edit-kind", kind });
         Assert.Equal(kind, o.EditKind);
         Assert.Equal(kind, o.Kind);
     }
+
+    [Fact]
+    public void Mutate_Bulk_DecoyFraction_ParsesWithRename()
+        => Assert.Equal(0.3, ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--edit-kind", "rename", "--decoy-fraction", "0.3" }).DecoyFraction);
+
+    [Fact]
+    public void Mutate_Bulk_DecoyFraction_WithoutRename_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--decoy-fraction", "0.3" }));
+
+    [Fact]
+    public void Mutate_Bulk_DecoyFraction_OutOfRange_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--edit-kind", "rename", "--decoy-fraction", "1.5" }));
+
+    [Fact]
+    public void Mutate_DecoyFraction_WithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--decoy-fraction", "0.3" }));
 
     [Fact]
     public void Mutate_Bulk_EditKind_DefaultsToContent()

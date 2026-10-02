@@ -41,6 +41,10 @@ public sealed class MutateOptions
     /// <summary>The edit mechanism, defaulted. See <see cref="EditKind"/>.</summary>
     public string Kind => EditKind ?? "content";
 
+    /// <summary>For <c>--edit-kind rename</c>: fraction of chosen files emitted as near-duplicate ADD decoys
+    /// (original kept) instead of renames — rename false-positive traps. 0..1, default 0.</summary>
+    public double DecoyFraction { get; set; }
+
     /// <summary>True when bulk in-place mutation is requested.</summary>
     public bool IsBulk => Target is not null;
 }
