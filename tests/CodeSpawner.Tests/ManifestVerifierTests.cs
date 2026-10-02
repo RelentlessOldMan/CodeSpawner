@@ -97,4 +97,107 @@ public class ManifestVerifierTests
         File.WriteAllText(mp, bad);
         Assert.NotEqual(0, Verify(c, mp));
     }
+
+    // --- crafted-manifest failure modes (each proves the oracle CATCHES a specific defect) ---
+
+    // Write a raw manifest string + an optional tiny corpus, then verify.
+    private static int VerifyRaw(TempDir tmp, string manifestJson, Action<string>? corpus = null)
+    {
+        string c = Path.Combine(tmp.Path, "c");
+        Directory.CreateDirectory(c);
+        corpus?.Invoke(c);
+        string mp = Path.Combine(tmp.Path, "m.json");
+        File.WriteAllText(mp, manifestJson);
+        return ManifestVerifier.Run(new VerifyOptions { Corpus = c, Manifest = mp });
+    }
+
+    private static string Sha(string s) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(s))).ToLowerInvariant();
+
+    [Fact]
+    public void InvalidJsonManifest_Returns2()
+    {
+        using var tmp = new TempDir();
+        Assert.Equal(2, VerifyRaw(tmp, "{ this is not json "));
+    }
+
+    [Fact]
+    public void MissingMetaOrSymbols_Fails()
+    {
+        using var tmp = new TempDir();
+        Assert.Equal(1, VerifyRaw(tmp, @"{""symbols"":{}}"));                         // no _meta
+        Assert.Equal(1, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":1}}"));      // no symbols
+        Assert.NotEqual(0, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":2},""symbols"":{}}"));  // wrong version
+    }
+
+    [Fact]
+    public void EdgeToMissingSymbol_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""foo"":{""def"":""a.c:1"",""edges"":[""ghost""]}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "int foo(void){return 0;}\n"));
+        Assert.NotEqual(0, rc);   // def resolves, but edge target 'ghost' is not a declared symbol
+    }
+
+    [Fact]
+    public void GatedRef_NotBehindIfdef_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""vendor_gated"":{""def"":""a.c:1"",""unreachableRefs"":[""a.c:2""]}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "int vendor_gated(void);\n  vendor_gated(1);\n"));
+        Assert.NotEqual(0, rc);   // the gated call is NOT behind #ifdef VENDOR_OK
+    }
+
+    [Fact]
+    public void PathEscapingSite_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""foo"":{""def"":""../evil.c:1""}}}");
+        Assert.NotEqual(0, rc);   // a '..' site escaping the corpus root is rejected
+    }
+
+    [Fact]
+    public void ExpectedMiss_ButSymbolAppearsLiterally_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""patho_x"":{""def"":""a.c:1"",""expectedMiss"":true}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "int patho_x(void){return 0;}\n"));
+        Assert.NotEqual(0, rc);   // an expected-miss symbol that is lexically present is NOT an honest miss
+    }
+
+    [Fact]
+    public void DupGroup_HashMismatch_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{},""dupGroups"":{""g0"":{""sha256"":""" + new string('0', 64) + @""",""paths"":[""d0.c"",""d1.c""]}}}",
+            c => { File.WriteAllText(Path.Combine(c, "d0.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "d1.c"), "AAAA"); });
+        Assert.NotEqual(0, rc);   // files don't hash to the recorded sha256
+    }
+
+    [Fact]
+    public void DupGroup_NearVariantIdentical_Fails()
+    {
+        using var tmp = new TempDir();
+        string sha = Sha("AAAA");
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{},""dupGroups"":{""g0"":{""sha256"":""" + sha + @""",""paths"":[""d0.c"",""d1.c""],""nearVariants"":[""near.c""]}}}",
+            c => { File.WriteAllText(Path.Combine(c, "d0.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "d1.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "near.c"), "AAAA"); });
+        Assert.NotEqual(0, rc);   // the near-variant must DIFFER from the group, but here it's identical
+    }
+
+    [Fact]
+    public void DupGroup_CleanGroupAndDistinctNearVariant_Passes()
+    {
+        using var tmp = new TempDir();
+        string sha = Sha("AAAA");
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{},""dupGroups"":{""g0"":{""sha256"":""" + sha + @""",""paths"":[""d0.c"",""d1.c""],""nearVariants"":[""near.c""]}}}",
+            c => { File.WriteAllText(Path.Combine(c, "d0.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "d1.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "near.c"), "AAAB"); });
+        Assert.Equal(0, rc);   // identical group + a genuinely different near-variant ⇒ clean
+    }
 }
