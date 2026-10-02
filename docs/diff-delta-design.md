@@ -178,7 +178,27 @@ the target, so tiny files honestly report low similarity). Pure renames (1000) a
 `renamed` stays flat. `--decoy-fraction f` emits near-duplicate ADDs (`*_dup*`, original kept) into
 `fileOps.added` as rename false-positive traps — `added` is NOT digested (not a locked digest section), it is
 scoring truth for CodeDiffer: the `{from,to}` set is the recall oracle, the decoys the precision oracle.
-`conflictTruthSha` / native 3-way (step 4) remains to be built — pin its section/field orders with CodeDiffer first.
+**Step 4 status:** IMPLEMENTED. `--three-way --overlap-fraction f` leaves base B pristine and emits two
+mutated sibling trees `B_v1/` + `B_v2/`, their standard `deltaKind:"diff"` deltas `B-delta-v1.json` /
+`B-delta-v2.json`, and `B-conflict.json` (`deltaKind:"conflict-3way"`, `_meta.conflictTruthSha`). All edits
+land on **odd base lines** so every even line is a stable anchor (the stable-separator guarantee ⇒ each
+conflict region is one base line, region-level ≡ line-level); `f` = fraction of V2's edited lines that coincide
+with V1's. `conflictTruthSha` canonical form (identical discipline to `diffTruthSha`), two sections in this
+fixed order:
+
+| # | section | fields (US-joined) |
+|---|---|---|
+| 1 | conflicts-3way | `path · baseStart · baseLines · v1Op · v1NewStart · v1NewLines · v2Op · v2NewStart · v2NewLines` |
+| 2 | merged-clean | `path · side · op · oldStart · oldLines · newStart · newLines` (side ∈ v1\|v2) |
+
+`new*` coords reference the respective variant tree (`B_v1`/`B_v2`), `base*`/`old*` reference B — so every
+coordinate reads off a real on-disk file and CodeDiffer fetches replacement text from the variant trees (no
+text in the JSON). The conflict `kind` (modify/modify, modify/delete, add/add) is derivable from (ops,
+baseLines), not stored. Golden vector `68cd14ac9a54521fc967f8c4632536bb9f0725cd394b8296cd1d62d4a9310e6a`
+frozen in `digest-selftest` + `ConflictDigestTests`. The dial default produces replace/replace conflicts;
+modify/delete, add/add, adjacent-edit, and identical-overlap-clean ride dedicated fixtures.
+
+**All four steps are now implemented and locked end-to-end.**
 
 ## Sequencing (locked)
 
