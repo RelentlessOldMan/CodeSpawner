@@ -221,6 +221,9 @@ public static class Program
               --overlap-fraction <f>  fraction of V2's edits that coincide with V1's ⇒ conflicts (default 0.5;
                                       0 = all clean-merge, 1 = every V2 edit conflicts). Edits land only on odd
                                       base lines so even lines are stable anchors (region ≡ line conflicts).
+              --conflict-edges      emit the edge-case conflict kinds instead of the random single-line model:
+                                      adjacent multi-line (union-span), modify/delete, add/add, and
+                                      identical-overlap (⇒ clean, side v1). Truth = diff3 maximal-hunk coalescer.
               (emits <corpus>-delta-v1.json + -delta-v2.json [standard diff-deltas] and <corpus>-conflict.json
                with a _meta.conflictTruthSha over [conflicts-3way, merged-clean]; see docs/diff-delta-design.md)
 

@@ -53,6 +53,12 @@ public sealed class MutateOptions
     /// clean-merge, 1 = every V2 edit conflicts. 0..1, default 0.5.</summary>
     public double OverlapFraction { get; set; } = 0.5;
 
+    /// <summary>With <c>--three-way</c>: emit the edge-case conflict kinds (adjacent multi-line, modify/delete,
+    /// add/add, identical-overlap-clean) as cleanly-separated regions, instead of the random single-line
+    /// modify/modify model. Truth computed by the union-span coalescer (diff3 maximal hunk). See
+    /// docs/diff-delta-design.md §3-way-edges.</summary>
+    public bool ConflictEdges { get; set; }
+
     /// <summary>True when bulk in-place mutation is requested.</summary>
     public bool IsBulk => Target is not null;
 }

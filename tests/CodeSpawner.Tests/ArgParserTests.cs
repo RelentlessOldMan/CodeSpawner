@@ -321,4 +321,16 @@ public class ArgParserTests
     [Fact]
     public void Mutate_OverlapFraction_OutOfRange_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--overlap-fraction", "2" }));
+
+    [Fact]
+    public void Mutate_ConflictEdges_Parses()
+        => Assert.True(ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--conflict-edges" }).ConflictEdges);
+
+    [Fact]
+    public void Mutate_ConflictEdges_WithoutThreeWay_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--conflict-edges" }));
+
+    [Fact]
+    public void Mutate_ConflictEdges_WithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--conflict-edges" }));
 }

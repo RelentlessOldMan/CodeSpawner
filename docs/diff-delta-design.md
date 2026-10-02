@@ -196,9 +196,39 @@ coordinate reads off a real on-disk file and CodeDiffer fetches replacement text
 text in the JSON). The conflict `kind` (modify/modify, modify/delete, add/add) is derivable from (ops,
 baseLines), not stored. Golden vector `68cd14ac9a54521fc967f8c4632536bb9f0725cd394b8296cd1d62d4a9310e6a`
 frozen in `digest-selftest` + `ConflictDigestTests`. The dial default produces replace/replace conflicts;
-modify/delete, add/add, adjacent-edit, and identical-overlap-clean ride dedicated fixtures.
+modify/delete, add/add, adjacent-edit, and identical-overlap-clean ride the `--conflict-edges` fixture (§3-way-edges).
 
-**All four steps are now implemented and locked end-to-end.**
+### §3-way-edges (step 4b — the edge conflict kinds)
+
+**Status: IMPLEMENTED.** `--three-way --conflict-edges` replaces the random odd-only single-line model with a
+deterministic layout that exercises every conflict kind as a region **cleanly separated by ≥1 base line
+untouched by both sides**. No digest-format change — same `Conflict`/`CleanMerge` records and
+`conflictTruthSha` as step 4.
+
+Truth is computed by the **union-span coalescer** (= diff3 maximal-change hunk), locked with CodeDiffer
+2026-10-02:
+
+- A conflict/clean **region** is a maximal run of consecutive base lines touched by *either* side; a base line
+  untouched by *both* terminates the region. (Isolated edits ⇒ `baseLines=1`, degenerating to the step-4 model.)
+- For overlapping/adjacent edits the region is the **union span**: v1 edits base 3–5, v2 edits 4–6 ⇒ ONE
+  `Conflict{baseStart=3, baseLines=4}`. Each side's `newLines` = how many lines the region occupies in *its*
+  tree (replace: `=baseLines`; delete side: `<baseLines`; insert side: `>baseLines`); `newStart` = that region's
+  start in that tree (so a delete/insert elsewhere correctly shifts it).
+- **kind** is derived by CodeDiffer from (ops, baseLines), never stored: modify/modify `(replace,replace)`;
+  modify/delete `(replace,delete)` with `newLines=0` on the delete side; add/add `baseLines=0, (insert,insert)`.
+- **identical-overlap** — both sides make the byte-identical edit to a region ⇒ it is **clean, not a conflict**:
+  omitted from `conflicts`, emitted **once** in `merged-clean` with the canonical **`side="v1"`** (hard-coded on
+  both tools, since `side` is in the digest bytes). CodeDiffer still recovers "agreed edit" from the trees
+  (`B_v1 ≡ B_v2 ≠ B` over the region) — no manifest flag needed.
+- The delete-side `newStart` = the 1-based line in that variant where the deleted region would begin (surviving
+  lines before the cut + 1) — byte-identical to the 2-way delete convention. The add/add anchor `baseStart` =
+  the base line *after which* both insert (= the unified `@@ -L,0 +M,k @@` anchor).
+
+Fixture: `diff_fixture_3way_edge/` — one source file carrying all kinds (modify/modify, adjacent, modify/delete,
+add/add, identical-overlap, one-sided-clean each side), with its own `conflictTruthSha` and a README mapping
+each region to its kind.
+
+**All four steps (+ the edge kinds) are now implemented and locked end-to-end.**
 
 ## Sequencing (locked)
 

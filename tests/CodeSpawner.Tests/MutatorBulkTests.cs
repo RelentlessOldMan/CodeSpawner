@@ -773,4 +773,105 @@ public class MutatorBulkTests
         for (int i = 0; i < lines.Length; i++) if (lines[i].Contains("/*mut:")) fromDisk.Add(i + 1);
         Assert.Equal(fromDisk, expanded);
     }
+
+    // --- step 4b: 3-way edge kinds (adjacent / modify-delete / add-add / identical-overlap) ---
+
+    private static List<JsonElement> Conflicts(string corpus) =>
+        ConflictRoot(corpus).GetProperty("conflicts").EnumerateArray().ToList();
+    private static List<JsonElement> Clean(string corpus) =>
+        ConflictRoot(corpus).GetProperty("mergedClean").EnumerateArray().ToList();
+
+    [Fact]
+    public void ThreeWayEdges_EmitsEachConflictKind_IdenticalOverlapIsClean()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 1, lines: 20);
+        var baseBytes = File.ReadAllBytes(Path.Combine(corpus, "src_0.c"));
+
+        int rc = Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, ConflictEdges = true, Seed = 9 });
+
+        Assert.Equal(0, rc);
+        Assert.True(File.Exists(corpus + "-delta-v1.json") && File.Exists(corpus + "-delta-v2.json") && File.Exists(corpus + "-conflict.json"));
+        Assert.Equal(baseBytes, File.ReadAllBytes(Path.Combine(corpus, "src_0.c")));   // base pristine
+
+        var conflicts = Conflicts(corpus);
+        var clean = Clean(corpus);
+
+        // single modify/modify: baseLines=1, both replace
+        Assert.Contains(conflicts, c => c.GetProperty("baseLines").GetInt32() == 1
+            && Op(c, "v1") == "replace" && Op(c, "v2") == "replace");
+        // adjacent multi-line: ONE region, baseLines=3 (union span), both replace 3 lines
+        Assert.Contains(conflicts, c => c.GetProperty("baseLines").GetInt32() == 3
+            && Op(c, "v1") == "replace" && NL(c, "v1") == 3 && Op(c, "v2") == "replace" && NL(c, "v2") == 3);
+        // modify/delete: one side deletes (newLines 0), other replaces
+        Assert.Contains(conflicts, c => Op(c, "v1") == "replace" && Op(c, "v2") == "delete" && NL(c, "v2") == 0);
+        // add/add: baseLines=0, both insert
+        Assert.Contains(conflicts, c => c.GetProperty("baseLines").GetInt32() == 0
+            && Op(c, "v1") == "insert" && Op(c, "v2") == "insert");
+
+        // identical-overlap (base line 12): a CLEAN merge, side=v1 — and NOT any conflict's region
+        Assert.Contains(clean, m => m.GetProperty("side").GetString() == "v1" && m.GetProperty("oldStart").GetInt32() == 12);
+        Assert.DoesNotContain(conflicts, c =>
+        {
+            int s = c.GetProperty("baseStart").GetInt32(), n = c.GetProperty("baseLines").GetInt32();
+            return n > 0 && 12 >= s && 12 <= s + n - 1;
+        });
+        // one-sided clean on each side
+        Assert.Contains(clean, m => m.GetProperty("side").GetString() == "v1" && m.GetProperty("oldStart").GetInt32() == 14);
+        Assert.Contains(clean, m => m.GetProperty("side").GetString() == "v2" && m.GetProperty("oldStart").GetInt32() == 16);
+
+        static string Op(JsonElement c, string side) => c.GetProperty(side).GetProperty("op").GetString()!;
+        static int NL(JsonElement c, string side) => c.GetProperty(side).GetProperty("newLines").GetInt32();
+    }
+
+    [Fact]
+    public void ThreeWayEdges_TruthCoordsLocateContentInVariantTrees()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 1, lines: 20);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, ConflictEdges = true, Seed = 9 });
+
+        var V1 = File.ReadAllLines(Path.Combine(corpus + "_v1", "src_0.c"));
+        var V2 = File.ReadAllLines(Path.Combine(corpus + "_v2", "src_0.c"));
+
+        // add/add: the conflict's insert coords point at the inserted lines in each tree.
+        var add = Conflicts(corpus).Single(c => c.GetProperty("baseLines").GetInt32() == 0);
+        int v1s = add.GetProperty("v1").GetProperty("newStart").GetInt32(), v1n = add.GetProperty("v1").GetProperty("newLines").GetInt32();
+        int v2s = add.GetProperty("v2").GetProperty("newStart").GetInt32(), v2n = add.GetProperty("v2").GetProperty("newLines").GetInt32();
+        for (int i = 0; i < v1n; i++) Assert.StartsWith("// v1 add", V1[v1s - 1 + i]);
+        for (int i = 0; i < v2n; i++) Assert.StartsWith("// v2 add", V2[v2s - 1 + i]);
+
+        // identical-overlap: at its (v1) newStart the line carries the shared marker, identically in both trees.
+        var ident = Clean(corpus).Single(m => m.GetProperty("oldStart").GetInt32() == 12);
+        int ins = ident.GetProperty("newStart").GetInt32();
+        Assert.Contains("/*both:12*/", V1[ins - 1]);
+        Assert.Contains(V2, line => line.Contains("/*both:12*/"));   // same agreed edit present in v2 too
+
+        // one-sided v1 (base 14): present in v1 tree, absent from v2.
+        var c14 = Clean(corpus).Single(m => m.GetProperty("oldStart").GetInt32() == 14 && m.GetProperty("side").GetString() == "v1");
+        Assert.Contains("/*v1e:14*/", V1[c14.GetProperty("newStart").GetInt32() - 1]);
+        Assert.DoesNotContain(V2, line => line.Contains("/*v1e:14*/"));
+    }
+
+    [Fact]
+    public void ThreeWayEdges_IsDeterministic()
+    {
+        string Sha()
+        {
+            using var tmp = new TempDir();
+            var (corpus, _) = BuildCorpus(tmp, nSource: 2, lines: 24);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, ConflictEdges = true, Seed = 4 });
+            return ConflictRoot(corpus).GetProperty("_meta").GetProperty("conflictTruthSha").GetString()!;
+        }
+        Assert.Equal(Sha(), Sha());
+    }
+
+    [Fact]
+    public void ThreeWayEdges_SkipsFilesTooShortForLayout()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 1, lines: 5);   // < EdgeMinLines ⇒ nothing to lay out
+        int rc = Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, ConflictEdges = true, Seed = 1 });
+        Assert.Equal(2, rc);                                         // no eligible file ⇒ error
+    }
 }
