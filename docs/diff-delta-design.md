@@ -161,7 +161,15 @@ Reproduce this exact hash before wiring further.
 
 **Step 1 status:** IMPLEMENTED. Bulk `mutate` emits the `deltaKind:"diff"` delta above (modified-files with
 reason/shas/sizes + coalesced explicit hunks, run-rule for giant files, empty `renamed`, `_meta.diffTruthSha`).
-Reason is always `content` until step 2 adds `--edit-kind`; `renamed` is always empty until step 3.
+
+**Step 2 status:** IMPLEMENTED. `--edit-kind <content|line-insert|line-delete|whitespace|eol|encoding|binary|
+metadata>` selects the mechanism; each maps to its locked `reason`. `line-insert`/`line-delete` emit
+`insert`/`delete` hunks that renumber following lines (reason stays `content`); `whitespace` emits replace
+hunks (reason `whitespace`); `eol`/`encoding`/`binary` emit shas+sizes with ZERO hunks; `metadata` is
+content-identical (`oldSha==newSha`) with a synthetic `metadata:{field,old,new}` (not digested — the locked
+modified-files section is exactly the six fields above). The honesty guard drops any file whose bytes did not
+actually change, and the content rewrite preserves LF/CRLF + a missing final newline so a no-op is a true
+no-op. `renamed` is still always empty until step 3.
 
 ## Sequencing (locked)
 

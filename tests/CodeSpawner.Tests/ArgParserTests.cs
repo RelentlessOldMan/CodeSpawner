@@ -252,4 +252,32 @@ public class ArgParserTests
     [Fact]
     public void Mutate_Bulk_TargetWithStep_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--step", "1" }));
+
+    [Theory]
+    [InlineData("content")]
+    [InlineData("line-insert")]
+    [InlineData("line-delete")]
+    [InlineData("eol")]
+    [InlineData("whitespace")]
+    [InlineData("encoding")]
+    [InlineData("binary")]
+    [InlineData("metadata")]
+    public void Mutate_Bulk_EditKind_Parses(string kind)
+    {
+        var o = ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "all", "--edit-kind", kind });
+        Assert.Equal(kind, o.EditKind);
+        Assert.Equal(kind, o.Kind);
+    }
+
+    [Fact]
+    public void Mutate_Bulk_EditKind_DefaultsToContent()
+        => Assert.Equal("content", ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "all" }).Kind);
+
+    [Fact]
+    public void Mutate_Bulk_BadEditKind_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "all", "--edit-kind", "bogus" }));
+
+    [Fact]
+    public void Mutate_Bulk_EditKindWithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--edit-kind", "eol" }));
 }

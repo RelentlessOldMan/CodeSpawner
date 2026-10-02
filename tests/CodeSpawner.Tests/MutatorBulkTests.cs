@@ -254,6 +254,148 @@ public class MutatorBulkTests
         }
     }
 
+    // --- step 2: edit-kind / reason classes ---
+
+    private static JsonElement FirstModified(string deltaPath)
+    {
+        var doc = JsonDocument.Parse(File.ReadAllText(deltaPath));
+        return doc.RootElement.GetProperty("fileOps").GetProperty("modified").EnumerateArray().First();
+    }
+
+    [Fact]
+    public void Kind_Default_IsContent()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 2, lines: 30);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 1 });
+        Assert.Equal("content", FirstModified(delta).GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void Kind_Eol_FlipsTerminators_ReasonEol_NoHunks()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 2, lines: 20);
+        string before = File.ReadAllText(Path.Combine(corpus, "src_0.c"));
+        Assert.DoesNotContain("\r\n", before);                 // corpus is LF
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "eol", Seed = 1 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("eol", rec.GetProperty("reason").GetString());
+        Assert.Equal(0, rec.GetProperty("hunks").GetArrayLength());       // bytes differ, zero textual hunks
+        Assert.NotEqual(rec.GetProperty("oldSha").GetString(), rec.GetProperty("newSha").GetString());
+        string after = File.ReadAllText(Path.Combine(corpus, "src_0.c"));
+        Assert.Contains("\r\n", after);                        // now CRLF
+        Assert.Equal(before.Replace("\n", "\r\n"), after);     // same text, flipped terminators only
+    }
+
+    [Fact]
+    public void Kind_Whitespace_ReasonWhitespace_HunksPresent()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 40);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "whitespace", EditDensity = 1.0, Seed = 2 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("whitespace", rec.GetProperty("reason").GetString());
+        Assert.True(rec.GetProperty("hunks").GetArrayLength() >= 1);      // whitespace changes ARE textual hunks
+        // every line now carries trailing spaces, no comment marker
+        var lines = File.ReadAllLines(Path.Combine(corpus, "src_0.c"));
+        Assert.All(lines, l => Assert.EndsWith("   ", l));
+        Assert.DoesNotContain("/*mut:", File.ReadAllText(Path.Combine(corpus, "src_0.c")));
+    }
+
+    [Fact]
+    public void Kind_LineInsert_ReasonContent_InsertHunks_RenumberAndGrow()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 30);
+        int beforeCount = File.ReadAllLines(Path.Combine(corpus, "src_0.c")).Length;
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "line-insert", EditDensity = 0.2, Seed = 3 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("content", rec.GetProperty("reason").GetString());  // line-insert classifies as content
+        var hunks = rec.GetProperty("hunks").EnumerateArray().ToList();
+        Assert.NotEmpty(hunks);
+        Assert.All(hunks, h => { Assert.Equal("insert", h.GetProperty("op").GetString()); Assert.Equal(0, h.GetProperty("oldLines").GetInt32()); });
+        // file grew by exactly the sum of inserted lines, and each hunk's newStart points at real filler
+        var after = File.ReadAllLines(Path.Combine(corpus, "src_0.c"));
+        int inserted = hunks.Sum(h => h.GetProperty("newLines").GetInt32());
+        Assert.Equal(beforeCount + inserted, after.Length);
+        foreach (var h in hunks)
+        {
+            int ns = h.GetProperty("newStart").GetInt32(), n = h.GetProperty("newLines").GetInt32();
+            for (int i = 0; i < n; i++) Assert.StartsWith("// mutate inserted", after[ns - 1 + i]);
+        }
+    }
+
+    [Fact]
+    public void Kind_LineDelete_ReasonContent_DeleteHunks_Shrink()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 40);
+        int beforeCount = File.ReadAllLines(Path.Combine(corpus, "src_0.c")).Length;
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "line-delete", EditDensity = 0.3, Seed = 4 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("content", rec.GetProperty("reason").GetString());
+        var hunks = rec.GetProperty("hunks").EnumerateArray().ToList();
+        Assert.NotEmpty(hunks);
+        Assert.All(hunks, h => { Assert.Equal("delete", h.GetProperty("op").GetString()); Assert.Equal(0, h.GetProperty("newLines").GetInt32()); });
+        int deleted = hunks.Sum(h => h.GetProperty("oldLines").GetInt32());
+        Assert.Equal(beforeCount - deleted, File.ReadAllLines(Path.Combine(corpus, "src_0.c")).Length);
+    }
+
+    [Fact]
+    public void Kind_Encoding_ReasonEncoding_TextIdenticalBytesDiffer()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 25);
+        string before = File.ReadAllText(Path.Combine(corpus, "src_0.c"));
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "encoding", Seed = 5 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("encoding", rec.GetProperty("reason").GetString());
+        Assert.Equal(0, rec.GetProperty("hunks").GetArrayLength());
+        Assert.NotEqual(rec.GetProperty("oldSha").GetString(), rec.GetProperty("newSha").GetString());
+        // File.ReadAllText auto-detects the UTF-16 BOM ⇒ decoded text is unchanged
+        Assert.Equal(before, File.ReadAllText(Path.Combine(corpus, "src_0.c")));
+    }
+
+    [Fact]
+    public void Kind_Binary_ReasonBinary_BytesDiffer_NoHunks()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 50);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "binary", EditDensity = 0.1, Seed = 6 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("binary", rec.GetProperty("reason").GetString());
+        Assert.Equal(0, rec.GetProperty("hunks").GetArrayLength());
+        Assert.NotEqual(rec.GetProperty("oldSha").GetString(), rec.GetProperty("newSha").GetString());
+    }
+
+    [Fact]
+    public void Kind_Metadata_ContentIdentical_ReasonMetadata_WithField()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 20);
+        byte[] before = File.ReadAllBytes(Path.Combine(corpus, "src_0.c"));
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", FilesChanged = 1, EditKind = "metadata", Seed = 7 });
+
+        var rec = ModifiedRecord(delta, "src_0.c");
+        Assert.Equal("metadata", rec.GetProperty("reason").GetString());
+        Assert.Equal(rec.GetProperty("oldSha").GetString(), rec.GetProperty("newSha").GetString());  // content identical
+        Assert.Equal(0, rec.GetProperty("hunks").GetArrayLength());
+        Assert.Equal("mode", rec.GetProperty("metadata").GetProperty("field").GetString());
+        Assert.Equal(before, File.ReadAllBytes(Path.Combine(corpus, "src_0.c")));                     // bytes untouched on disk
+    }
+
     [Fact]
     public void Bulk_PreservesEolAndMissingFinalNewline_NoSpuriousEmptyDiff()
     {

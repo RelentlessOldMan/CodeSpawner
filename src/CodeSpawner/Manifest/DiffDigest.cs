@@ -45,6 +45,10 @@ public sealed class DiffFile
     public long NewSize { get; init; }
     public List<Hunk> Hunks { get; } = new();   // explicit hunks (normal files)
     public RunHunk? Run { get; init; }           // giant-file run-rule (mutually exclusive with Hunks)
+    /// <summary>For reason=metadata only: a content-identical metadata change (field, old, new). NOT digested
+    /// (the locked modified-files section is exactly path·reason·oldSha·newSha·oldSize·newSize); emitted for
+    /// CodeDiffer's metadata-diff path, which is opt-in.</summary>
+    public (string Field, string Old, string New)? Metadata { get; init; }
 }
 
 /// <summary>

@@ -170,6 +170,7 @@ public static class ArgParser
                 case "files-changed": o.FilesChanged = Int(key, Val()); break;
                 case "edit-density": o.EditDensity = Dbl(key, Val()); break;
                 case "giant-min-mb": o.GiantMinMb = Int(key, Val()); break;
+                case "edit-kind": o.EditKind = Val().ToLowerInvariant(); break;
                 default: throw new ArgException($"unknown option --{key}");
             }
         }
@@ -180,12 +181,15 @@ public static class ArgParser
             if (o.Target is not ("source" or "headers" or "giant" or "all"))
                 throw new ArgException($"--target must be one of source|headers|giant|all, got '{o.Target}'");
             if (o.Step is not null) throw new ArgException("--target (bulk mode) cannot be combined with --step");
+            if (o.EditKind is not (null or "content" or "line-insert" or "line-delete" or "eol" or "whitespace" or "encoding" or "binary" or "metadata"))
+                throw new ArgException($"--edit-kind must be one of content|line-insert|line-delete|eol|whitespace|encoding|binary|metadata, got '{o.EditKind}'");
             if (o.EditDensity <= 0 || o.EditDensity > 1) throw new ArgException("--edit-density must be in (0, 1]");
             if (o.FilesChanged is { } fc && fc < 1) throw new ArgException("--files-changed must be >= 1");
             if (o.GiantMinMb < 1) throw new ArgException("--giant-min-mb must be >= 1");
             return o;
         }
 
+        if (o.EditKind is not null) throw new ArgException("--edit-kind requires --target (bulk mode)");
         if (o.FilesChanged is not null) throw new ArgException("--files-changed requires --target (bulk mode)");
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
         if (o.Step is { } k && (k < 1 || k > o.Edits)) throw new ArgException($"--step must be in 1..{o.Edits}");
