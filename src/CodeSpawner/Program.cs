@@ -191,6 +191,9 @@ public static class Program
                                       encoding     UTF-8<->UTF-16 (reason encoding; no hunks)
                                       binary       flip raw bytes (reason binary; no hunks)
                                       metadata     mode-only      (reason metadata; content identical)
+                                      rename       move files     (graded renamed[] + rename+edit hunks)
+              --decoy-fraction <f>  (rename only) fraction of files emitted as near-duplicate ADD decoys
+                                    (original kept) — rename false-positive traps, 0..1 (default 0)
               (emits one base->variant <corpus>-delta.json with per-file reason + old/new sha+size + unified
                hunks [a compact run-rule for giant files] + a _meta.diffTruthSha; see docs/diff-delta-design.md.
                e.g. --target giant --files-changed 3 --edit-density 0.5  vs

@@ -169,7 +169,16 @@ hunks (reason `whitespace`); `eol`/`encoding`/`binary` emit shas+sizes with ZERO
 content-identical (`oldSha==newSha`) with a synthetic `metadata:{field,old,new}` (not digested — the locked
 modified-files section is exactly the six fields above). The honesty guard drops any file whose bytes did not
 actually change, and the content rewrite preserves LF/CRLF + a missing final newline so a no-op is a true
-no-op. `renamed` is still always empty until step 3.
+no-op.
+
+**Step 3 status:** IMPLEMENTED. `--edit-kind rename` renames chosen files with GRADED `similarityMilli` (a
+rotating band {1000,900,600,300}; the emitted value is the REALIZED overlap `round((L-changed)/L*1000)`, not
+the target, so tiny files honestly report low similarity). Pure renames (1000) are identical bytes with no
+`modified` record; rename+edit emit their hunks in `modified` keyed by the `to` path (reason content), so
+`renamed` stays flat. `--decoy-fraction f` emits near-duplicate ADDs (`*_dup*`, original kept) into
+`fileOps.added` as rename false-positive traps — `added` is NOT digested (not a locked digest section), it is
+scoring truth for CodeDiffer: the `{from,to}` set is the recall oracle, the decoys the precision oracle.
+`conflictTruthSha` / native 3-way (step 4) remains to be built — pin its section/field orders with CodeDiffer first.
 
 ## Sequencing (locked)
 
