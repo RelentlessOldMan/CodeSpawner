@@ -59,6 +59,13 @@ public sealed class MutateOptions
     /// docs/diff-delta-design.md §3-way-edges.</summary>
     public bool ConflictEdges { get; set; }
 
+    /// <summary>How a content edit touches a GIANT file (&gt;= giant floor): <c>strided</c> (default — mark every
+    /// stride-th line, emitted as a compact run-rule) or <c>single</c> (one localized one-line insert, emitted as
+    /// ONE explicit hunk — the content-defined-chunker locality case: a tiny edit re-diffs ~1 block of thousands).
+    /// Normal-sized files ignore this.</summary>
+    public string? GiantEdit { get; set; }
+    public string GiantEditMode => GiantEdit ?? "strided";
+
     /// <summary>True when bulk in-place mutation is requested.</summary>
     public bool IsBulk => Target is not null;
 }

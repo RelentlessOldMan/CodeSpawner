@@ -86,6 +86,13 @@ run-rule describes it exactly:
 stride 20). Tiny delta, fully reconstructable, **no coupling to CodeSpawner's RNG**. Normal files stay
 explicit-hunks; the byte track is reserved for actual binary files.
 
+**Single-locality variant (`--giant-edit single`):** instead of the strided run-rule, make ONE localized
+one-line insert at the giant's midpoint, emitted as a SINGLE explicit insert hunk
+(`{op:insert, oldStart:mid, oldLines:0, newStart:mid+1, newLines:1}`). This is the content-defined-chunker
+locality case — a tiny edit in a multi-GB file that a block-indexing diff must re-diff in ~one block of
+thousands. Terminator-faithful + streamed in two passes (count, then rewrite), so the giant never lands on the
+heap. Default stays `strided`.
+
 ## Rename / move (step 3)
 
 ```json

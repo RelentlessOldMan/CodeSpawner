@@ -895,4 +895,47 @@ public class MutatorBulkTests
         Assert.DoesNotContain("\n", s);                 // no LF introduced — every terminator stayed a lone CR
         Assert.Equal(60_000, s.Split('\r').Length);     // still 60k CR-separated lines
     }
+
+    [Fact]
+    public void Bulk_Giant_SingleLocality_EmitsOneInsertHunk_NotARunRule()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+            File.WriteAllText(Path.Combine(c, "big.h"),
+                string.Join("\n", Enumerable.Range(0, 100_000).Select(i => $"#define MACRO_{i} {i}"))));
+
+        // --giant-edit single ⇒ ONE localized one-line insert, emitted as a single explicit hunk (the
+        // content-defined-chunker locality case), NOT the strided run-rule the default would produce.
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, GiantEdit = "single", Seed = 3 });
+
+        var hunks = ModifiedRecord(delta, "big.h").GetProperty("hunks");
+        Assert.Equal(1, hunks.GetArrayLength());
+        var h = hunks[0];
+        Assert.Equal("insert", h.GetProperty("op").GetString());
+        Assert.Equal(0, h.GetProperty("oldLines").GetInt32());
+        Assert.Equal(1, h.GetProperty("newLines").GetInt32());
+        Assert.False(h.TryGetProperty("kind", out _));         // explicit hunk, NOT a {kind:"run"} rule
+
+        // the file grew by exactly one line, and the inserted line sits at newStart = oldStart + 1.
+        var lines = File.ReadAllLines(Path.Combine(corpus, "big.h"));
+        Assert.Equal(100_001, lines.Length);
+        int ns = h.GetProperty("newStart").GetInt32();
+        Assert.Equal(h.GetProperty("oldStart").GetInt32() + 1, ns);
+        Assert.StartsWith("// mutate single-locality insert", lines[ns - 1]);
+        // and nothing else changed: exactly one line carries the marker
+        Assert.Equal(1, lines.Count(l => l.Contains("single-locality insert")));
+    }
+
+    [Fact]
+    public void Bulk_Giant_Default_IsStridedRunRule_NotSingle()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+            File.WriteAllText(Path.Combine(c, "big.h"),
+                string.Join("\n", Enumerable.Range(0, 100_000).Select(i => $"#define MACRO_{i} {i}"))));
+        // No --giant-edit ⇒ default strided run-rule (guards the dispatch: single is opt-in only).
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, EditDensity = 0.1, Seed = 3 });
+        var h = ModifiedRecord(delta, "big.h").GetProperty("hunks")[0];
+        Assert.Equal("run", h.GetProperty("kind").GetString());
+    }
 }
