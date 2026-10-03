@@ -199,6 +199,9 @@ public static class Program
               --files-changed <n>   how many target files to modify (default: all matching)
               --edit-density <f>    fraction of each file's lines to change in place, 0..1 (default 0.05)
               --giant-min-mb <n>    size floor (MB) for --target giant — the big-header case (default 100)
+              --giant-edit <mode>   how a content edit touches a giant file: strided (default — mark every
+                                      stride-th line, a compact run-rule) | single (ONE localized one-line insert
+                                      as a single explicit hunk — the content-defined-chunker locality case)
               --edit-kind <k>       edit mechanism → reason class (default content):
                                       content      in-place marker (reason content; replace hunks)
                                       line-insert  add lines      (reason content; insert hunks, renumbers)

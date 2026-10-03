@@ -334,6 +334,22 @@ public class ArgParserTests
     public void Mutate_ConflictEdges_WithoutTarget_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--conflict-edges" }));
 
+    [Fact]
+    public void Mutate_GiantEdit_Parses()
+        => Assert.Equal("single", ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "giant", "--giant-edit", "single" }).GiantEdit);
+
+    [Fact]
+    public void Mutate_GiantEdit_DefaultsToStrided()
+        => Assert.Equal("strided", ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "giant" }).GiantEditMode);
+
+    [Fact]
+    public void Mutate_GiantEdit_BadValue_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "giant", "--giant-edit", "bogus" }));
+
+    [Fact]
+    public void Mutate_GiantEdit_WithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--giant-edit", "single" }));
+
     // --- remaining gen knobs (the half not in the spread tests) + the ParseBool false arm ---
 
     [Fact]

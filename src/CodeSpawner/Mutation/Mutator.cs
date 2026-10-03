@@ -784,7 +784,8 @@ public static class Mutator
 
         EditResult r = o.Kind switch
         {
-            "content"     => oldSize >= giantFloor ? GiantContentEdit(abs, stride, idx)
+            "content"     => oldSize >= giantFloor ? (o.GiantEditMode == "single" ? GiantSingleEdit(abs, idx)
+                                                                                  : GiantContentEdit(abs, stride, idx))
                                                    : new EditResult(Coalesce(AppendPerLine(abs, o.EditDensity, o.Seed, idx, n => $" /*mut:{idx}:{n}*/")), null),
             "whitespace"  => new EditResult(Coalesce(AppendPerLine(abs, o.EditDensity, o.Seed, idx, _ => "   ")), null),
             "line-insert" => LineInsertEdit(abs, o.EditDensity, o.Seed, idx),
@@ -811,6 +812,74 @@ public static class Mutator
     {
         long lines = ModifyGiant(abs, stride, idx);
         return new EditResult(new List<Hunk>(), new RunHunk(HunkOp.Replace, stride, 1, (int)Math.Min(lines, int.MaxValue), 1));
+    }
+
+    /// <summary>
+    /// A SINGLE localized edit to a giant file: insert one line after the midpoint line, emitted as ONE explicit
+    /// insert hunk (not the strided run-rule). This is the content-defined-chunker locality case — a tiny edit in
+    /// a multi-GB file that must re-diff ~one block out of thousands. Two streaming passes (count, then rewrite),
+    /// so a 1 GB file never lands on the heap.
+    /// </summary>
+    private static EditResult GiantSingleEdit(string abs, int idx)
+    {
+        long total = CountGiantLines(abs);
+        long anchor = Math.Max(1, total / 2);                  // insert AFTER this 1-based line (unified insert anchor)
+        string inserted = $"// mutate single-locality insert {idx}";
+
+        string tmp = abs + ".mut.tmp";
+        var sb = new StringBuilder();
+        bool pendingCr = false;
+        long lineNo = 0;
+        using (var reader = new StreamReader(abs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
+        using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
+        {
+            void Flush(string term)
+            {
+                writer.Write(sb); writer.Write(term); sb.Clear(); lineNo++;
+                if (lineNo == anchor) { writer.Write(inserted); writer.Write('\n'); }   // one inserted line, after the anchor
+            }
+            var buf = new char[1 << 16];
+            int read;
+            while ((read = reader.Read(buf, 0, buf.Length)) > 0)
+                for (int k = 0; k < read; k++)
+                {
+                    char c = buf[k];
+                    if (pendingCr) { pendingCr = false; if (c == '\n') { Flush("\r\n"); continue; } Flush("\r"); }
+                    if (c == '\r') { pendingCr = true; continue; }
+                    if (c == '\n') { Flush("\n"); continue; }
+                    sb.Append(c);
+                }
+            if (pendingCr) Flush("\r");
+            if (sb.Length > 0) Flush("");                       // final unterminated line
+        }
+        File.Delete(abs);
+        File.Move(tmp, abs);
+
+        // one explicit insert hunk: after old line `anchor` (oldLines=0), the new line sits at `anchor+1`.
+        int a = (int)Math.Min(anchor, int.MaxValue);
+        return new EditResult(new List<Hunk> { new(HunkOp.Insert, a, 0, a + 1, 1) }, null);
+    }
+
+    /// <summary>Stream-count the lines of a giant file (terminator-faithful: a missing final newline still
+    /// counts its line), without loading it.</summary>
+    private static long CountGiantLines(string abs)
+    {
+        long lines = 0; bool pendingCr = false, sawContent = false;
+        using var reader = new StreamReader(abs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buf = new char[1 << 16];
+        int read;
+        while ((read = reader.Read(buf, 0, buf.Length)) > 0)
+            for (int k = 0; k < read; k++)
+            {
+                char c = buf[k];
+                if (pendingCr) { pendingCr = false; lines++; sawContent = false; if (c == '\n') continue; }
+                if (c == '\r') { pendingCr = true; sawContent = true; continue; }
+                if (c == '\n') { lines++; sawContent = false; continue; }
+                sawContent = true;
+            }
+        if (pendingCr) lines++;
+        else if (sawContent) lines++;                          // final line without a trailing terminator
+        return lines;
     }
 
     /// <summary>Insert a fixed block of filler lines before ~density of the lines → insert hunks that renumber
