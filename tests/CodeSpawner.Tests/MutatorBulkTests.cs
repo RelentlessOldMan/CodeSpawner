@@ -1040,6 +1040,35 @@ public class MutatorBulkTests
     }
 
     [Fact]
+    public void Sharding_Past999Shards_FilenamesSortInShardOrder()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1005, lines: 1);   // >999 shards at shard-size 1
+
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 1.0, Seed = 3, ShardSize = 1 });
+
+        var (index, shards) = ShardPaths(delta);
+        using var idx = JsonDocument.Parse(File.ReadAllText(index));
+        var indexOrder = idx.RootElement.GetProperty("shards").EnumerateArray()
+            .Select(e => e.GetProperty("file").GetString()!).ToList();
+        Assert.True(indexOrder.Count > 999, $"expected >999 shards, got {indexOrder.Count}");
+
+        // a glob + ordinal filename sort (the natural consumer approach) must match the authoritative index order —
+        // D3 padding would misorder shard-1000 before shard-999 here.
+        var globOrder = shards.Select(f => Path.GetFileName(f)!).ToList();
+        Assert.Equal(indexOrder, globOrder);
+        // and the firstPath run is globally ordinal-ascending across that glob order (non-overlapping, in order)
+        string? prev = null;
+        foreach (var f in shards)
+        {
+            using var sd = JsonDocument.Parse(File.ReadAllText(f));
+            string first = sd.RootElement.GetProperty("modified")[0].GetProperty("path").GetString()!;
+            if (prev is not null) Assert.True(string.CompareOrdinal(prev, first) < 0);
+            prev = first;
+        }
+    }
+
+    [Fact]
     public void Sharding_CleansUpStaleArtifacts_OnModeSwitch()
     {
         using var tmp = new TempDir();
@@ -1060,5 +1089,30 @@ public class MutatorBulkTests
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 9, ShardSize = 2 });
         Assert.False(File.Exists(delta));
         Assert.True(File.Exists(ShardPaths(delta).index));
+    }
+
+    [Fact]
+    public void Sharding_CleansUpAcross2WayAnd3WayModes()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 4, lines: 24);
+        var (index, _) = ShardPaths(delta);
+
+        // 2-way sharded first ⇒ index + shards present
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 7, ShardSize = 2 });
+        Assert.True(File.Exists(index) && ShardPaths(delta).shards.Length > 0);
+
+        // a 3-way run must clear the stale 2-way index + shards and write its own v1/v2/conflict set
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, Seed = 7 });
+        Assert.False(File.Exists(index));
+        Assert.Empty(ShardPaths(delta).shards);
+        Assert.True(File.Exists(corpus + "-delta-v1.json") && File.Exists(corpus + "-delta-v2.json") && File.Exists(corpus + "-conflict.json"));
+
+        // a subsequent 2-way run must clear the stale 3-way artifacts
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 8 });
+        Assert.True(File.Exists(delta));
+        Assert.False(File.Exists(corpus + "-delta-v1.json"));
+        Assert.False(File.Exists(corpus + "-delta-v2.json"));
+        Assert.False(File.Exists(corpus + "-conflict.json"));
     }
 }

@@ -44,7 +44,7 @@ Each changed file in the delta carries its `reason`. One small carve-style label
 | `encoding` | UTF-8↔UTF-16, add/remove BOM | differ | **zero** (decoded text identical) | tests decode-before-diff |
 | `binary` | edit bytes in a blob file | differ | **zero** | metadata-only record (shas+sizes), no byte-range truth in v1 |
 | `metadata` | synthetic mode/metadata change | **identical** (`oldSha==newSha`) | **zero** | fixture-sized; NTFS has no real POSIX mode so this is synthetic. Generic field, mode is just the first instance. Proves classify-as-`metadata_only` + the opt-in metadata-diff path |
-| `mixed` | one kind per file, cycling the six reasons above | varies per file | varies per file | NOT a reason value — a `--edit-kind mixed` knob that assigns a deterministic per-file kind (`content,eol,whitespace,encoding,binary,metadata` by index). ≥6 chosen files ⇒ ONE delta exercises every classifier branch. Renames stay a separate pass (`--edit-kind rename`). |
+| `mixed` | one kind per file, cycling the six reasons above | varies per file | varies per file | NOT a reason value — a `--edit-kind mixed` knob that assigns a deterministic per-file kind (`content,eol,whitespace,encoding,binary,metadata` by index). ≥6 **content-bearing** files ⇒ ONE delta exercises every classifier branch (a kind that no-ops on a degenerate file — e.g. `eol` on a file with no line terminators — is honestly dropped by the no-change guard, so that reason would be absent). Renames stay a separate pass (`--edit-kind rename`). |
 
 ## Delta schema — modified-files + hunks
 
@@ -246,9 +246,11 @@ See §"Giant files" above — one localized one-line insert into a giant, emitte
 
 ### `--edit-kind mixed`
 One delta whose files span every reason class: a deterministic per-file kind cycle
-(`content,eol,whitespace,encoding,binary,metadata` by selection index). ≥6 chosen files ⇒ all six branches
-appear in a single delta. Each file's record carries its own `reason`; no schema or digest change. Renames
-remain a separate pass (`--edit-kind rename`).
+(`content,eol,whitespace,encoding,binary,metadata` by selection index). ≥6 content-bearing files ⇒ all six
+branches appear in a single delta — with the standard honesty caveat that a kind which produces no byte change
+on a degenerate file (e.g. `eol` on a terminator-less file) is dropped by the no-change guard, so that reason
+would be absent. Each file's record carries its own `reason`; no schema or digest change. Renames remain a
+separate pass (`--edit-kind rename`).
 
 ### `_meta.gen` — effective generation knobs (reproducibility)
 The **gen** manifest (`<corpus>-manifest.json`) now carries a `_meta.gen` object: the EFFECTIVE knobs that

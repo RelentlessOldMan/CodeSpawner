@@ -99,6 +99,8 @@ public static class Mutator
         int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
         var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
+        RemoveDeltaArtifacts(TrimDir(corpus));                 // one bulk run ⇒ one coherent delta artifact set
+
         if (o.ThreeWay) return o.ConflictEdges ? RunThreeWayEdges(o, corpus, basem, chosen)
                                                : RunThreeWay(o, corpus, basem, chosen);
 
@@ -1215,15 +1217,12 @@ public static class Mutator
         // single stable order lets a sharded delta slice on non-overlapping path ranges).
         var sorted = files.OrderBy(f => f.Path, StringComparer.Ordinal).ToList();
 
-        if (variant is null)
+        // Stale artifacts were already cleared once at the bulk entry point (RunBulk) so a 3-way run that writes
+        // v1 THEN v2 doesn't wipe v1 here; this path only writes.
+        if (variant is null && o.ShardSize > 0)            // --shard-size N ⇒ paged transport (index + shard files)
         {
-            string baseName = $"{TrimDir(corpus)}-delta";
-            RemoveDeltaArtifacts(baseName);                // never leave a stale monolithic/index/shard mix behind
-            if (o.ShardSize > 0)                           // --shard-size N ⇒ paged transport (index + shard files)
-            {
-                WriteShardedDiffDelta(baseName, basem, o, prevSha, diffSha, sorted, renames, added);
-                return;
-            }
+            WriteShardedDiffDelta($"{TrimDir(corpus)}-delta", basem, o, prevSha, diffSha, sorted, renames, added);
+            return;
         }
 
         string path = variant is null ? $"{TrimDir(corpus)}-delta.json" : $"{TrimDir(corpus)}-delta-{variant}.json";
@@ -1263,12 +1262,15 @@ public static class Mutator
         int shardSize = o.ShardSize;
         int nShards = (sorted.Count + shardSize - 1) / shardSize;    // 0 modified ⇒ 0 shards, still an honest index
         var shards = new List<(string file, string first, string last, int count, string sha)>(nShards);
+        // Pad the shard index to the width of the LARGEST index (min 3), so a glob + ordinal filename sort stays
+        // in shard order even past 999 shards — the death-scale case sharding exists for (D3 alone misorders there).
+        int pad = Math.Max(3, (nShards - 1).ToString().Length);
 
         for (int s = 0; s < nShards; s++)
         {
             int start = s * shardSize;
             int count = Math.Min(shardSize, sorted.Count - start);
-            string shardPath = $"{baseName}.shard-{s:D3}.json";
+            string shardPath = $"{baseName}.shard-{s.ToString().PadLeft(pad, '0')}.json";
             using (var fs = new FileStream(shardPath, FileMode.Create, FileAccess.Write, FileShare.None))
             using (var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true }))
             {
@@ -1392,15 +1394,21 @@ public static class Mutator
         w.WriteEndArray();
     }
 
-    /// <summary>Remove any prior 2-way delta artifacts for this corpus (monolithic + index + every shard) so a run
-    /// never leaves a stale mix — the consumer detects paging by the index/shards, which must reflect THIS run.</summary>
-    private static void RemoveDeltaArtifacts(string baseName)
+    /// <summary>
+    /// Clear EVERY prior diff-delta artifact for this corpus — the 2-way monolithic (<c>-delta.json</c>), the paged
+    /// index + shards (<c>-delta.index.json</c>, <c>-delta.shard-NNN.json</c>), AND the 3-way variant/conflict files
+    /// (<c>-delta-v1/v2.json</c>, <c>-conflict.json</c>). Called ONCE at the bulk entry point so a mutate run leaves
+    /// a single coherent artifact set (never a stale monolithic↔paged, or 2-way↔3-way, mix a consumer could misread).
+    /// </summary>
+    private static void RemoveDeltaArtifacts(string corpusBase)
     {
-        foreach (var p in new[] { $"{baseName}.json", $"{baseName}.index.json" })
+        string baseName = $"{corpusBase}-delta";
+        foreach (var p in new[] { $"{baseName}.json", $"{baseName}.index.json",
+                                  $"{baseName}-v1.json", $"{baseName}-v2.json", $"{corpusBase}-conflict.json" })
             if (File.Exists(p)) File.Delete(p);
-        string? dir = Path.GetDirectoryName(baseName);
+        string dir = Path.GetDirectoryName(baseName) is { Length: > 0 } d ? d : ".";   // bare relative ⇒ cwd
         string leaf = Path.GetFileName(baseName);
-        if (dir is not null && Directory.Exists(dir))
+        if (Directory.Exists(dir))
             foreach (var f in Directory.GetFiles(dir, $"{leaf}.shard-*.json")) File.Delete(f);
     }
 
