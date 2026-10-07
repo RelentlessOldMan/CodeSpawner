@@ -110,12 +110,15 @@ public static class Mutator
 
         if (o.Kind == "rename") return RunRename(o, corpus, basem, chosen);
 
-        string reason = ReasonOf(o.Kind);
+        bool mixed = o.Kind == "mixed";
         var files = new List<DiffFile>();
         long touched = 0;
         for (int i = 0; i < chosen.Count; i++)
         {
-            var df = BuildDiffFile(AbsOf(corpus, chosen[i]), chosen[i], reason, o, i, giantFloor, stride);
+            // mixed assigns a deterministic per-file kind (the taxonomy cycle), so one delta spans every reason;
+            // every other kind applies uniformly. Renames are always a separate pass (--edit-kind rename).
+            string kind = mixed ? MixedCycle[i % MixedCycle.Length] : o.Kind;
+            var df = BuildDiffFile(AbsOf(corpus, chosen[i]), chosen[i], kind, o, i, giantFloor, stride);
             if (df is null) continue;                          // honesty: no actual change ⇒ not recorded
             touched += df.Run is { } r ? (r.RangeEnd - r.RangeStart) / r.Stride + 1
                                        : df.Hunks.Sum(h => Math.Max(h.OldLines, h.NewLines));
@@ -764,14 +767,19 @@ public static class Mutator
     private readonly record struct EditResult(List<Hunk> Hunks, RunHunk? Run);
     private static EditResult NoHunks() => new(new List<Hunk>(), null);
 
+    /// <summary>The deterministic per-file kind cycle for <c>--edit-kind mixed</c>: one of every reason class, so
+    /// a single bulk delta exercises every CodeDiffer classifier branch (≥6 chosen files ⇒ all six appear).</summary>
+    internal static readonly string[] MixedCycle = { "content", "eol", "whitespace", "encoding", "binary", "metadata" };
+
     /// <summary>Apply one file's edit per the chosen kind; hash before/after; return its truth record (or null
     /// if the edit produced no actual byte change — the honesty guard).</summary>
-    private static DiffFile? BuildDiffFile(string abs, string rel, string reason, MutateOptions o, int idx,
+    private static DiffFile? BuildDiffFile(string abs, string rel, string kind, MutateOptions o, int idx,
         long giantFloor, int stride)
     {
+        string reason = ReasonOf(kind);
         var (oldSha, oldSize) = HashFile(abs);
 
-        if (o.Kind == "metadata")
+        if (kind == "metadata")
         {
             // Content-identical: NTFS has no POSIX mode, so this is a SYNTHETIC mode flip — oldSha == newSha,
             // only the metadata field differs. Proves CodeDiffer classifies metadata_only (not "modified").
@@ -782,7 +790,7 @@ public static class Mutator
             };
         }
 
-        EditResult r = o.Kind switch
+        EditResult r = kind switch
         {
             "content"     => oldSize >= giantFloor ? (o.GiantEditMode == "single" ? GiantSingleEdit(abs, idx)
                                                                                   : GiantContentEdit(abs, stride, idx))
@@ -793,7 +801,7 @@ public static class Mutator
             "eol"         => EolEdit(abs),
             "encoding"    => EncodingEdit(abs),
             "binary"      => BinaryEdit(abs, o.EditDensity, o.Seed, idx),
-            _             => throw new ArgException($"unsupported --edit-kind '{o.Kind}'"),
+            _             => throw new ArgException($"unsupported --edit-kind '{kind}'"),
         };
 
         var (newSha, newSize) = HashFile(abs);
@@ -1029,6 +1037,20 @@ public static class Mutator
         if (shrinkPool.Count > 0) types.Add(EditType.Shrink);
         if (o.Restream && restreamPool.Count > 0) types.Add(EditType.Restream);
 
+        // Fail at plan time with a precise message when the cycle demands more one-shot seeds than the
+        // corpus carries (shrink/restream seeds are consumed once each; grow wraps, so it is never short).
+        int shrinkNeed = 0, restreamNeed = 0;
+        for (int k = 0; k < o.Edits; k++)
+        {
+            var t = types[k % types.Count];
+            if (t == EditType.Shrink) shrinkNeed++;
+            else if (t == EditType.Restream) restreamNeed++;
+        }
+        if (shrinkNeed > shrinkPool.Count)
+            throw new ArgException($"--edits {o.Edits} needs {shrinkNeed} shrink seed(s) but this corpus has {shrinkPool.Count}; regenerate the base with --shrink-seeds {shrinkNeed} or use fewer --edits.");
+        if (restreamNeed > restreamPool.Count)
+            throw new ArgException($"--edits {o.Edits} needs {restreamNeed} restream seed(s) but this corpus has {restreamPool.Count}; regenerate the base with --restream-seeds {restreamNeed} or use fewer --edits.");
+
         var plan = new List<Edit>(o.Edits);
         int srcCur = 0, growCur = 0, shrinkCur = 0, restreamCur = 0;
         for (int k = 0; k < o.Edits; k++)
@@ -1189,11 +1211,117 @@ public static class Mutator
         string diffSha, IReadOnlyList<DiffFile> files, IReadOnlyList<Rename> renames, IReadOnlyList<string> added,
         string? variant = null)
     {
+        // Canonical path-ordinal order (the modified records are a set — diffTruthSha is order-independent — but a
+        // single stable order lets a sharded delta slice on non-overlapping path ranges).
+        var sorted = files.OrderBy(f => f.Path, StringComparer.Ordinal).ToList();
+
+        if (variant is null)
+        {
+            string baseName = $"{TrimDir(corpus)}-delta";
+            RemoveDeltaArtifacts(baseName);                // never leave a stale monolithic/index/shard mix behind
+            if (o.ShardSize > 0)                           // --shard-size N ⇒ paged transport (index + shard files)
+            {
+                WriteShardedDiffDelta(baseName, basem, o, prevSha, diffSha, sorted, renames, added);
+                return;
+            }
+        }
+
         string path = variant is null ? $"{TrimDir(corpus)}-delta.json" : $"{TrimDir(corpus)}-delta-{variant}.json";
         using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartObject();
 
+        WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize: null);
+
+        w.WriteStartObject("fileOps");
+        w.WriteStartArray("added");                    // decoy near-duplicate ADDs (rename false-positive traps)
+        foreach (var a in added) w.WriteStringValue(a);
+        w.WriteEndArray();
+        w.WriteStartArray("removed"); w.WriteEndArray();
+        w.WriteStartArray("modified");
+        foreach (var f in sorted) WriteModifiedRecord(w, f);
+        w.WriteEndArray();
+        WriteRenamedArray(w, renames);
+        w.WriteEndObject();
+
+        w.WriteStartObject("symbols"); w.WriteEndObject(); // content-only edits ⇒ empty symbol overlay
+        w.WriteEndObject();
+        w.Flush();
+        Console.WriteLine($"  {Path.GetFileName(path)}: {sorted.Count} modified, {renames.Count} renamed, {added.Count} added");
+    }
+
+    /// <summary>
+    /// The PAGED transport of a 2-way diff delta (<c>--shard-size N</c>): the modified[] records are split, in
+    /// path-ordinal order, into non-overlapping shard files of &lt;= N records each; a <c>-delta.index.json</c>
+    /// carries the _meta (incl the <c>shardSize</c> marker + the sharding-INVARIANT diffTruthSha), the inline
+    /// added/removed/renamed, and a <c>shards[]</c> catalog. Reassembling every shard's modified[] with the
+    /// index's fileOps reproduces the identical diffTruthSha — pure transport, manifestVersion stays 1.
+    /// </summary>
+    private static void WriteShardedDiffDelta(string baseName, BaseManifest basem, MutateOptions o, string prevSha,
+        string diffSha, List<DiffFile> sorted, IReadOnlyList<Rename> renames, IReadOnlyList<string> added)
+    {
+        int shardSize = o.ShardSize;
+        int nShards = (sorted.Count + shardSize - 1) / shardSize;    // 0 modified ⇒ 0 shards, still an honest index
+        var shards = new List<(string file, string first, string last, int count, string sha)>(nShards);
+
+        for (int s = 0; s < nShards; s++)
+        {
+            int start = s * shardSize;
+            int count = Math.Min(shardSize, sorted.Count - start);
+            string shardPath = $"{baseName}.shard-{s:D3}.json";
+            using (var fs = new FileStream(shardPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true }))
+            {
+                w.WriteStartObject();
+                w.WriteNumber("shardIndex", s);
+                w.WriteNumber("count", count);
+                w.WriteStartArray("modified");
+                for (int i = start; i < start + count; i++) WriteModifiedRecord(w, sorted[i]);
+                w.WriteEndArray();
+                w.WriteEndObject();
+                w.Flush();
+            }
+            var (sha, _) = HashFile(shardPath);            // transport integrity: sha256 of the shard file bytes
+            shards.Add((Path.GetFileName(shardPath), sorted[start].Path, sorted[start + count - 1].Path, count, sha));
+        }
+
+        string indexPath = $"{baseName}.index.json";
+        using (var fs = new FileStream(indexPath, FileMode.Create, FileAccess.Write, FileShare.None))
+        using (var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true }))
+        {
+            w.WriteStartObject();
+            WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize);
+
+            w.WriteStartObject("fileOps");                 // added/removed/renamed inline; modified lives in shards
+            w.WriteStartArray("added"); foreach (var a in added) w.WriteStringValue(a); w.WriteEndArray();
+            w.WriteStartArray("removed"); w.WriteEndArray();
+            WriteRenamedArray(w, renames);
+            w.WriteEndObject();
+
+            w.WriteStartArray("shards");
+            foreach (var sh in shards)
+            {
+                w.WriteStartObject();
+                w.WriteString("file", sh.file);
+                w.WriteString("firstPath", sh.first);
+                w.WriteString("lastPath", sh.last);
+                w.WriteNumber("count", sh.count);
+                w.WriteString("shardSha", sh.sha);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+
+            w.WriteStartObject("symbols"); w.WriteEndObject();
+            w.WriteEndObject();
+            w.Flush();
+        }
+        Console.WriteLine($"  {Path.GetFileName(indexPath)}: {sorted.Count} modified across {nShards} shard(s) " +
+                          $"(<= {shardSize} each), {renames.Count} renamed, {added.Count} added; diffTruthSha {diffSha[..12]}…");
+    }
+
+    private static void WriteDiffMeta(Utf8JsonWriter w, BaseManifest basem, MutateOptions o, string prevSha,
+        string diffSha, int? shardSize)
+    {
         w.WriteStartObject("_meta");
         w.WriteNumber("manifestVersion", 1);
         w.WriteString("deltaKind", "diff");            // distinguishes a diff-delta from a symbol-overlay delta
@@ -1205,55 +1333,53 @@ public static class Mutator
         w.WriteString("baseManifestSha", basem.Sha256);
         w.WriteString("prevTruthSha", prevSha);
         w.WriteString("diffTruthSha", diffSha);
+        if (shardSize is { } ss) w.WriteNumber("shardSize", ss);   // paging marker (present only in the index)
         w.WriteEndObject();
+    }
 
-        w.WriteStartObject("fileOps");
-        w.WriteStartArray("added");                    // decoy near-duplicate ADDs (rename false-positive traps)
-        foreach (var a in added) w.WriteStringValue(a);
-        w.WriteEndArray();
-        w.WriteStartArray("removed"); w.WriteEndArray();
-        w.WriteStartArray("modified");
-        foreach (var f in files)
+    private static void WriteModifiedRecord(Utf8JsonWriter w, DiffFile f)
+    {
+        w.WriteStartObject();
+        w.WriteString("path", f.Path);
+        w.WriteString("reason", f.Reason);
+        w.WriteString("oldSha", f.OldSha);
+        w.WriteString("newSha", f.NewSha);
+        w.WriteNumber("oldSize", f.OldSize);
+        w.WriteNumber("newSize", f.NewSize);
+        w.WriteStartArray("hunks");
+        foreach (var h in f.Hunks)
         {
             w.WriteStartObject();
-            w.WriteString("path", f.Path);
-            w.WriteString("reason", f.Reason);
-            w.WriteString("oldSha", f.OldSha);
-            w.WriteString("newSha", f.NewSha);
-            w.WriteNumber("oldSize", f.OldSize);
-            w.WriteNumber("newSize", f.NewSize);
-            w.WriteStartArray("hunks");
-            foreach (var h in f.Hunks)
-            {
-                w.WriteStartObject();
-                w.WriteString("op", h.Op.Label());
-                w.WriteNumber("oldStart", h.OldStart); w.WriteNumber("oldLines", h.OldLines);
-                w.WriteNumber("newStart", h.NewStart); w.WriteNumber("newLines", h.NewLines);
-                w.WriteEndObject();
-            }
-            if (f.Run is { } r)
-            {
-                w.WriteStartObject();
-                w.WriteString("op", r.Op.Label());
-                w.WriteString("kind", "run");
-                w.WriteNumber("stride", r.Stride);
-                w.WriteNumber("rangeStart", r.RangeStart);
-                w.WriteNumber("rangeEnd", r.RangeEnd);
-                w.WriteNumber("perHunk", r.PerHunk);
-                w.WriteEndObject();
-            }
-            w.WriteEndArray();
-            if (f.Metadata is { } meta)                        // reason=metadata: content-identical, opt-in diff track
-            {
-                w.WriteStartObject("metadata");
-                w.WriteString("field", meta.Field);
-                w.WriteString("old", meta.Old);
-                w.WriteString("new", meta.New);
-                w.WriteEndObject();
-            }
+            w.WriteString("op", h.Op.Label());
+            w.WriteNumber("oldStart", h.OldStart); w.WriteNumber("oldLines", h.OldLines);
+            w.WriteNumber("newStart", h.NewStart); w.WriteNumber("newLines", h.NewLines);
+            w.WriteEndObject();
+        }
+        if (f.Run is { } r)
+        {
+            w.WriteStartObject();
+            w.WriteString("op", r.Op.Label());
+            w.WriteString("kind", "run");
+            w.WriteNumber("stride", r.Stride);
+            w.WriteNumber("rangeStart", r.RangeStart);
+            w.WriteNumber("rangeEnd", r.RangeEnd);
+            w.WriteNumber("perHunk", r.PerHunk);
             w.WriteEndObject();
         }
         w.WriteEndArray();
+        if (f.Metadata is { } meta)                        // reason=metadata: content-identical, opt-in diff track
+        {
+            w.WriteStartObject("metadata");
+            w.WriteString("field", meta.Field);
+            w.WriteString("old", meta.Old);
+            w.WriteString("new", meta.New);
+            w.WriteEndObject();
+        }
+        w.WriteEndObject();
+    }
+
+    private static void WriteRenamedArray(Utf8JsonWriter w, IReadOnlyList<Rename> renames)
+    {
         w.WriteStartArray("renamed");                      // {from,to,similarityMilli}; rename+edit hunks live
         foreach (var r in renames)                         // in `modified` keyed by the `to` path
         {
@@ -1264,12 +1390,18 @@ public static class Mutator
             w.WriteEndObject();
         }
         w.WriteEndArray();
-        w.WriteEndObject();
+    }
 
-        w.WriteStartObject("symbols"); w.WriteEndObject(); // content-only edits ⇒ empty symbol overlay
-        w.WriteEndObject();
-        w.Flush();
-        Console.WriteLine($"  {Path.GetFileName(path)}: {files.Count} modified, {renames.Count} renamed, {added.Count} added");
+    /// <summary>Remove any prior 2-way delta artifacts for this corpus (monolithic + index + every shard) so a run
+    /// never leaves a stale mix — the consumer detects paging by the index/shards, which must reflect THIS run.</summary>
+    private static void RemoveDeltaArtifacts(string baseName)
+    {
+        foreach (var p in new[] { $"{baseName}.json", $"{baseName}.index.json" })
+            if (File.Exists(p)) File.Delete(p);
+        string? dir = Path.GetDirectoryName(baseName);
+        string leaf = Path.GetFileName(baseName);
+        if (dir is not null && Directory.Exists(dir))
+            foreach (var f in Directory.GetFiles(dir, $"{leaf}.shard-*.json")) File.Delete(f);
     }
 
     // ---- helpers --------------------------------------------------------------------------------------

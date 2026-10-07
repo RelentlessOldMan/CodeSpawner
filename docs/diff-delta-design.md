@@ -44,6 +44,7 @@ Each changed file in the delta carries its `reason`. One small carve-style label
 | `encoding` | UTF-8↔UTF-16, add/remove BOM | differ | **zero** (decoded text identical) | tests decode-before-diff |
 | `binary` | edit bytes in a blob file | differ | **zero** | metadata-only record (shas+sizes), no byte-range truth in v1 |
 | `metadata` | synthetic mode/metadata change | **identical** (`oldSha==newSha`) | **zero** | fixture-sized; NTFS has no real POSIX mode so this is synthetic. Generic field, mode is just the first instance. Proves classify-as-`metadata_only` + the opt-in metadata-diff path |
+| `mixed` | one kind per file, cycling the six reasons above | varies per file | varies per file | NOT a reason value — a `--edit-kind mixed` knob that assigns a deterministic per-file kind (`content,eol,whitespace,encoding,binary,metadata` by index). ≥6 chosen files ⇒ ONE delta exercises every classifier branch. Renames stay a separate pass (`--edit-kind rename`). |
 
 ## Delta schema — modified-files + hunks
 
@@ -236,6 +237,51 @@ add/add, identical-overlap, one-sided-clean each side), with its own `conflictTr
 each region to its kind.
 
 **All four steps (+ the edge kinds) are now implemented and locked end-to-end.**
+
+## 1.1.1 additions (post-v1.1.0, additive — manifestVersion stays 1)
+
+### Single-locality giant (`--giant-edit single`)
+See §"Giant files" above — one localized one-line insert into a giant, emitted as ONE explicit insert hunk
+(not the strided run-rule), for the content-defined-chunker locality case.
+
+### `--edit-kind mixed`
+One delta whose files span every reason class: a deterministic per-file kind cycle
+(`content,eol,whitespace,encoding,binary,metadata` by selection index). ≥6 chosen files ⇒ all six branches
+appear in a single delta. Each file's record carries its own `reason`; no schema or digest change. Renames
+remain a separate pass (`--edit-kind rename`).
+
+### `_meta.gen` — effective generation knobs (reproducibility)
+The **gen** manifest (`<corpus>-manifest.json`) now carries a `_meta.gen` object: the EFFECTIVE knobs that
+produced the corpus (post-scale counts + literal sizes/flags + seed/scale), i.e. the self-contained recipe to
+regenerate the tree byte-identically. Additive and ignored by readers that don't look for it; it does **not**
+enter any `truthSha` (it only changes the manifest file's own `baseManifestSha`, which is not a digest input).
+A corpus genned pre-1.1.1 simply lacks the block.
+
+### Paged / sharded delta (`--shard-size N`)
+A death-scale 2-way delta can exceed what a consumer streams through `JsonDocument.Parse` whole. `--shard-size
+N` (0 = monolithic default) switches the **2-way** delta to a paged transport:
+
+- **`<corpus>-delta.index.json`** — the `_meta` (incl a `shardSize: N` marker + the sharding-invariant
+  `diffTruthSha`), the inline `fileOps.added`/`removed`/`renamed`, and a `shards[]` catalog. It carries **no**
+  `modified` array.
+- **`<corpus>-delta.shard-NNN.json`** (000, 001, …) — each holds a `modified[]` array of ≤ N records, in
+  path-ordinal order, **non-overlapping** across files, plus `shardIndex` + `count`.
+- **`shards[]`** entries: `{ file, firstPath, lastPath, count, shardSha }` where `shardSha` = sha256 of the
+  shard file's bytes (transport integrity). Paging is detected by the presence of the index / `shards[]`.
+
+```json
+"shards": [
+  { "file": "death-delta.shard-000.json", "firstPath": "a/…", "lastPath": "f/…", "count": 1000, "shardSha": "…" },
+  { "file": "death-delta.shard-001.json", "firstPath": "g/…", "lastPath": "z/…", "count":  742, "shardSha": "…" }
+]
+```
+
+**`diffTruthSha` is SHARDING-INVARIANT.** It is computed over the full dedup-ordinal-sorted record set *before*
+sharding, so a consumer that concatenates every shard's `modified[]` with the index's `fileOps` reproduces the
+identical hash — the monolithic and paged forms are the same answer key, pure transport. `manifestVersion`
+stays 1; the frozen golden vectors are untouched. (3-way variant deltas stay monolithic — sharding targets the
+one monolithic 2-way delta.) A mutate run cleans up any prior delta artifacts (monolithic ↔ index+shards) so a
+corpus never carries a stale mix.
 
 ## Sequencing (locked)
 

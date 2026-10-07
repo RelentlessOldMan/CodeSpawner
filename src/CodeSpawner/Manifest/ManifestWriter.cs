@@ -21,6 +21,19 @@ public static class ManifestWriter
         w.WriteString("generatorVersion", m.GeneratorVersion);
         w.WriteNumber("seed", m.Seed);
         w.WriteString("corpusRoot", m.CorpusRoot);
+        if (m.Gen.Count > 0)
+        {
+            // Effective generation knobs — the recipe to regen this corpus byte-identically. Additive, v1.
+            w.WriteStartObject("gen");
+            foreach (var k in m.Gen)
+            {
+                if (k.Int is { } i) w.WriteNumber(k.Name, i);
+                else if (k.Real is { } r) w.WriteNumber(k.Name, r);
+                else if (k.Flag is { } b) w.WriteBoolean(k.Name, b);
+                else if (k.Text is { } t) w.WriteString(k.Name, t);
+            }
+            w.WriteEndObject();
+        }
         if (m.Populations.Count > 0)
         {
             // Per-population shape so a consumer can assert the corpus is what it expects before pass/fail.

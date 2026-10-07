@@ -84,6 +84,24 @@ public sealed class DupGroup
 /// <summary>Per-population shape stats surfaced under <c>_meta.populations</c> (additive, v1).</summary>
 public sealed record PopulationStat(string Name, long FileCount, long TotalBytes, long IdentCount);
 
+/// <summary>
+/// One effective generation knob recorded under <c>_meta.gen</c> (reproducibility). The value is exactly one of
+/// int / real / flag / text — tagged so the AOT JSON writer emits the right JSON token without reflection.
+/// </summary>
+public sealed class GenKnob
+{
+    public required string Name { get; init; }
+    public long? Int { get; init; }
+    public double? Real { get; init; }
+    public bool? Flag { get; init; }
+    public string? Text { get; init; }
+
+    public static GenKnob Of(string name, long v) => new() { Name = name, Int = v };
+    public static GenKnob Of(string name, double v) => new() { Name = name, Real = v };
+    public static GenKnob Of(string name, bool v) => new() { Name = name, Flag = v };
+    public static GenKnob Of(string name, string v) => new() { Name = name, Text = v };
+}
+
 /// <summary>The full v1 manifest: <c>_meta</c> + a symbol table keyed by symbol name.</summary>
 public sealed class ManifestModel
 {
@@ -94,6 +112,13 @@ public sealed class ManifestModel
 
     /// <summary>Optional per-population shape stats for consumer "is this the corpus I expect?" assertions.</summary>
     public List<PopulationStat> Populations { get; } = new();
+
+    /// <summary>
+    /// Effective generation knobs (post-scale counts + literal sizes/flags) surfaced under <c>_meta.gen</c> for
+    /// reproducibility — the self-contained recipe to regen this corpus byte-identically. Empty ⇒ no block (so a
+    /// mutate- or test-built manifest stays unchanged). Additive, v1.
+    /// </summary>
+    public List<GenKnob> Gen { get; } = new();
 
     /// <summary>
     /// Declared entry-point symbol names (oracle overlay). Reachability = closure over (edges ∪ indirectEdges)

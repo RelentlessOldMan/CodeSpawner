@@ -211,9 +211,13 @@ public static class Program
                                       encoding     UTF-8<->UTF-16 (reason encoding; no hunks)
                                       binary       flip raw bytes (reason binary; no hunks)
                                       metadata     mode-only      (reason metadata; content identical)
+                                      mixed        one kind/file  (cycles the six reasons above; ≥6 files ⇒ all)
                                       rename       move files     (graded renamed[] + rename+edit hunks)
               --decoy-fraction <f>  (rename only) fraction of files emitted as near-duplicate ADD decoys
                                     (original kept) — rename false-positive traps, 0..1 (default 0)
+              --shard-size <n>      0 = one monolithic <corpus>-delta.json (default); >0 = paged transport:
+                                    a <corpus>-delta.index.json + <corpus>-delta.shard-NNN.json files of <= n
+                                    modified records each (diffTruthSha is sharding-invariant; 2-way only)
               (emits one base->variant <corpus>-delta.json with per-file reason + old/new sha+size + unified
                hunks [a compact run-rule for giant files] + a _meta.diffTruthSha; see docs/diff-delta-design.md.
                e.g. --target giant --files-changed 3 --edit-density 0.5  vs

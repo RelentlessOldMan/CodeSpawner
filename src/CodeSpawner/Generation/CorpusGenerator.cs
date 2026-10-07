@@ -279,6 +279,62 @@ public sealed class CorpusGenerator
             TinyFileEmitter.Write(dir, i, ref rng);
         });
 
+    /// <summary>
+    /// Record the EFFECTIVE generation knobs under <c>_meta.gen</c> (reproducibility). Counts mirror the exact
+    /// <see cref="GenOptions.Eff"/> expressions used to emit each population (explicit → literal, else default ×
+    /// scale), so re-running gen with these values (all explicit ⇒ scaling bypassed) reproduces the corpus tree
+    /// byte-identically. Sizes / structure / flags are literal. Machine-independent — no absolute paths.
+    /// </summary>
+    private void AddGenKnobs(ManifestModel m)
+    {
+        var g = m.Gen;
+        g.Add(GenKnob.Of("scale", _o.Scale));
+        g.Add(GenKnob.Of("seed", (long)_o.Seed));
+        // effective population counts — exactly what was emitted
+        g.Add(GenKnob.Of("giantHeaders", (long)_o.Eff("GiantHeaders", _o.GiantHeaders, keepOne: true)));
+        g.Add(GenKnob.Of("bigHeaders", (long)_o.Eff("BigHeaders", _o.BigHeaders)));
+        g.Add(GenKnob.Of("medHeaders", (long)_o.Eff("MedHeaders", _o.MedHeaders)));
+        g.Add(GenKnob.Of("ordinaryHeaders", (long)_o.Eff("OrdinaryHeaders", _o.OrdinaryHeaders)));
+        g.Add(GenKnob.Of("cfiles", (long)Math.Max(2, _o.Eff("CFiles", _o.CFiles))));
+        g.Add(GenKnob.Of("tinyFiles", (long)_o.Eff("TinyFiles", _o.TinyFiles)));
+        g.Add(GenKnob.Of("blobFiles", (long)_o.Eff("BlobFiles", _o.BlobFiles)));
+        g.Add(GenKnob.Of("denseHeaders", (long)_o.Eff("DenseHeaders", _o.DenseHeaders)));
+        g.Add(GenKnob.Of("broadTokenFiles", (long)_o.Eff("BroadTokenFiles", _o.BroadTokenFiles)));
+        g.Add(GenKnob.Of("longLineFiles", (long)_o.Eff("LongLineFiles", _o.LongLineFiles)));
+        g.Add(GenKnob.Of("encodingMix", (long)_o.Eff("EncodingMix", _o.EncodingMix)));
+        g.Add(GenKnob.Of("pathologicalSymbols", (long)_o.Eff("PathologicalSymbols", _o.PathologicalSymbols)));
+        g.Add(GenKnob.Of("dupGroups", (long)_o.Eff("DupGroups", _o.DupGroups)));
+        // seed files + tree structure (never scaled)
+        g.Add(GenKnob.Of("shrinkSeeds", (long)_o.ShrinkSeeds));
+        g.Add(GenKnob.Of("restreamSeeds", (long)_o.RestreamSeeds));
+        g.Add(GenKnob.Of("giantIncluders", (long)_o.GiantIncluders));
+        g.Add(GenKnob.Of("dirs", (long)_o.Dirs));
+        g.Add(GenKnob.Of("depth", (long)_o.Depth));
+        g.Add(GenKnob.Of("linkedRoots", (long)_o.LinkedRoots));
+        g.Add(GenKnob.Of("unresolvedIncludes", (long)_o.UnresolvedIncludes));
+        // per-file sizes / scalars (never scaled)
+        g.Add(GenKnob.Of("maxHeaderMB", (long)_o.MaxHeaderMB));
+        g.Add(GenKnob.Of("macroDensity", (long)_o.MacroDensity));
+        g.Add(GenKnob.Of("denseUnderMb", (long)_o.DenseUnderMb));
+        g.Add(GenKnob.Of("maxLineBytes", (long)_o.MaxLineBytes));
+        g.Add(GenKnob.Of("dupCopies", (long)_o.DupCopies));
+        g.Add(GenKnob.Of("hotTokenShare", _o.HotTokenShare));
+        g.Add(GenKnob.Of("noNewline", _o.NoNewline));
+        g.Add(GenKnob.Of("compileDb", _o.CompileDb.ToString().ToLowerInvariant()));
+        g.Add(GenKnob.Of("buildOutput", _o.BuildOutput));
+        // oracle overlay
+        g.Add(GenKnob.Of("withOracle", _o.WithOracle));
+        g.Add(GenKnob.Of("oracleScale", _o.OracleScale));
+        g.Add(GenKnob.Of("oracleBytes", _o.OracleBytes));
+        g.Add(GenKnob.Of("oracleChain", (long)_o.OracleChain));
+        g.Add(GenKnob.Of("oracleFanout", (long)_o.OracleFanout));
+        g.Add(GenKnob.Of("oracleDepth", (long)_o.OracleDepth));
+        g.Add(GenKnob.Of("oracleSharedLeaves", (long)_o.OracleSharedLeaves));
+        g.Add(GenKnob.Of("oracleReachableFrac", _o.OracleReachableFrac));
+        g.Add(GenKnob.Of("oracleIndirect", (long)_o.OracleIndirect));
+        if (_o.FromProfile is { } fp) g.Add(GenKnob.Of("fromProfile", fp));
+    }
+
     private ManifestModel BuildManifest(string outFull, SourceEmitResult src, UnresolvedEmitResult? unres,
         BroadTokenEmitResult? broad, List<PathoSym>? patho, List<DupGroupResult>? dups, PopulationStats stats)
     {
@@ -288,6 +344,7 @@ public sealed class CorpusGenerator
             Seed = _o.Seed,
             CorpusRoot = outFull,
         };
+        AddGenKnobs(model);
         foreach (var p in stats.Snapshot())
             model.Populations.Add(new PopulationStat(p.Name, p.Files, p.Bytes, p.Idents));
 

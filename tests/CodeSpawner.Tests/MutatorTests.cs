@@ -221,6 +221,45 @@ public class MutatorTests
     }
 
     [Fact]
+    public void NotEnoughShrinkSeeds_ThrowsClearArgException_NotIndexCrash()
+    {
+        using var tmp = new TempDir();
+        // One grow seed + one shrink seed, no restream ⇒ cycle = [Remove, LineShift, Add, Grow, Shrink].
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6, extra: c =>
+        {
+            File.WriteAllText(Path.Combine(c, "hdr_0.h"), "#pragma once\n");
+            File.WriteAllText(Path.Combine(c, "mut_shrink_0.h"), new string('x', 200));
+        });
+
+        // --edits 10 puts Shrink at edit 5 and edit 10 ⇒ demands 2 shrink seeds; only 1 exists. Must be a clear
+        // plan-time ArgException, NOT the raw ArgumentOutOfRangeException CodeCompass hit in 1.0.4.
+        var ex = Assert.Throws<ArgException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 10, Seed = 7 }));
+        Assert.Contains("2 shrink seed", ex.Message);
+        Assert.Contains("--shrink-seeds", ex.Message);
+        // --edits 8 (one Shrink) and --shrink-seeds 2 (if present) both stay fine: 8 edits ⇒ Shrink only at edit 5.
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 8, Seed = 7 }));
+    }
+
+    [Fact]
+    public void NotEnoughRestreamSeeds_ThrowsClearArgException()
+    {
+        using var tmp = new TempDir();
+        // Grow + one shrink + one restream ⇒ cycle = [Remove, LineShift, Add, Grow, Shrink, Restream] (6 types).
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 8, extra: c =>
+        {
+            File.WriteAllText(Path.Combine(c, "hdr_0.h"), "#pragma once\n");
+            File.WriteAllText(Path.Combine(c, "mut_shrink_0.h"), new string('x', 200));
+            File.WriteAllText(Path.Combine(c, "mut_restream_0.h"), new string('y', 200));
+            File.WriteAllText(Path.Combine(c, "mut_shrink_1.h"), new string('x', 200));  // 2 shrink seeds, 1 restream
+        });
+
+        // Restream is edit 6 and edit 12 ⇒ --edits 12 demands 2 restream seeds; only 1 exists.
+        var ex = Assert.Throws<ArgException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 12, Seed = 7, Restream = true }));
+        Assert.Contains("2 restream seed", ex.Message);
+        Assert.Contains("--restream-seeds", ex.Message);
+    }
+
+    [Fact]
     public void Run_MissingCorpus_ReturnsError()
         => Assert.Equal(2, Mutator.Run(new MutateOptions { Corpus = Path.Combine(Path.GetTempPath(), "does-not-exist-" + Guid.NewGuid()) }));
 }

@@ -397,6 +397,36 @@ public class MutatorBulkTests
         Assert.Equal(before, File.ReadAllBytes(Path.Combine(corpus, "src_0.c")));                     // bytes untouched on disk
     }
 
+    [Fact]
+    public void Kind_Mixed_OneDeltaSpansEveryReasonClass()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 6, lines: 20);   // 6 files ⇒ the full cycle appears once each
+
+        int rc = Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "mixed", EditDensity = 0.5, Seed = 7 });
+        Assert.Equal(0, rc);
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(delta));
+        Assert.Equal("mixed", doc.RootElement.GetProperty("_meta").GetProperty("editKind").GetString());
+        var reasons = doc.RootElement.GetProperty("fileOps").GetProperty("modified").EnumerateArray()
+            .Select(e => e.GetProperty("reason").GetString()!).ToHashSet();
+        // every classifier branch exercised by a single bulk delta
+        Assert.Equal(new HashSet<string> { "content", "eol", "whitespace", "encoding", "binary", "metadata" }, reasons);
+    }
+
+    [Fact]
+    public void Kind_Mixed_IsDeterministic_SameSeed()
+    {
+        string Truth()
+        {
+            using var tmp = new TempDir();
+            var (corpus, delta) = BuildCorpus(tmp, nSource: 8, lines: 30);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "mixed", EditDensity = 0.5, Seed = 11 });
+            return DiffTruthSha(delta);
+        }
+        Assert.Equal(Truth(), Truth());
+    }
+
     // --- step 3: rename / move + decoys ---
 
     private static List<JsonElement> Renamed(string deltaPath)
@@ -937,5 +967,98 @@ public class MutatorBulkTests
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, EditDensity = 0.1, Seed = 3 });
         var h = ModifiedRecord(delta, "big.h").GetProperty("hunks")[0];
         Assert.Equal("run", h.GetProperty("kind").GetString());
+    }
+
+    // --- step 5 (1.1.1): paged / sharded delta (--shard-size) ---
+
+    // The index file + its ordinal-sorted shard files for a given monolithic <corpus>-delta.json path.
+    private static (string index, string[] shards) ShardPaths(string deltaJson)
+    {
+        string baseName = deltaJson[..^".json".Length];                  // ".../corpus-delta.json" → ".../corpus-delta"
+        string dir = Path.GetDirectoryName(deltaJson)!, leaf = Path.GetFileName(baseName);
+        var shards = Directory.GetFiles(dir, $"{leaf}.shard-*.json").OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        return ($"{baseName}.index.json", shards);
+    }
+
+    [Fact]
+    public void Sharding_IsTruthShaInvariant_AndReassemblesToMonolithic()
+    {
+        // Monolithic run on one corpus; sharded run on a byte-identical copy with the same seed ⇒ the diffTruthSha
+        // must be identical (pure transport) and the shards must reassemble to the same modified set.
+        string monoSha; List<string> monoMods;
+        using (var tmp = new TempDir())
+        {
+            var (corpus, delta) = BuildCorpus(tmp, nSource: 10, lines: 20);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 7 });
+            monoSha = DiffTruthSha(delta);
+            monoMods = ModifiedFiles(delta).OrderBy(x => x, StringComparer.Ordinal).ToList();
+            Assert.True(monoMods.Count > 3);                             // enough to span multiple shards at size 3
+        }
+
+        using (var tmp = new TempDir())
+        {
+            var (corpus, delta) = BuildCorpus(tmp, nSource: 10, lines: 20);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 7, ShardSize = 3 });
+
+            Assert.False(File.Exists(delta));                            // no monolithic delta in paged mode
+            var (index, shards) = ShardPaths(delta);
+            Assert.True(File.Exists(index));
+            Assert.Equal((monoMods.Count + 2) / 3, shards.Length);       // ceil(n/3) shard files
+
+            using var idx = JsonDocument.Parse(File.ReadAllText(index));
+            var meta = idx.RootElement.GetProperty("_meta");
+            Assert.Equal(monoSha, meta.GetProperty("diffTruthSha").GetString());   // SHARDING-INVARIANT
+            Assert.Equal(1, meta.GetProperty("manifestVersion").GetInt32());       // version unchanged
+            Assert.Equal(3, meta.GetProperty("shardSize").GetInt32());
+            var entries = idx.RootElement.GetProperty("shards").EnumerateArray().ToList();
+            Assert.Equal(shards.Length, entries.Count);
+            Assert.False(idx.RootElement.GetProperty("fileOps").TryGetProperty("modified", out _)); // modified lives in shards
+
+            var reassembled = new List<string>();
+            string? prevLast = null;
+            for (int i = 0; i < shards.Length; i++)
+            {
+                using var sd = JsonDocument.Parse(File.ReadAllText(shards[i]));
+                var mods = sd.RootElement.GetProperty("modified").EnumerateArray()
+                    .Select(e => e.GetProperty("path").GetString()!).ToList();
+                reassembled.AddRange(mods);
+
+                var e = entries[i];
+                Assert.Equal(Path.GetFileName(shards[i]), e.GetProperty("file").GetString());
+                Assert.Equal(mods.Count, e.GetProperty("count").GetInt32());
+                Assert.True(mods.Count <= 3);
+                Assert.Equal(mods.First(), e.GetProperty("firstPath").GetString());
+                Assert.Equal(mods.Last(), e.GetProperty("lastPath").GetString());
+                Assert.Equal(Sha(File.ReadAllBytes(shards[i])).ToLowerInvariant(), e.GetProperty("shardSha").GetString());
+                // non-overlapping, path-ordinal across shard boundaries
+                if (prevLast is not null) Assert.True(string.CompareOrdinal(prevLast, mods.First()) < 0);
+                prevLast = mods.Last();
+            }
+            Assert.Equal(reassembled, reassembled.OrderBy(x => x, StringComparer.Ordinal).ToList());  // globally ordered
+            Assert.Equal(monoMods, reassembled);                         // reassembles to the exact monolithic set
+        }
+    }
+
+    [Fact]
+    public void Sharding_CleansUpStaleArtifacts_OnModeSwitch()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 6, lines: 20);
+
+        // sharded first
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 7, ShardSize = 2 });
+        var (index, shards) = ShardPaths(delta);
+        Assert.True(File.Exists(index) && shards.Length > 0 && !File.Exists(delta));
+
+        // switch to monolithic ⇒ stale index + shards removed, delta present
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 8, ShardSize = 0 });
+        Assert.True(File.Exists(delta));
+        Assert.False(File.Exists(index));
+        Assert.Empty(ShardPaths(delta).shards);
+
+        // switch back to sharded ⇒ monolithic removed, index back
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 9, ShardSize = 2 });
+        Assert.False(File.Exists(delta));
+        Assert.True(File.Exists(ShardPaths(delta).index));
     }
 }

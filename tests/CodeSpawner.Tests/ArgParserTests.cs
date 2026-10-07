@@ -262,6 +262,7 @@ public class ArgParserTests
     [InlineData("encoding")]
     [InlineData("binary")]
     [InlineData("metadata")]
+    [InlineData("mixed")]
     [InlineData("rename")]
     public void Mutate_Bulk_EditKind_Parses(string kind)
     {
@@ -349,6 +350,26 @@ public class ArgParserTests
     [Fact]
     public void Mutate_GiantEdit_WithoutTarget_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--giant-edit", "single" }));
+
+    [Fact]
+    public void Mutate_ShardSize_Parses()
+        => Assert.Equal(1000, ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--shard-size", "1000" }).ShardSize);
+
+    [Fact]
+    public void Mutate_ShardSize_DefaultsToZero()
+        => Assert.Equal(0, ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source" }).ShardSize);
+
+    [Fact]
+    public void Mutate_ShardSize_Negative_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--shard-size", "-1" }));
+
+    [Fact]
+    public void Mutate_ShardSize_WithThreeWay_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--shard-size", "5" }));
+
+    [Fact]
+    public void Mutate_ShardSize_WithoutTarget_Throws()
+        => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--shard-size", "5" }));
 
     // --- remaining gen knobs (the half not in the spread tests) + the ParseBool false arm ---
 
