@@ -211,7 +211,7 @@ public static class Program
                                       encoding     UTF-8<->UTF-16 (reason encoding; no hunks)
                                       binary       flip raw bytes (reason binary; no hunks)
                                       metadata     mode-only      (reason metadata; content identical)
-                                      mixed        one kind/file  (cycles the six reasons above; ≥6 files ⇒ all)
+                                      mixed        one kind/file  (cycles the six reasons; ≥6 content-bearing files ⇒ all)
                                       rename       move files     (graded renamed[] + rename+edit hunks)
               --decoy-fraction <f>  (rename only) fraction of files emitted as near-duplicate ADD decoys
                                     (original kept) — rename false-positive traps, 0..1 (default 0)

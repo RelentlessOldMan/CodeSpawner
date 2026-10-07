@@ -332,7 +332,8 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("oracleSharedLeaves", (long)_o.OracleSharedLeaves));
         g.Add(GenKnob.Of("oracleReachableFrac", _o.OracleReachableFrac));
         g.Add(GenKnob.Of("oracleIndirect", (long)_o.OracleIndirect));
-        if (_o.FromProfile is { } fp) g.Add(GenKnob.Of("fromProfile", fp));
+        // (no fromProfile knob here: `gen --from-profile` is dispatched to ProfileGenerator, not this path, so
+        //  _o.FromProfile is always null here. A profile-genned corpus's reproduction recipe IS the profile file.)
     }
 
     private ManifestModel BuildManifest(string outFull, SourceEmitResult src, UnresolvedEmitResult? unres,
