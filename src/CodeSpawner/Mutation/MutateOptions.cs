@@ -66,6 +66,14 @@ public sealed class MutateOptions
     public string? GiantEdit { get; set; }
     public string GiantEditMode => GiantEdit ?? "strided";
 
+    /// <summary>
+    /// Max modified-file records per shard. 0 (default) = one monolithic <c>&lt;corpus&gt;-delta.json</c>. &gt;0 =
+    /// paged transport: a <c>&lt;corpus&gt;-delta.index.json</c> + <c>&lt;corpus&gt;-delta.shard-NNN.json</c> files,
+    /// so a death-scale delta a consumer can't <c>JsonDocument.Parse</c> whole streams shard-by-shard. The
+    /// diffTruthSha is sharding-INVARIANT (pure transport). Applies to the 2-way delta only.
+    /// </summary>
+    public int ShardSize { get; set; }
+
     /// <summary>True when bulk in-place mutation is requested.</summary>
     public bool IsBulk => Target is not null;
 }

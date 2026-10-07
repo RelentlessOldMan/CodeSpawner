@@ -176,6 +176,7 @@ public static class ArgParser
                 case "overlap-fraction": o.OverlapFraction = Dbl(key, Val()); break;
                 case "conflict-edges": o.ConflictEdges = true; break;
                 case "giant-edit": o.GiantEdit = Val().ToLowerInvariant(); break;
+                case "shard-size": o.ShardSize = Int(key, Val()); break;
                 default: throw new ArgException($"unknown option --{key}");
             }
         }
@@ -186,8 +187,8 @@ public static class ArgParser
             if (o.Target is not ("source" or "headers" or "giant" or "all"))
                 throw new ArgException($"--target must be one of source|headers|giant|all, got '{o.Target}'");
             if (o.Step is not null) throw new ArgException("--target (bulk mode) cannot be combined with --step");
-            if (o.EditKind is not (null or "content" or "line-insert" or "line-delete" or "eol" or "whitespace" or "encoding" or "binary" or "metadata" or "rename"))
-                throw new ArgException($"--edit-kind must be one of content|line-insert|line-delete|eol|whitespace|encoding|binary|metadata|rename, got '{o.EditKind}'");
+            if (o.EditKind is not (null or "content" or "line-insert" or "line-delete" or "eol" or "whitespace" or "encoding" or "binary" or "metadata" or "mixed" or "rename"))
+                throw new ArgException($"--edit-kind must be one of content|line-insert|line-delete|eol|whitespace|encoding|binary|metadata|mixed|rename, got '{o.EditKind}'");
             if (o.DecoyFraction is < 0 or > 1) throw new ArgException("--decoy-fraction must be in [0, 1]");
             if (o.DecoyFraction > 0 && o.Kind != "rename") throw new ArgException("--decoy-fraction only applies to --edit-kind rename");
             if (o.OverlapFraction is < 0 or > 1) throw new ArgException("--overlap-fraction must be in [0, 1]");
@@ -197,6 +198,8 @@ public static class ArgParser
             if (o.EditDensity <= 0 || o.EditDensity > 1) throw new ArgException("--edit-density must be in (0, 1]");
             if (o.FilesChanged is { } fc && fc < 1) throw new ArgException("--files-changed must be >= 1");
             if (o.GiantMinMb < 1) throw new ArgException("--giant-min-mb must be >= 1");
+            if (o.ShardSize < 0) throw new ArgException("--shard-size must be >= 0 (0 = monolithic delta)");
+            if (o.ShardSize > 0 && o.ThreeWay) throw new ArgException("--shard-size applies to the 2-way delta; it cannot be combined with --three-way");
             return o;
         }
 
@@ -204,6 +207,7 @@ public static class ArgParser
         if (o.ThreeWay) throw new ArgException("--three-way requires --target (bulk mode)");
         if (o.ConflictEdges) throw new ArgException("--conflict-edges requires --three-way (bulk mode)");
         if (o.GiantEdit is not null) throw new ArgException("--giant-edit requires --target (bulk mode)");
+        if (o.ShardSize > 0) throw new ArgException("--shard-size requires --target (bulk mode)");
         if (o.DecoyFraction > 0) throw new ArgException("--decoy-fraction requires --target (bulk mode)");
         if (o.FilesChanged is not null) throw new ArgException("--files-changed requires --target (bulk mode)");
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");

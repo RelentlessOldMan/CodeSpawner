@@ -92,6 +92,45 @@ public class ProgramTests
     }
 
     [Fact]
+    public void Gen_RecordsEffectiveKnobsUnderMetaGen_ForReproducibility()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "corpus");
+        int rc = Cli("gen", "--out", corpus, "--scale", "0.0003", "--seed", "42",
+            "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--ordinary-headers", "0",
+            "--tiny-files", "0", "--blob-files", "0", "--cfiles", "4", "--shrink-seeds", "2");
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(tmp.Path, "corpus-manifest.json")));
+        var gen = doc.RootElement.GetProperty("_meta").GetProperty("gen");
+        // effective knobs = the recipe to regen this corpus byte-identically
+        Assert.Equal(42, gen.GetProperty("seed").GetInt32());
+        Assert.Equal(0.0003, gen.GetProperty("scale").GetDouble(), 6);
+        Assert.Equal(4, gen.GetProperty("cfiles").GetInt32());        // explicit ⇒ literal (not scaled)
+        Assert.Equal(0, gen.GetProperty("giantHeaders").GetInt32());  // disabled population recorded as 0
+        Assert.Equal(2, gen.GetProperty("shrinkSeeds").GetInt32());
+        Assert.Equal("none", gen.GetProperty("compileDb").GetString());
+        Assert.False(gen.GetProperty("withOracle").GetBoolean());
+        Assert.False(gen.TryGetProperty("fromProfile", out _));       // absent when --from-profile not set
+    }
+
+    [Fact]
+    public void Gen_MetaGenBlock_IsDeterministic_SameArgs()
+    {
+        string GenBlock()
+        {
+            using var tmp = new TempDir();
+            string corpus = Path.Combine(tmp.Path, "c");
+            Cli("gen", "--out", corpus, "--scale", "0.0003", "--seed", "9",
+                "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--ordinary-headers", "0",
+                "--tiny-files", "0", "--blob-files", "0", "--cfiles", "3");
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(tmp.Path, "c-manifest.json")));
+            return doc.RootElement.GetProperty("_meta").GetProperty("gen").GetRawText();
+        }
+        Assert.Equal(GenBlock(), GenBlock());   // knobs are machine-independent ⇒ byte-identical across runs
+    }
+
+    [Fact]
     public void Gen_RefusesForeignDir_UnlessForced()
     {
         using var tmp = new TempDir();
