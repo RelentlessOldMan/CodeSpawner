@@ -49,23 +49,35 @@ public static class Presets
     // dup-content: byte-identical copies + near-identical controls — content-hash dedup / posting collapse.
     private static readonly string[] DupContent = [.. Bare, "--dup-groups", "200", "--dup-copies", "4"];
 
+    // Single source of truth: resolution (TryGet), the advertised name list (Names), and the error-message
+    // hints all derive from this one ordered registry, so a preset can't be added in one place and forgotten
+    // in another. Order here is the advertised order.
+    private static readonly (string Name, string[] Tokens)[] Registry =
+    [
+        ("death", Death),
+        ("ci", Ci),
+        ("memory", Memory),
+        ("dense-band", DenseBand),
+        ("broad-token", BroadToken),
+        ("long-lines", LongLines),
+        ("encoding-mix", EncodingMix),
+        ("many-tiny", ManyTiny),
+        ("pathological-symbols", PathologicalSymbols),
+        ("dup-content", DupContent),
+    ];
+
+    /// <summary>The advertised preset names, in registry order.</summary>
+    public static readonly string[] Names = Array.ConvertAll(Registry, p => p.Name);
+
     public static bool TryGet(string name, out string[] tokens)
     {
-        tokens = name.ToLowerInvariant() switch
+        string key = name.ToLowerInvariant();
+        foreach (var (n, t) in Registry)
         {
-            "death" => Death,
-            "ci" => Ci,
-            "memory" => Memory,
-            "dense-band" => DenseBand,
-            "broad-token" => BroadToken,
-            "long-lines" => LongLines,
-            "encoding-mix" => EncodingMix,
-            "many-tiny" => ManyTiny,
-            "pathological-symbols" => PathologicalSymbols,
-            "dup-content" => DupContent,
-            _ => [],
-        };
-        return tokens.Length > 0;
+            if (n == key) { tokens = t; return true; }
+        }
+        tokens = [];
+        return false;
     }
 
     /// <summary>Pull a leading/embedded <c>--preset NAME</c> out of args and prepend its tokens.</summary>
@@ -78,7 +90,7 @@ public static class Presets
             string a = args[i];
             if (a == "--preset")
             {
-                if (i + 1 >= args.Length) throw new ArgException("--preset needs a name (death|ci|memory)");
+                if (i + 1 >= args.Length) throw new ArgException($"--preset needs a name ({string.Join("|", Names)})");
                 name = args[++i];
             }
             else if (a.StartsWith("--preset=", StringComparison.Ordinal))
@@ -90,7 +102,7 @@ public static class Presets
 
         if (name is null) return args;
         if (!TryGet(name, out var tokens))
-            throw new ArgException($"unknown preset '{name}' (death|ci|memory|dense-band|broad-token|long-lines|encoding-mix|many-tiny|pathological-symbols|dup-content)");
+            throw new ArgException($"unknown preset '{name}' ({string.Join("|", Names)})");
 
         // preset first, user args after -> user overrides.
         return [.. tokens, .. rest];
