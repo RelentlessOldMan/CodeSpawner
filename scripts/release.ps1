@@ -48,10 +48,22 @@ git push --quiet origin "v$ver"
 $exe = Join-Path $root 'dist\codespawner.exe'
 if (-not (Test-Path $exe)) { throw "Build did not produce dist\codespawner.exe - aborting release." }
 
-# 6. Create the GitHub release with codespawner.exe attached.
+# 6. Pull this version's section out of CHANGELOG.md so the release notes describe
+#    what actually changed. No section for $ver => refuse to release (update it first).
+$changelog = Join-Path $root 'CHANGELOG.md'
+if (-not (Test-Path $changelog)) { throw "CHANGELOG.md not found - add it before releasing." }
+$clText = [System.IO.File]::ReadAllText($changelog)
+$m = [regex]::Match($clText, "(?ms)^## \[$([regex]::Escape($ver))\][^\r\n]*\r?\n(.*?)(?=^## \[|\z)")
+if (-not $m.Success) { throw "CHANGELOG.md has no '## [$ver]' section - describe the release there before cutting it." }
+$changes = $m.Groups[1].Value.Trim()
+if (-not $changes) { throw "CHANGELOG.md section for $ver is empty - describe the release before cutting it." }
+
+# 7. Create the GitHub release with codespawner.exe attached (changelog section + the standing boilerplate).
 $notes = @"
 **CodeSpawner v$ver** - deterministic synthetic code-corpus generator for stress-testing code indexing,
 search, and carving tools at 100 GB+ scale, with a machine-checkable ground-truth manifest.
+
+$changes
 
 **Windows (no runtime needed):** download **codespawner.exe** below and run it. It is a self-contained
 Native AOT binary - no .NET install required. First launch may show an unsigned-app SmartScreen prompt --
