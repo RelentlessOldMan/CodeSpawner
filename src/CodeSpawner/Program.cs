@@ -152,9 +152,13 @@ public static class Program
     private static bool IsHelp(string a) =>
         a is "-h" or "--help" or "help" or "/?";
 
-    private static void PrintUsage()
-    {
-        Console.WriteLine($"""
+    private static void PrintUsage() => Console.WriteLine(UsageText);
+
+    // The full gen/scan/verify/mutate help. Exposed internally (not just printed) so a test can assert the
+    // PRESETS block stays in sync with Presets.Names — the one copy of the preset-name list the single-source
+    // registry can't derive, because these lines carry human descriptions Names doesn't have. The test guards
+    // the names; see PresetsTests.HelpText_ListsEveryAdvertisedPreset.
+    internal static readonly string UsageText = $"""
             codespawner {Version} — synthetic code-corpus generator
 
             USAGE:
@@ -262,6 +266,5 @@ public static class Program
               --io-parallelism <n>   max concurrent large-header writes
 
             Run 'codespawner gen --out .\\_fw --scale 0.01 --giant-headers 0' for a fast smoke.
-            """);
-    }
+            """;
 }
