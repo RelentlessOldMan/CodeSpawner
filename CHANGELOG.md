@@ -22,7 +22,7 @@ reads it.
   - Stale-artifact cleanup now runs once at bulk entry and covers every delta
     shape (2-way, 3-way, and sharded), instead of only the 2-way monolithic path.
   - Hardened the delta-artifact glob against bare-relative corpus paths.
-  - Softened the `--edit-kind mixed` doc/help wording (drops the "≥6 ⇒ all six"
+  - Softened the `--edit-kind mixed` doc/help wording (drops the ">=6 => all six"
     overclaim) to describe content-bearing files honestly.
 
 ## [1.1.1] - 2026-10-07
