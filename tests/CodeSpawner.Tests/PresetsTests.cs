@@ -1,3 +1,4 @@
+using CodeSpawner;
 using CodeSpawner.Cli;
 using Xunit;
 
@@ -39,6 +40,16 @@ public class PresetsTests
         var ex = Assert.Throws<ArgException>(() => Presets.Expand(new[] { "--preset", "no-such-preset" }));
         foreach (var name in Presets.Names)
             Assert.Contains(name, ex.Message);
+    }
+
+    // The gen --help PRESETS block (Program.UsageText) is the one preset-name list the single-source registry
+    // can't derive — it carries human descriptions Names doesn't have — so it's hand-maintained and could drift.
+    // This fails the build the moment a preset is added/renamed in the registry without updating the help text.
+    [Fact]
+    public void HelpText_ListsEveryAdvertisedPreset()
+    {
+        foreach (var name in Presets.Names)
+            Assert.Contains($"--preset {name}", Program.UsageText);
     }
 
     [Fact]
