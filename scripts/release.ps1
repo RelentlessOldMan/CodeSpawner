@@ -32,31 +32,32 @@ if ("$($Matches[1]).$($Matches[2]).$($Matches[3])" -eq $ver) {
     throw "Program.cs is already at $ver - bump to a new version (a release needs a version change to commit)."
 }
 
-# 3. Write the bumped version back (preserving the file exactly, UTF-8 no BOM).
+# 3. Pre-flight: pull this version's section out of CHANGELOG.md BEFORE we commit/tag/push or build,
+#    so a missing/empty section refuses the release cleanly instead of after a tag is already public.
+#    The capture stops at the next '## [' heading, the trailing '[x.y.z]: url' link-reference block, or EOF.
+$changelog = Join-Path $root 'CHANGELOG.md'
+if (-not (Test-Path $changelog)) { throw "CHANGELOG.md not found - add it before releasing." }
+$clText = [System.IO.File]::ReadAllText($changelog)
+$m = [regex]::Match($clText, "(?ms)^## \[$([regex]::Escape($ver))\][^\r\n]*\r?\n(.*?)(?=^## \[|^\[[^\]]+\]:|\z)")
+if (-not $m.Success) { throw "CHANGELOG.md has no '## [$ver]' section - describe the release there before cutting it." }
+$changes = $m.Groups[1].Value.Trim()
+if (-not $changes) { throw "CHANGELOG.md section for $ver is empty - describe the release before cutting it." }
+
+# 4. Write the bumped version back (preserving the file exactly, UTF-8 no BOM).
 $src = [regex]::Replace($src, 'Version\s*=\s*"\d+\.\d+\.\d+"', "Version = `"$ver`"")
 [System.IO.File]::WriteAllText($verFile, $src, (New-Object System.Text.UTF8Encoding($false)))
 
-# 4. Commit the bump, tag it, push both.
+# 5. Commit the bump, tag it, push both.
 git add $verFile
 git commit --quiet -m "Release v$ver"
 git tag "v$ver"
 git push --quiet origin main
 git push --quiet origin "v$ver"
 
-# 5. Build the standalone Native AOT exe from the just-bumped source, so its version matches the tag.
+# 6. Build the standalone Native AOT exe from the just-bumped source, so its version matches the tag.
 & (Join-Path $PSScriptRoot 'build.ps1')
 $exe = Join-Path $root 'dist\codespawner.exe'
 if (-not (Test-Path $exe)) { throw "Build did not produce dist\codespawner.exe - aborting release." }
-
-# 6. Pull this version's section out of CHANGELOG.md so the release notes describe
-#    what actually changed. No section for $ver => refuse to release (update it first).
-$changelog = Join-Path $root 'CHANGELOG.md'
-if (-not (Test-Path $changelog)) { throw "CHANGELOG.md not found - add it before releasing." }
-$clText = [System.IO.File]::ReadAllText($changelog)
-$m = [regex]::Match($clText, "(?ms)^## \[$([regex]::Escape($ver))\][^\r\n]*\r?\n(.*?)(?=^## \[|\z)")
-if (-not $m.Success) { throw "CHANGELOG.md has no '## [$ver]' section - describe the release there before cutting it." }
-$changes = $m.Groups[1].Value.Trim()
-if (-not $changes) { throw "CHANGELOG.md section for $ver is empty - describe the release before cutting it." }
 
 # 7. Create the GitHub release with codespawner.exe attached (changelog section + the standing boilerplate).
 $notes = @"
