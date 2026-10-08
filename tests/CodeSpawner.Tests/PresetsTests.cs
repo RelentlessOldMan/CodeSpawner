@@ -17,6 +17,32 @@ public class PresetsTests
         Assert.Contains("--giant-headers", tokens);
     }
 
+    // Every advertised preset name must resolve to a non-empty knob set — a mis-registered switch arm (typo'd
+    // name, forgotten case) would silently fall through to `_ => []` and TryGet would report the preset unknown.
+    [Theory]
+    [InlineData("death")]
+    [InlineData("ci")]
+    [InlineData("memory")]
+    [InlineData("dense-band")]
+    [InlineData("broad-token")]
+    [InlineData("long-lines")]
+    [InlineData("encoding-mix")]
+    [InlineData("many-tiny")]
+    [InlineData("pathological-symbols")]
+    [InlineData("dup-content")]
+    public void TryGet_EveryAdvertisedPreset_ResolvesToTokens(string name)
+    {
+        Assert.True(Presets.TryGet(name, out var tokens));
+        Assert.NotEmpty(tokens);
+    }
+
+    [Fact]
+    public void TryGet_IsCaseInsensitive()
+    {
+        Assert.True(Presets.TryGet("DEATH", out var tokens));
+        Assert.NotEmpty(tokens);
+    }
+
     [Fact]
     public void TryGet_UnknownPreset_ReturnsFalse()
     {

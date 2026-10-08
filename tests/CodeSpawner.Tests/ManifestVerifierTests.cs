@@ -200,4 +200,75 @@ public class ManifestVerifierTests
             c => { File.WriteAllText(Path.Combine(c, "d0.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "d1.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "near.c"), "AAAB"); });
         Assert.Equal(0, rc);   // identical group + a genuinely different near-variant ⇒ clean
     }
+
+    [Fact]
+    public void ExpectedMiss_WithNoDefSite_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""patho_x"":{""expectedMiss"":true}}}");
+        Assert.NotEqual(0, rc);   // an expectedMiss entry carrying no def site is malformed
+    }
+
+    [Fact]
+    public void Indirect_UnresolvedTarget_ThatIsADeclaredSymbol_Fails()
+    {
+        using var tmp = new TempDir();
+        // Closed-world rule: an UNRESOLVED (external) indirect target must NOT be a declared symbol.
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{" +
+            @"""foo"":{""def"":""a.c:1"",""indirectEdges"":[{""target"":""bar"",""resolved"":false}]}," +
+            @"""bar"":{""def"":""a.c:2""}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "int foo(void);\nint bar(void);\n"));
+        Assert.NotEqual(0, rc);
+    }
+
+    [Fact]
+    public void GatedRef_SiteMissingTheSymbolToken_Fails()
+    {
+        using var tmp = new TempDir();
+        // The gated site must at least contain the symbol token; here line 2 does not mention vendor_gated.
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""vendor_gated"":{""def"":""a.c:1"",""unreachableRefs"":[""a.c:2""]}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "int vendor_gated(void);\n  other_call();\n"));
+        Assert.NotEqual(0, rc);
+    }
+
+    [Fact]
+    public void GatedRef_WellFormed_ButVendorHeaderPresent_Fails()
+    {
+        using var tmp = new TempDir();
+        // The gated ref is behind #ifdef VENDOR_OK and names the symbol, but a VENDOR_missing_*.h exists in
+        // the tree — which breaks the unresolved-include premise the gating depends on.
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""vendor_gated"":{""def"":""a.c:1"",""unreachableRefs"":[""a.c:3""]}}}",
+            c =>
+            {
+                File.WriteAllText(Path.Combine(c, "a.c"),
+                    "int vendor_gated(void);\n#ifdef VENDOR_OK\n  vendor_gated(1);\n#endif\n");
+                File.WriteAllText(Path.Combine(c, "VENDOR_missing_zlib.h"), "// premise says this must not exist\n");
+            });
+        Assert.NotEqual(0, rc);
+    }
+
+    [Fact]
+    public void DupGroup_MissingSha256_IsMalformed_Fails()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{},""dupGroups"":{""g0"":{""paths"":[""d0.c""]}}}",
+            c => File.WriteAllText(Path.Combine(c, "d0.c"), "AAAA"));
+        Assert.NotEqual(0, rc);   // a dup group with no sha256 is malformed
+    }
+
+    [Fact]
+    public void DupGroup_NearVariantFileMissing_Fails()
+    {
+        using var tmp = new TempDir();
+        string sha = Sha("AAAA");
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{},""dupGroups"":{""g0"":{""sha256"":""" + sha + @""",""paths"":[""d0.c"",""d1.c""],""nearVariants"":[""ghost.c""]}}}",
+            c => { File.WriteAllText(Path.Combine(c, "d0.c"), "AAAA"); File.WriteAllText(Path.Combine(c, "d1.c"), "AAAA"); });
+        Assert.NotEqual(0, rc);   // the declared near-variant file does not exist on disk
+    }
 }
