@@ -38,7 +38,7 @@ if ("$($Matches[1]).$($Matches[2]).$($Matches[3])" -eq $ver) {
 $changelog = Join-Path $root 'CHANGELOG.md'
 if (-not (Test-Path $changelog)) { throw "CHANGELOG.md not found - add it before releasing." }
 $clText = [System.IO.File]::ReadAllText($changelog)
-$m = [regex]::Match($clText, "(?ms)^## \[$([regex]::Escape($ver))\][^\r\n]*\r?\n(.*?)(?=^## \[|^\[[^\]]+\]:|\z)")
+$m = [regex]::Match($clText, "(?ms)^## \[$([regex]::Escape($ver))\][^\r\n]*\r?\n(.*?)(?=^## \[|^\[[^\]]+\]:\s*https?://|\z)")
 if (-not $m.Success) { throw "CHANGELOG.md has no '## [$ver]' section - describe the release there before cutting it." }
 $changes = $m.Groups[1].Value.Trim()
 if (-not $changes) { throw "CHANGELOG.md section for $ver is empty - describe the release before cutting it." }

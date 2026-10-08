@@ -17,23 +17,28 @@ public class PresetsTests
         Assert.Contains("--giant-headers", tokens);
     }
 
-    // Every advertised preset name must resolve to a non-empty knob set — a mis-registered switch arm (typo'd
-    // name, forgotten case) would silently fall through to `_ => []` and TryGet would report the preset unknown.
-    [Theory]
-    [InlineData("death")]
-    [InlineData("ci")]
-    [InlineData("memory")]
-    [InlineData("dense-band")]
-    [InlineData("broad-token")]
-    [InlineData("long-lines")]
-    [InlineData("encoding-mix")]
-    [InlineData("many-tiny")]
-    [InlineData("pathological-symbols")]
-    [InlineData("dup-content")]
-    public void TryGet_EveryAdvertisedPreset_ResolvesToTokens(string name)
+    // Every advertised preset name must resolve to a non-empty knob set. Driven off Presets.Names (the single
+    // source of truth) rather than a hand-copied list, so a preset added to the registry is covered automatically
+    // and a registry entry that resolves to nothing is caught here.
+    [Fact]
+    public void TryGet_EveryAdvertisedPreset_ResolvesToTokens()
     {
-        Assert.True(Presets.TryGet(name, out var tokens));
-        Assert.NotEmpty(tokens);
+        Assert.NotEmpty(Presets.Names);
+        foreach (var name in Presets.Names)
+        {
+            Assert.True(Presets.TryGet(name, out var tokens), $"preset '{name}' is advertised but does not resolve");
+            Assert.NotEmpty(tokens);
+        }
+    }
+
+    // The advertised name list must stay in sync with what the error messages promise. Catches a registry entry
+    // that drifts from the user-facing hint (both now derive from Names, so this also guards that wiring).
+    [Fact]
+    public void UnknownPresetError_ListsEveryAdvertisedName()
+    {
+        var ex = Assert.Throws<ArgException>(() => Presets.Expand(new[] { "--preset", "no-such-preset" }));
+        foreach (var name in Presets.Names)
+            Assert.Contains(name, ex.Message);
     }
 
     [Fact]
