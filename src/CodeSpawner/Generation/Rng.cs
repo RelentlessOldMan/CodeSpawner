@@ -20,13 +20,23 @@ public struct Rng
     }
 
     /// <summary>Derive a per-unit stream. Categories keep distinct populations from colliding.</summary>
-    public static Rng For(int masterSeed, Category category, int index)
+    public static Rng For(int masterSeed, Category category, int index) =>
+        // Delegate to the 64-bit-index form. `(long)(uint)index` zero-extends exactly the way the historical
+        // `h ^ (uint)index` mix did, so this is byte-identical to the shipped stream for every int index
+        // (negatives included) — existing corpora and the frozen golden tests are unaffected.
+        For(masterSeed, category, (long)(uint)index);
+
+    /// <summary>
+    /// 64-bit-index variant: lets a caller fold two dimensions into one index without a 32-bit cast that would
+    /// truncate and collide streams at large scale (e.g. ProfileGenerator's <c>archetype*laneWidth + file</c>).
+    /// </summary>
+    public static Rng For(int masterSeed, Category category, long index)
     {
         // Mix the three inputs into one 64-bit seed; unsigned so shifts are well-defined.
         ulong h = 0x9E3779B97F4A7C15UL;
         h = Mix(h ^ (uint)masterSeed);
         h = Mix(h ^ ((ulong)category << 32));
-        h = Mix(h ^ (uint)index);
+        h = Mix(h ^ (ulong)index);
         return new Rng(h);
     }
 

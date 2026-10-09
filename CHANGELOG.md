@@ -11,6 +11,16 @@ reads it.
 
 ## [Unreleased]
 
+### Fixed
+- `gen --from-profile` no longer truncates its per-file RNG stream index to 32
+  bits. Profiles with ≥22 archetypes (or any archetype past the per-archetype
+  lane width) previously collided file streams — regenerating byte-identical
+  size/content for files that should differ — once `archetype*lane + file`
+  exceeded `int.MaxValue`. The index is now 64-bit; output is byte-identical for
+  all non-overflowing cases (existing corpora unaffected), and an archetype that
+  would exceed its lane now fails fast with a clear error instead of silently
+  colliding.
+
 ## [1.1.2] - 2026-10-07
 
 ### Fixed

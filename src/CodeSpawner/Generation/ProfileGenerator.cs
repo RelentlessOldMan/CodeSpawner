@@ -31,6 +31,18 @@ public sealed class ProfileGenerator
         var dirs = BuildDirs(outFull, profile);
         Console.WriteLine($"  dir tree: {dirs.Count} dirs");
 
+        // Each archetype gets its own RngLaneWidth-wide band of the ProfileGen stream index, so no two
+        // (archetype, file) pairs ever share a stream. The index is 64-bit (no cast), so the archetype lane
+        // no longer truncates at int.MaxValue; the only remaining bound is that one archetype's file count
+        // must fit inside a single lane — guarded below. No real scan profile comes anywhere near it.
+        const long RngLaneWidth = 100_000_000L;
+        foreach (var a in profile.Archetypes)
+            if (a.Count > RngLaneWidth)
+                throw new ArgException(
+                    $"archetype '{a.Label}' has {a.Count:N0} files, exceeding the per-archetype RNG lane width " +
+                    $"({RngLaneWidth:N0}) — its streams would overlap the next archetype's. No real scan profile " +
+                    "approaches this; widen RngLaneWidth in ProfileGenerator if a synthetic one does.");
+
         int degraded = 0;
         for (int ai = 0; ai < profile.Archetypes.Count; ai++)
         {
@@ -42,7 +54,7 @@ public sealed class ProfileGenerator
 
             Parallel.For(0L, count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
             {
-                var rng = Rng.For(_o.Seed, Category.ProfileGen, (int)(archIndex * 100_000_000L + i));
+                var rng = Rng.For(_o.Seed, Category.ProfileGen, archIndex * RngLaneWidth + i);
                 string dir = dirs[rng.Next(dirs.Count)];
                 string path = Path.Combine(dir, $"{a.Label}_{i}{ext}");
                 long size = ArchetypeSynthesizer.DrawSize(ref rng, a.SizeDistribution);

@@ -109,6 +109,26 @@ public class RngTests
         Assert.Equal(16519258455261250301UL, r.NextULong());
     }
 
+    // The 64-bit-index overload (added for ProfileGenerator's archetype*lane + file index) must be
+    // byte-identical to the int overload wherever the int form was already correct — otherwise it would churn
+    // existing profile corpora — AND must NOT collide for indices that differ only above bit 31, which the old
+    // `(int)` cast silently collapsed together (the archIndex >= 22 truncation bug).
+    [Fact]
+    public void For_LongIndex_ByteIdenticalForSmallValues_AndNoTruncationCollision()
+    {
+        // (a) byte-identical to the int overload for values that fit in an int (zero churn).
+        for (int idx = 0; idx < 8; idx++)
+            Assert.Equal(Rng.For(1337, Category.ProfileGen, idx).NextULong(),
+                         Rng.For(1337, Category.ProfileGen, (long)idx).NextULong());
+
+        // (b) two indices with the same low 32 bits — exactly what `(int)` truncation collapsed — now differ.
+        long lo = 100L;
+        long hi = 100L + (1L << 32);            // identical low 32 bits; old (int) cast made both == 100
+        Assert.Equal((int)lo, (int)hi);         // confirm the truncation really did collide them
+        Assert.NotEqual(Rng.For(1337, Category.ProfileGen, lo).NextULong(),
+                        Rng.For(1337, Category.ProfileGen, hi).NextULong());
+    }
+
     [Fact]
     public void Next_ProducesFrozenGoldenValues()
     {
