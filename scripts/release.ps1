@@ -50,9 +50,13 @@ $src = [regex]::Replace($src, 'Version\s*=\s*"\d+\.\d+\.\d+"', "Version = `"$ver
 # 5. Commit the bump, tag it, push both.
 git add $verFile
 git commit --quiet -m "Release v$ver"
+if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit $LASTEXITCODE)." }
 git tag "v$ver"
+if ($LASTEXITCODE -ne 0) { throw "git tag v$ver failed (exit $LASTEXITCODE)." }
 git push --quiet origin main
+if ($LASTEXITCODE -ne 0) { throw "git push of main failed (exit $LASTEXITCODE)." }
 git push --quiet origin "v$ver"
+if ($LASTEXITCODE -ne 0) { throw "git push of tag v$ver failed (exit $LASTEXITCODE)." }
 
 # 6. Build the standalone Native AOT exe from the just-bumped source, so its version matches the tag.
 & (Join-Path $PSScriptRoot 'build.ps1')
@@ -76,6 +80,17 @@ Quick start:
 
 See the README for usage: https://github.com/RelentlessOldMan/CodeSpawner#readme
 "@
-gh release create "v$ver" $exe --title "CodeSpawner v$ver" --notes $notes
+# Pass the notes via a file, never --notes: Windows PowerShell 5.1 does not escape embedded double quotes
+# when handing an argument to a native exe, so a changelog line containing a `"` splits the argument and gh
+# misreads the remainder as an asset path (v1.1.3 hit exactly this). Native exit codes don't trip
+# $ErrorActionPreference, so check gh's explicitly instead of announcing a release that never happened.
+$notesFile = Join-Path ([System.IO.Path]::GetTempPath()) "codespawner-release-notes-$ver.md"
+[System.IO.File]::WriteAllText($notesFile, $notes, (New-Object System.Text.UTF8Encoding($false)))
+try {
+    gh release create "v$ver" $exe --title "CodeSpawner v$ver" --notes-file $notesFile
+    if ($LASTEXITCODE -ne 0) { throw "gh release create failed (exit $LASTEXITCODE) - tag v$ver is pushed; create the release manually with --notes-file." }
+} finally {
+    Remove-Item $notesFile -ErrorAction SilentlyContinue
+}
 
 Write-Host "`nReleased v$ver -> https://github.com/RelentlessOldMan/CodeSpawner/releases/tag/v$ver" -ForegroundColor Green
