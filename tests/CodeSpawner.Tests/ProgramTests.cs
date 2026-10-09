@@ -201,4 +201,86 @@ public class ProgramTests
             "--big-headers", "0", "--med-headers", "0"));
         Assert.True(File.Exists(Path.Combine(corpus, ".codespawner")));
     }
+
+    // ---- regen identity (determinism end-to-end) ----
+
+    // A deliberately rich but size-capped gen: a giant header (1 MB cap), plus the dense/broad/long-line/
+    // encoding/patho/dup/unresolved populations and a few .c files — so the regen-identity checks span real
+    // manifest ground truth (func edges, hot_shared, vendor_gated, broad_hot, dupGroups, populations) without the
+    // multi-GB bench-scale bands. Single-root (default --linked-roots 1) so the whole corpus lives under --out.
+    private static string[] RichGenArgs(string outDir) => new[]
+    {
+        "gen", "--out", outDir, "--scale", "0.0003", "--seed", "20260109",
+        "--giant-headers", "1", "--max-header-mb", "1", "--big-headers", "0", "--med-headers", "0",
+        "--dense-headers", "1", "--dense-under-mb", "1", "--ordinary-headers", "2",
+        "--broad-token-files", "1", "--hot-token-share", "1",
+        "--long-line-files", "2", "--max-line-bytes", "4096",
+        "--encoding-mix", "5", "--pathological-symbols", "1", "--dup-groups", "1", "--dup-copies", "2",
+        "--unresolved-includes", "1", "--cfiles", "3",
+    };
+
+    // relative-path (separator-normalized) -> SHA256 hex of the file's bytes, for every file under root. The
+    // tree-identity half of the regen guarantee: not just "same files" but "same bytes", keyed by path so a
+    // mismatch names the offending file.
+    private static SortedDictionary<string, string> TreeSnapshot(string root)
+    {
+        var map = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            string rel = Path.GetRelativePath(root, f).Replace('\\', '/');
+            map[rel] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(f)));
+        }
+        return map;
+    }
+
+    // Neutralize the one absolute path in a manifest (`_meta.corpusRoot`) so two manifests from different out dirs
+    // can be compared for everything else. `.*` stops at the line end, so only the value is replaced.
+    private static string StripCorpusRoot(string manifestJson) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            manifestJson, "\"corpusRoot\": \".*\"", "\"corpusRoot\": \"<root>\"");
+
+    [Fact]
+    public void Gen_InPlaceRegen_SameSeed_ByteIdentical_TreeAndManifest()
+    {
+        // The regen-in-place guarantee the cross-machine / death-scale workflow leans on (regen big corpora in
+        // place instead of copying them over SMB): re-running gen with the same args over its OWN output —
+        // CodeSpawner recognizes its .codespawner marker and overwrites without --force — reproduces every file
+        // byte-for-byte AND the manifest byte-for-byte. Index-stable parallel emission must not leak into output.
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "corpus");
+        string manifest = Path.Combine(tmp.Path, "corpus-manifest.json");
+
+        Assert.Equal(0, Cli(RichGenArgs(corpus)));
+        var tree1 = TreeSnapshot(corpus);
+        byte[] mf1 = File.ReadAllBytes(manifest);
+
+        Assert.Equal(0, Cli(RichGenArgs(corpus)));   // regenerate in place over the first run
+        var tree2 = TreeSnapshot(corpus);
+        byte[] mf2 = File.ReadAllBytes(manifest);
+
+        Assert.True(tree1.Count > 8, $"expected a non-trivial corpus, saw {tree1.Count} files");
+        Assert.Equal(tree1, tree2);   // same relative paths AND same per-file SHA256
+        Assert.Equal(mf1, mf2);       // manifest ground truth byte-identical
+    }
+
+    [Fact]
+    public void Gen_RegenToDifferentDir_SameContent_OnlyCorpusRootDiffers()
+    {
+        // Path-independence: the ground truth is corpus-relative. Two gens with identical args to DIFFERENT out
+        // dirs produce byte-identical file content (keyed by relative path), and manifests that differ ONLY in the
+        // absolute `_meta.corpusRoot` — every def/ref/edge/dup path is relative. Locks the invariant that nothing
+        // absolute leaks into the ground truth (what makes the cross-machine regen workflow sound).
+        using var tmp = new TempDir();
+        string a = Path.Combine(tmp.Path, "aaa");
+        string b = Path.Combine(tmp.Path, "bbb");
+
+        Assert.Equal(0, Cli(RichGenArgs(a)));
+        Assert.Equal(0, Cli(RichGenArgs(b)));
+
+        Assert.Equal(TreeSnapshot(a), TreeSnapshot(b));   // identical bytes under identical relative paths
+
+        string mfA = StripCorpusRoot(File.ReadAllText(Path.Combine(tmp.Path, "aaa-manifest.json")));
+        string mfB = StripCorpusRoot(File.ReadAllText(Path.Combine(tmp.Path, "bbb-manifest.json")));
+        Assert.Equal(mfA, mfB);   // manifests identical once the sole absolute field is neutralized
+    }
 }

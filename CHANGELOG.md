@@ -21,6 +21,13 @@ reads it.
   would exceed its lane now fails fast with a clear error instead of silently
   colliding.
 
+### Tests
+- End-to-end regen-identity guards for `gen`: re-running with the same seed/args
+  over its own output is byte-identical in both the file tree and the manifest
+  (the regen-in-place / cross-machine workflow), and two gens to different out
+  dirs differ only in the absolute `_meta.corpusRoot` — all ground truth stays
+  corpus-relative.
+
 ## [1.1.2] - 2026-10-07
 
 ### Fixed
