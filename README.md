@@ -46,7 +46,7 @@ page and run it — it's a self-contained Native AOT binary, no .NET runtime req
 
 ## Build
 
-Requires the .NET 10 SDK and (for Native AOT) the Visual Studio "Desktop development with C++" workload.
+Requires the .NET 8 SDK or newer and (for Native AOT) the Visual Studio "Desktop development with C++" workload.
 
 ```powershell
 .\scripts\build.ps1              # -> dist\codespawner.exe  (Native AOT)

@@ -37,7 +37,7 @@ public sealed class CorpusGenerator
             {
                 throw new ArgException(
                     $"cannot write the manifest at '{mpath}': {ex.Message}. The manifest is a sibling of " +
-                    "--out, so choose an --out nested at least one level below a drive root, or pass --manifest false.");
+                    "--out, so choose an --out nested at least one level below a drive root, or pass --manifest=false.");
             }
         }
 

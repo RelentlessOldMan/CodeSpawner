@@ -26,7 +26,7 @@ the test.** Three principles follow:
 
 ## 2. Install / build
 
-Prerequisites: **.NET 10 SDK**, and for Native AOT the Visual Studio **"Desktop development with C++"**
+Prerequisites: **.NET 8 SDK or newer**, and for Native AOT the Visual Studio **"Desktop development with C++"**
 workload (MSVC linker + Windows SDK). Target machines need nothing — the exe is self-contained.
 
 ```powershell

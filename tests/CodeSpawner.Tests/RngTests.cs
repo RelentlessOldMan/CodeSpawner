@@ -92,4 +92,62 @@ public class RngTests
         for (int i = 0; i < 500; i++) seen.Add(r.Next(1000));
         Assert.True(seen.Count > 50, $"expected a spread of values, saw only {seen.Count} distinct");
     }
+
+    // FROZEN GOLDEN STREAM. The self-relative tests above prove the stream is a pure function of
+    // (seed, category, index); these prove it is the SAME stream as every shipped release. The SplitMix64 /
+    // xoshiro256** constants and the For() mixing in Rng.cs are load-bearing: a refactor that keeps the RNG
+    // perfectly deterministic but changes the *values* (swap the two SplitMix multipliers, change Next's `>> 32`,
+    // reorder the For mix) passes every other test while silently making every previously-generated corpus
+    // (death_1.0.9, the cross-machine regen-in-place workflow) unreproducible. This is the only unit test that
+    // fails on such a change. If you are changing the generator ON PURPOSE, re-baseline these literals.
+    [Fact]
+    public void For_ProducesFrozenGoldenStream()
+    {
+        var r = Rng.For(1337, Category.Source, 42);
+        Assert.Equal(14422954827547773155UL, r.NextULong());
+        Assert.Equal(8900491109341867659UL, r.NextULong());
+        Assert.Equal(16519258455261250301UL, r.NextULong());
+    }
+
+    [Fact]
+    public void Next_ProducesFrozenGoldenValues()
+    {
+        // Covers the multiply-high reduction (Next(bound)) and the min/max offset form against frozen values,
+        // so a change to the reduction math is caught even if NextULong itself were somehow unchanged.
+        Assert.Equal(781, Rng.For(1337, Category.Source, 42).Next(1000));
+        Assert.Equal(14, Rng.For(7, Category.Placement, 3).Next(10, 20));
+    }
+
+    // Category integer values are LOAD-BEARING: Rng.For folds ((ulong)category << 32) into the seed, so each
+    // member's numeric value selects its stream. The enum is append-only by contract (see the comment on the
+    // enum itself); renumbering it — alphabetizing, or inserting a member mid-list — shifts every subsequent
+    // value, changes every derived stream, and makes all existing corpora unreproducible, with a green suite.
+    // This freezes the wire values so that cannot happen silently. APPENDING a new member: add its line here.
+    [Fact]
+    public void Category_IntValues_AreFrozen()
+    {
+        Assert.Equal(1, (int)Category.DirTree);
+        Assert.Equal(2, (int)Category.GiantHeader);
+        Assert.Equal(3, (int)Category.BigHeader);
+        Assert.Equal(4, (int)Category.MedHeader);
+        Assert.Equal(5, (int)Category.OrdinaryHeader);
+        Assert.Equal(6, (int)Category.Blob);
+        Assert.Equal(7, (int)Category.Source);
+        Assert.Equal(8, (int)Category.TinyFile);
+        Assert.Equal(9, (int)Category.Unresolved);
+        Assert.Equal(10, (int)Category.Placement);
+        Assert.Equal(11, (int)Category.DenseHeader);
+        Assert.Equal(12, (int)Category.BroadToken);
+        Assert.Equal(13, (int)Category.LongLine);
+        Assert.Equal(14, (int)Category.EncodingMix);
+        Assert.Equal(15, (int)Category.PathoSymbol);
+        Assert.Equal(16, (int)Category.DupContent);
+        Assert.Equal(17, (int)Category.MutateSeed);
+        Assert.Equal(18, (int)Category.Mutate);
+        Assert.Equal(19, (int)Category.ProfileGen);
+        Assert.Equal(20, (int)Category.ProfileDir);
+        Assert.Equal(21, (int)Category.ProfileOracle);
+        // Fails if a member is added or removed without updating the pins above.
+        Assert.Equal(21, Enum.GetValues<Category>().Length);
+    }
 }
