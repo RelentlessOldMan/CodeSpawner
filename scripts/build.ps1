@@ -28,6 +28,15 @@ if (Test-Path $installer) { $env:PATH = "$installer;$env:PATH" }
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
+# Remove the previous exe FIRST: if this publish fails, there must be no stale binary left at the output path
+# for the existence check below (or release.ps1) to mistake for a fresh build. A running codespawner.exe can't
+# be deleted on Windows - that fails here, loudly, instead of silently shipping the old binary.
+$exe = Join-Path $dist "codespawner.exe"
+if (Test-Path $exe) {
+    try { Remove-Item $exe -Force }
+    catch { throw "Cannot replace $exe (is a codespawner.exe still running?): $($_.Exception.Message)" }
+}
+
 if ($SelfContained) {
     Write-Host "Publishing single-file self-contained ($Rid) ..."
     dotnet publish $proj -c Release -r $Rid `
@@ -37,8 +46,9 @@ if ($SelfContained) {
     Write-Host "Publishing Native AOT ($Rid) ..."
     dotnet publish $proj -c Release -r $Rid -o $dist
 }
+# Native exit codes don't trip $ErrorActionPreference - check dotnet's explicitly.
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit $LASTEXITCODE) - see the output above." }
 
-$exe = Join-Path $dist "codespawner.exe"
 if (Test-Path $exe) {
     $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
     Write-Host "OK: $exe ($mb MB)"
