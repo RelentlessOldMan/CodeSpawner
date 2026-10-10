@@ -87,8 +87,12 @@ public class ProgramTests
         Assert.Contains("broad_hot", mf);               // the broad-token symbol
         Assert.True(File.Exists(Path.Combine(corpus, "compile_commands.json")));
         Assert.True(Directory.Exists(corpus + "_root1"));   // --linked-roots 2 ⇒ a sibling federation root
-        // (not verifying here: federation scatters defs into the sibling root, which a single-root verify
-        //  legitimately can't resolve — verify success/failure are covered by the other round-trip tests.)
+        // Federation scatters defs into the sibling root (../rich_root1/...); verify's containment check treats
+        // those as part of the corpus, so the whole federated corpus verifies against its own manifest.
+        Assert.True(File.ReadAllText(Path.Combine(tmp.Path, "rich-manifest.json")).Contains("../rich_root1/"),
+            "expected the manifest to reach into the linked root");
+        int vrc = Cli("verify", "--corpus", corpus);
+        Assert.True(vrc == 0, $"verify exit {vrc}: {_lastErr}");
     }
 
     [Fact]
@@ -144,6 +148,103 @@ public class ProgramTests
         Assert.True(File.Exists(Path.Combine(dir, "precious.txt")));                          // left intact
         Assert.Equal(0, Cli(new[] { "gen", "--out", dir, "--force" }.Concat(tiny).ToArray()));// --force overwrites
         Assert.True(File.Exists(Path.Combine(dir, ".codespawner")));
+    }
+
+    private static readonly string[] Tiny =
+    {
+        "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0",
+        "--ordinary-headers", "0", "--tiny-files", "0", "--blob-files", "0", "--cfiles", "2",
+    };
+
+    // --force means "overwrite this corpus", not "delete whatever path was typed": a git checkout is refused
+    // even with --force (exit 2) and nothing in it is touched.
+    [Fact]
+    public void Gen_Force_NeverDeletesAGitCheckout()
+    {
+        using var tmp = new TempDir();
+        string repo = Path.Combine(tmp.Path, "repo");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, "work.c"), "precious");
+
+        Assert.Equal(2, Cli(new[] { "gen", "--out", repo, "--force" }.Concat(Tiny).ToArray()));
+        Assert.Contains("--force does not override", _lastErr);
+        Assert.True(File.Exists(Path.Combine(repo, "work.c")));
+        Assert.True(Directory.Exists(Path.Combine(repo, ".git")));
+    }
+
+    // The guard itself, without pointing a real delete at anything: drive/share roots, the cwd and its parents,
+    // the user profile, and git checkouts are flagged; an ordinary scratch directory is not.
+    [Fact]
+    public void OutputDir_UnsafeToDelete_FlagsRootsCwdHomeAndGitCheckouts()
+    {
+        string cwd = Directory.GetCurrentDirectory();
+        Assert.NotNull(Generation.OutputDir.UnsafeToDelete(Path.GetPathRoot(cwd)!));
+        Assert.NotNull(Generation.OutputDir.UnsafeToDelete(cwd));
+        Assert.NotNull(Generation.OutputDir.UnsafeToDelete(Path.GetDirectoryName(cwd)!));
+        Assert.NotNull(Generation.OutputDir.UnsafeToDelete(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)));
+        if (OperatingSystem.IsWindows())
+            Assert.NotNull(Generation.OutputDir.UnsafeToDelete(@"\\server\share"));   // UNC share root
+
+        using var tmp = new TempDir();
+        string plain = Path.Combine(tmp.Path, "corpus");
+        Directory.CreateDirectory(plain);
+        Assert.Null(Generation.OutputDir.UnsafeToDelete(plain));
+        Directory.CreateDirectory(Path.Combine(plain, ".git"));
+        Assert.NotNull(Generation.OutputDir.UnsafeToDelete(plain));
+    }
+
+    // Regenerating over a corpus drops its old sibling manifest up front: with --manifest=false (or an interrupted
+    // run) the stale manifest of the deleted tree must not survive beside the new one. No .tmp is left behind.
+    [Fact]
+    public void Gen_RegenOverCorpus_DropsStaleSiblingManifest()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c");
+        string mf = Path.Combine(tmp.Path, "c-manifest.json");
+
+        Assert.Equal(0, Cli(new[] { "gen", "--out", corpus }.Concat(Tiny).ToArray()));
+        Assert.True(File.Exists(mf));
+        Assert.False(File.Exists(mf + ".tmp"));
+
+        Assert.Equal(0, Cli(new[] { "gen", "--out", corpus, "--seed", "2", "--manifest=false" }.Concat(Tiny).ToArray()));
+        Assert.False(File.Exists(mf));
+    }
+
+    // A profile is passed between machines and people; its archetype label/extension become file names, so a
+    // path-like value is refused before --out is touched — nothing is written anywhere.
+    [Theory]
+    [InlineData("../escape", ".c")]
+    [InlineData("sub/dir", ".c")]
+    [InlineData("a", "/../../x.c")]
+    [InlineData("a", ".c:stream")]
+    public void FromProfile_RefusesPathLikeArchetypeNames(string label, string ext)
+    {
+        using var tmp = new TempDir();
+        string prof = tmp.File("hostile.json");
+        File.WriteAllText(prof,
+            "{\"_meta\":{\"profileVersion\":1},\"archetypes\":[{\"label\":" + System.Text.Json.JsonSerializer.Serialize(label) +
+            ",\"extension\":" + System.Text.Json.JsonSerializer.Serialize(ext) +
+            ",\"count\":1,\"sizeDistribution\":{\"p50\":10,\"p90\":10,\"max\":10}}]}");
+
+        Assert.Equal(1, Cli("gen", "--out", Path.Combine(tmp.Path, "out"), "--from-profile", prof));
+        Assert.Contains("plain file-name fragment", _lastErr);
+        Assert.Equal(new[] { prof }, Directory.EnumerateFileSystemEntries(tmp.Path, "*", SearchOption.AllDirectories));
+    }
+
+    // A truncated manifest is bad input: a clean "error:" line and exit 2, not an unhandled-exception stack dump.
+    [Fact]
+    public void Mutate_MalformedManifest_CleanErrorExit2()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c");
+        Directory.CreateDirectory(corpus);
+        File.WriteAllText(Path.Combine(corpus, ".codespawner"), "CodeSpawner test\n");
+        File.WriteAllText(Path.Combine(corpus, "a.c"), "int a;\n");
+        File.WriteAllText(Path.Combine(tmp.Path, "c-manifest.json"), "{\"_meta\": {\"gen\": {");
+
+        Assert.Equal(2, Cli("mutate", "--corpus", corpus, "--target", "source"));
+        Assert.StartsWith("error: malformed JSON", _lastErr.Trim());
+        Assert.Equal("int a;\n", File.ReadAllText(Path.Combine(corpus, "a.c")));
     }
 
     [Fact]

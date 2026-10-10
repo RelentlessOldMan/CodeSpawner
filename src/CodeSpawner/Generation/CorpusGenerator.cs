@@ -15,7 +15,7 @@ public sealed class CorpusGenerator
 
     // Dropped at the corpus root to mark a directory as CodeSpawner-generated, so a re-run may safely
     // clear it without --force while a directory we did NOT create is protected from accidental deletion.
-    private const string MarkerName = ".codespawner";
+    private const string MarkerName = OutputDir.MarkerName;
 
     public CorpusGenerator(GenOptions o) => _o = o;
 
@@ -32,7 +32,9 @@ public sealed class CorpusGenerator
         string mpath = ManifestPath(outFull);
         if (_o.Manifest)
         {
-            try { using (File.Create(mpath)) { } }
+            // Probe with the writer's own temp name (not the manifest itself), so the probe never truncates a
+            // manifest and the real file only ever appears complete (ManifestWriter writes then renames).
+            try { using (File.Create(mpath + ".tmp", 1, FileOptions.DeleteOnClose)) { } }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 throw new ArgException(
@@ -172,29 +174,10 @@ public sealed class CorpusGenerator
     private static ParallelOptions SmallFileParallel => new() { MaxDegreeOfParallelism = Environment.ProcessorCount };
 
     /// <summary>
-    /// Clear and recreate the output directory, refusing to delete a non-empty directory we did not
-    /// create unless <c>--force</c> is given. Guards against a mistyped <c>--out</c> wiping real data.
+    /// Clear and recreate the output directory (the guards against a mistyped <c>--out</c> wiping real data
+    /// live in <see cref="OutputDir"/>, shared with the profile generator).
     /// </summary>
-    private void PrepareOutputDir()
-    {
-        if (Directory.Exists(_o.Out))
-        {
-            bool empty = !Directory.EnumerateFileSystemEntries(_o.Out).Any();
-            bool ours = File.Exists(Path.Combine(_o.Out, MarkerName));
-            if (!empty && !ours && !_o.Force)
-                throw new ArgException(
-                    $"--out '{_o.Out}' already exists, is not empty, and was not created by CodeSpawner. " +
-                    "Refusing to delete it. Pass --force to overwrite, or choose a different --out.");
-            Directory.Delete(_o.Out, recursive: true);
-        }
-        else if (File.Exists(_o.Out))
-        {
-            throw new ArgException($"--out '{_o.Out}' is a file, not a directory.");
-        }
-
-        Directory.CreateDirectory(_o.Out);
-        File.WriteAllText(Path.Combine(_o.Out, MarkerName), $"CodeSpawner {Program.Version}\n");
-    }
+    private void PrepareOutputDir() => OutputDir.Prepare(_o.Out, _o.Force);
 
     private List<string> EmitHeaders(DirTree tree, int nGiant, int nBig, int nMed, int nDense, PopulationStats stats)
     {

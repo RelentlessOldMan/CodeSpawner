@@ -59,8 +59,8 @@ public static class ProfileReader
 
                 m.Archetypes.Add(new Archetype
                 {
-                    Label = a.GetProperty("label").GetString() ?? "a",
-                    Extension = a.TryGetProperty("extension", out var ex) ? ex.GetString() ?? ".txt" : ".txt",
+                    Label = SafeLabel(a.GetProperty("label").GetString() ?? "a"),
+                    Extension = SafeExtension(a.TryGetProperty("extension", out var ex) ? ex.GetString() ?? ".txt" : ".txt"),
                     Count = GetLong(a, "count"),
                     Class = cls,
                     SizeDistribution = new SizeDistribution
@@ -75,6 +75,24 @@ public static class ProfileReader
 
         return m;
     }
+
+    // Archetype label + extension become generated FILE NAMES ("{label}_{i}{ext}"), and a profile is an artifact
+    // passed between machines and people — so each must be a plain name fragment: no path separators, no drive
+    // or NTFS-stream ':', no other characters a file name can't hold. Otherwise "../x" or "C:/x" would write
+    // outside --out.
+    private static readonly char[] Forbidden =
+        Path.GetInvalidFileNameChars().Concat(new[] { '/', '\\', ':' }).Distinct().ToArray();
+
+    private static string SafeLabel(string label) =>
+        label.Length > 0 && label.IndexOfAny(Forbidden) < 0
+            ? label
+            : throw new InvalidOperationException($"profile archetype label '{label}' is not a plain file-name fragment");
+
+    // "*" is the catch-all archetype (regenerated as .dat) and "(none)" is what scan records for extensionless files.
+    private static string SafeExtension(string ext) =>
+        ext == "*" || ext.IndexOfAny(Forbidden) < 0
+            ? ext
+            : throw new InvalidOperationException($"profile archetype extension '{ext}' is not a plain file-name fragment");
 
     private static PrivacyPosture ParsePosture(string? s) => s switch
     {

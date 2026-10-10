@@ -70,6 +70,12 @@ public static class Program
             Console.Error.WriteLine($"error: {ex.Message}");
             return 1;
         }
+        catch (System.Text.Json.JsonException ex)
+        {
+            // A truncated/garbage manifest or profile handed to us: bad input, not a crash.
+            Console.Error.WriteLine($"error: malformed JSON input: {ex.Message}");
+            return 2;
+        }
     }
 
     // Asserts the canonical truth digest still reproduces the golden vector locked with CodeCompass.
@@ -252,7 +258,8 @@ public static class Program
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly):
               --out <dir>            output directory (required; cleared if it exists)
-              --force                overwrite --out even if it wasn't created by CodeSpawner
+              --force                overwrite --out even if it wasn't created by CodeSpawner (never a drive
+                                     root, the cwd/home or a parent of them, or a git checkout)
               --scale <f>            count multiplier (default 0.01)
               --seed <n>             deterministic seed (default 1337)
               --giant-headers <n>    count of >MaxHeaderMB register headers (the byte pathology)

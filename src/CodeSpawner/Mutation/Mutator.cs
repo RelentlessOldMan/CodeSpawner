@@ -99,6 +99,12 @@ public static class Mutator
         int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
         var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
 
+        if (o.ThreeWay)                                        // refuse a foreign _v1/_v2 BEFORE touching anything
+        {
+            EnsureReplaceable(TrimDir(corpus) + "_v1");
+            EnsureReplaceable(TrimDir(corpus) + "_v2");
+        }
+
         RemoveDeltaArtifacts(TrimDir(corpus));                 // one bulk run ⇒ one coherent delta artifact set
 
         if (o.ThreeWay) return o.ConflictEdges ? RunThreeWayEdges(o, corpus, basem, chosen)
@@ -338,13 +344,39 @@ public static class Mutator
 
     private static void CopyTree(string src, string dst)
     {
+        EnsureReplaceable(dst);
         if (Directory.Exists(dst)) Directory.Delete(dst, true);
         Directory.CreateDirectory(dst);
-        foreach (var dir in Directory.EnumerateDirectories(src, "*", SearchOption.AllDirectories))
+        foreach (var dir in Directory.EnumerateDirectories(src, "*", TreeWalk))
             Directory.CreateDirectory(Path.Combine(dst, RelOf(src, dir).Replace('/', Path.DirectorySeparatorChar)));
-        foreach (var f in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+        foreach (var f in Directory.EnumerateFiles(src, "*", TreeWalk))
             File.Copy(f, Path.Combine(dst, RelOf(src, f).Replace('/', Path.DirectorySeparatorChar)), overwrite: true);
     }
+
+    /// <summary>
+    /// A 3-way variant tree (<c>&lt;corpus&gt;_v1/_v2</c>) may be replaced only if it is absent, empty, or a previous
+    /// variant (a copy of the corpus, so it carries the <c>.codespawner</c> marker). Anything else at that path
+    /// is a directory we did not create — refuse rather than recursively delete it.
+    /// </summary>
+    private static void EnsureReplaceable(string dst)
+    {
+        if (File.Exists(dst))
+            throw new ArgException($"3-way variant path '{dst}' is a file; move it aside and re-run.");
+        if (!Directory.Exists(dst) || !Directory.EnumerateFileSystemEntries(dst).Any()) return;
+        if (!File.Exists(Path.Combine(dst, MarkerName)))
+            throw new ArgException($"3-way variant directory '{dst}' already exists, is not empty, and was not created " +
+                                   "by CodeSpawner. Refusing to delete it; move it aside and re-run.");
+    }
+
+    /// <summary>Recursive walk that never follows a junction/symlink: a reparse point inside the corpus must not pull
+    /// files from outside it into the edit set (or the variant copy). Otherwise matches SearchOption.AllDirectories.</summary>
+    private static readonly EnumerationOptions TreeWalk = new()
+    {
+        RecurseSubdirectories = true,
+        AttributesToSkip = FileAttributes.ReparsePoint,
+        MatchType = MatchType.Win32,
+        IgnoreInaccessible = false,
+    };
 
     // ---- native 3-way EDGE kinds (step 4b: adjacent / modify-delete / add-add / identical-overlap) --------
 
@@ -574,7 +606,13 @@ public static class Mutator
         IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree)
     {
         string path = $"{TrimDir(corpus)}-conflict.json";
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        AtomicFile.Write(path, fs => WriteConflictJson(fs, basem, o, conflictSha, conflicts, clean, v1Tree, v2Tree));
+        Console.WriteLine($"  {Path.GetFileName(path)}: {conflicts.Count} conflict(s), {clean.Count} clean-merge(s)");
+    }
+
+    private static void WriteConflictJson(Stream fs, BaseManifest basem, MutateOptions o, string conflictSha,
+        IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree)
+    {
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartObject();
 
@@ -618,7 +656,6 @@ public static class Mutator
 
         w.WriteEndObject();
         w.Flush();
-        Console.WriteLine($"  {Path.GetFileName(path)}: {conflicts.Count} conflict(s), {clean.Count} clean-merge(s)");
     }
 
     /// <summary>SHA-256 (lowercase hex) of the raw file bytes + its size — CodeDiffer's size+hash prefilter oracle.</summary>
@@ -650,7 +687,7 @@ public static class Mutator
     {
         long giantFloor = (long)giantMinMb * 1024 * 1024;
         var result = new List<string>();
-        foreach (var abs in Directory.EnumerateFiles(corpus, "*", SearchOption.AllDirectories))
+        foreach (var abs in Directory.EnumerateFiles(corpus, "*", TreeWalk))
         {
             if (string.Equals(Path.GetFileName(abs), MarkerName, StringComparison.Ordinal)) continue;
             bool match = target switch
@@ -1026,7 +1063,7 @@ public static class Mutator
         var srcPool = basem.Symbols
             .Where(kv => kv.Key.StartsWith("func_", StringComparison.Ordinal) && int.TryParse(kv.Key[5..], out int n) && n >= 1)
             .Select(kv => (name: kv.Key, site: SplitSite(kv.Value.Def)))
-            .Select(x => new Edit(EditType.Remove, AbsOf(corpus, x.site.path), x.name, x.site.line))
+            .Select(x => new Edit(EditType.Remove, ManifestAbs(corpus, x.name, x.site.path), x.name, x.site.line))
             .OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
         Shuffle(srcPool, o.Seed, 1);
 
@@ -1154,7 +1191,15 @@ public static class Mutator
         Dictionary<string, SymbolEntry> before, Dictionary<string, SymbolEntry> after, FileOps ops)
     {
         string path = step is { } k ? $"{TrimDir(corpus)}-delta-{k}.json" : $"{TrimDir(corpus)}-delta.json";
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        int changed = 0, tombs = 0;
+        AtomicFile.Write(path, fs => (changed, tombs) = WriteDeltaJson(fs, basem, o, step, prevSha, before, after, ops));
+        Console.WriteLine($"  {Path.GetFileName(path)}: {changed} changed, {tombs} tombstoned, " +
+                          $"+{ops.Added.Count}/-{ops.Removed.Count}/~{ops.Modified.Count} files");
+    }
+
+    private static (int changed, int tombs) WriteDeltaJson(Stream fs, BaseManifest basem, MutateOptions o, int? step,
+        string prevSha, Dictionary<string, SymbolEntry> before, Dictionary<string, SymbolEntry> after, FileOps ops)
+    {
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartObject();
 
@@ -1203,8 +1248,7 @@ public static class Mutator
 
         w.WriteEndObject();
         w.Flush();
-        Console.WriteLine($"  {Path.GetFileName(path)}: {changed} changed, {tombs} tombstoned, " +
-                          $"+{ops.Added.Count}/-{ops.Removed.Count}/~{ops.Modified.Count} files");
+        return (changed, tombs);
     }
 
     // ---- diff-delta emission (bulk / diff-oracle mode) ------------------------------------------------
@@ -1226,26 +1270,28 @@ public static class Mutator
         }
 
         string path = variant is null ? $"{TrimDir(corpus)}-delta.json" : $"{TrimDir(corpus)}-delta-{variant}.json";
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
-        using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
-        w.WriteStartObject();
+        AtomicFile.Write(path, fs =>
+        {
+            using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
+            w.WriteStartObject();
 
-        WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize: null);
+            WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize: null);
 
-        w.WriteStartObject("fileOps");
-        w.WriteStartArray("added");                    // decoy near-duplicate ADDs (rename false-positive traps)
-        foreach (var a in added) w.WriteStringValue(a);
-        w.WriteEndArray();
-        w.WriteStartArray("removed"); w.WriteEndArray();
-        w.WriteStartArray("modified");
-        foreach (var f in sorted) WriteModifiedRecord(w, f);
-        w.WriteEndArray();
-        WriteRenamedArray(w, renames);
-        w.WriteEndObject();
+            w.WriteStartObject("fileOps");
+            w.WriteStartArray("added");                // decoy near-duplicate ADDs (rename false-positive traps)
+            foreach (var a in added) w.WriteStringValue(a);
+            w.WriteEndArray();
+            w.WriteStartArray("removed"); w.WriteEndArray();
+            w.WriteStartArray("modified");
+            foreach (var f in sorted) WriteModifiedRecord(w, f);
+            w.WriteEndArray();
+            WriteRenamedArray(w, renames);
+            w.WriteEndObject();
 
-        w.WriteStartObject("symbols"); w.WriteEndObject(); // content-only edits ⇒ empty symbol overlay
-        w.WriteEndObject();
-        w.Flush();
+            w.WriteStartObject("symbols"); w.WriteEndObject(); // content-only edits ⇒ empty symbol overlay
+            w.WriteEndObject();
+            w.Flush();
+        });
         Console.WriteLine($"  {Path.GetFileName(path)}: {sorted.Count} modified, {renames.Count} renamed, {added.Count} added");
     }
 
@@ -1271,26 +1317,27 @@ public static class Mutator
             int start = s * shardSize;
             int count = Math.Min(shardSize, sorted.Count - start);
             string shardPath = $"{baseName}.shard-{s.ToString().PadLeft(pad, '0')}.json";
-            using (var fs = new FileStream(shardPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            using (var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true }))
+            int shardIndex = s;
+            AtomicFile.Write(shardPath, fs =>
             {
+                using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
                 w.WriteStartObject();
-                w.WriteNumber("shardIndex", s);
+                w.WriteNumber("shardIndex", shardIndex);
                 w.WriteNumber("count", count);
                 w.WriteStartArray("modified");
                 for (int i = start; i < start + count; i++) WriteModifiedRecord(w, sorted[i]);
                 w.WriteEndArray();
                 w.WriteEndObject();
                 w.Flush();
-            }
+            });
             var (sha, _) = HashFile(shardPath);            // transport integrity: sha256 of the shard file bytes
             shards.Add((Path.GetFileName(shardPath), sorted[start].Path, sorted[start + count - 1].Path, count, sha));
         }
 
         string indexPath = $"{baseName}.index.json";
-        using (var fs = new FileStream(indexPath, FileMode.Create, FileAccess.Write, FileShare.None))
-        using (var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true }))
+        AtomicFile.Write(indexPath, fs =>                  // written LAST: the index only exists once every shard does
         {
+            using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
             w.WriteStartObject();
             WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize);
 
@@ -1316,7 +1363,7 @@ public static class Mutator
             w.WriteStartObject("symbols"); w.WriteEndObject();
             w.WriteEndObject();
             w.Flush();
-        }
+        });
         Console.WriteLine($"  {Path.GetFileName(indexPath)}: {sorted.Count} modified across {nShards} shard(s) " +
                           $"(<= {shardSize} each), {renames.Count} renamed, {added.Count} added; diffTruthSha {diffSha[..12]}…");
     }
@@ -1409,7 +1456,21 @@ public static class Mutator
         string dir = Path.GetDirectoryName(baseName) is { Length: > 0 } d ? d : ".";   // bare relative ⇒ cwd
         string leaf = Path.GetFileName(baseName);
         if (Directory.Exists(dir))
-            foreach (var f in Directory.GetFiles(dir, $"{leaf}.shard-*.json")) File.Delete(f);
+            foreach (var f in Directory.GetFiles(dir, $"{leaf}.shard-*.json"))
+                if (IsShardFileName(Path.GetFileName(f), leaf)) File.Delete(f);   // ours only: shard-<digits>.json
+    }
+
+    /// <summary>True only for the exact names this tool writes (<c>&lt;leaf&gt;.shard-&lt;digits&gt;.json</c>) — the glob
+    /// alone would also match a user's <c>&lt;leaf&gt;.shard-notes.json</c>, which is not ours to delete.</summary>
+    private static bool IsShardFileName(string name, string leaf)
+    {
+        string prefix = leaf + ".shard-";
+        if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            !name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
+        var digits = name.AsSpan(prefix.Length, name.Length - prefix.Length - ".json".Length);
+        if (digits.IsEmpty) return false;
+        foreach (char c in digits) if (c is < '0' or > '9') return false;
+        return true;
     }
 
     // ---- helpers --------------------------------------------------------------------------------------
@@ -1436,7 +1497,10 @@ public static class Mutator
     private static (string path, int line) SplitSite(string site)
     {
         int c = site.LastIndexOf(':');
-        return (site[..c], int.Parse(site[(c + 1)..]));
+        if (c < 0 || !int.TryParse(site.AsSpan(c + 1), System.Globalization.NumberStyles.None,
+                                   System.Globalization.CultureInfo.InvariantCulture, out int line))
+            throw new ArgException($"malformed manifest site '{site}' (expected <path>:<line>)");
+        return (site[..c], line);
     }
 
     private static string ShiftSite(string site, string relF, int insertPos, int d)
@@ -1459,7 +1523,7 @@ public static class Mutator
 
     private static List<string> ScanRel(string corpus, string pattern)
     {
-        var list = Directory.EnumerateFiles(corpus, pattern, SearchOption.AllDirectories)
+        var list = Directory.EnumerateFiles(corpus, pattern, TreeWalk)
             .Select(f => RelOf(corpus, f)).ToList();
         list.Sort(StringComparer.Ordinal);
         return list;
@@ -1492,6 +1556,13 @@ public static class Mutator
         foreach (var i in items) w.WriteStringValue(i);
         w.WriteEndArray();
     }
+
+    /// <summary>A manifest-supplied def path, resolved with the same containment rule verify uses: the edit (and the
+    /// remove's .o/.lst/.bak sibling deletes) may only land inside the corpus or its --linked-roots siblings.</summary>
+    private static string ManifestAbs(string corpus, string symbol, string rel) =>
+        PathUtil.ResolveInCorpus(corpus, rel)
+        ?? throw new ArgException($"manifest def for '{symbol}' points outside the corpus ('{rel}'); refusing to edit it. " +
+                                  "Is --manifest the manifest for this --corpus?");
 
     private static string AbsOf(string corpus, string rel) => Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
     private static string RelOf(string corpus, string abs) => PathUtil.Rel(corpus, abs);

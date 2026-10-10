@@ -14,7 +14,6 @@ namespace CodeSpawner.Generation;
 /// </summary>
 public sealed class ProfileGenerator
 {
-    private const string MarkerName = ".codespawner";
     private readonly GenOptions _o;
     public ProfileGenerator(GenOptions o) => _o = o;
 
@@ -128,22 +127,5 @@ public sealed class ProfileGenerator
         return pool;
     }
 
-    private void PrepareOutputDir()
-    {
-        if (Directory.Exists(_o.Out))
-        {
-            bool empty = !Directory.EnumerateFileSystemEntries(_o.Out).Any();
-            bool ours = File.Exists(Path.Combine(_o.Out, MarkerName));
-            if (!empty && !ours && !_o.Force)
-                throw new ArgException(
-                    $"--out '{_o.Out}' already exists, is not empty, and was not created by CodeSpawner. " +
-                    "Pass --force to overwrite, or choose a different --out.");
-            Directory.Delete(_o.Out, recursive: true);
-        }
-        else if (File.Exists(_o.Out))
-            throw new ArgException($"--out '{_o.Out}' is a file, not a directory.");
-
-        Directory.CreateDirectory(_o.Out);
-        File.WriteAllText(Path.Combine(_o.Out, MarkerName), $"CodeSpawner {Program.Version}\n");
-    }
+    private void PrepareOutputDir() => OutputDir.Prepare(_o.Out, _o.Force);
 }
