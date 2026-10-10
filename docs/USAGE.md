@@ -63,6 +63,9 @@ codespawner gen --out D:\death --preset death
 Generates the corpus and (unless `--manifest false`) the ground-truth manifest. It is a **pure emitter**:
 it never shells out to an indexer or carver — each consumer drives its own verification. `--out` is
 cleared and recreated; a directory CodeSpawner didn't create is protected unless you pass `--force`.
+Some paths are refused even with `--force`: a drive or share root, the current directory, your user
+profile or a parent of either, a git checkout, and well-known user/system folders. Re-generating over an
+existing corpus also removes its old sibling manifest first, so an interrupted run never leaves a stale one.
 
 Output:
 - the corpus tree under `<out>/`,
@@ -254,6 +257,8 @@ robocopy D:\death \\SERVER\share\death /E /MT:16 /R:1 /W:1
 |---|---|
 | AOT build fails with `vswhere.exe is not recognized` | Use `scripts\build.ps1` (it fixes PATH), or install the VS "Desktop development with C++" workload; else `build.ps1 -SelfContained`. |
 | `--out … was not created by CodeSpawner. Refusing to delete` | Intended guard. Choose a fresh `--out`, or pass `--force` if you really mean to wipe it. |
+| `--out … Refusing to delete it (--force does not override this)` | `--out` resolved to a drive root, the cwd/home or a parent of them, a git checkout or a system folder. Use a dedicated directory. |
+| `3-way variant directory … was not created by CodeSpawner` | `mutate --three-way` writes `<corpus>_v1`/`_v2`; something else already lives there. Move it aside. |
 | Generation slow on a spinning disk | It auto-detects HDD → `--io-parallelism 1`. If it guessed wrong (e.g. RAID), set `--io-parallelism` explicitly. |
 | Slow when writing to a network share | Generate locally, then `robocopy` to the share. Per-file writes over SMB are far slower. |
 | `verify` fails after a copy | Point `--corpus` at the copied dir; relative paths resolve against it. Ensure you copied `<out>-manifest.json` too (it's a sibling). |

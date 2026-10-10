@@ -189,9 +189,7 @@ public static class ManifestVerifier
         int c = site.LastIndexOf(':');
         if (c < 0 || !int.TryParse(site[(c + 1)..], out int line)) { why = "malformed def site"; return false; }
         string rel = site[..c];
-        string full = Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
-        string prefix = corpus.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { why = $"path escapes corpus root: {rel}"; return false; }
+        if (Generation.PathUtil.ResolveInCorpus(corpus, rel) is not { } full) { why = $"path escapes corpus root: {rel}"; return false; }
         if (!cache.TryGetValue(full, out var lines))
         {
             if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
@@ -214,9 +212,7 @@ public static class ManifestVerifier
     private static bool FileSha(string corpus, string rel, out string sha, out string why)
     {
         sha = ""; why = "";
-        string full = Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
-        string prefix = corpus.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { why = $"path escapes corpus root: {rel}"; return false; }
+        if (Generation.PathUtil.ResolveInCorpus(corpus, rel) is not { } full) { why = $"path escapes corpus root: {rel}"; return false; }
         if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
         sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(full))).ToLowerInvariant();
         return true;
@@ -231,10 +227,9 @@ public static class ManifestVerifier
         string rel = site[..c];
         if (!int.TryParse(site[(c + 1)..], out int line)) { why = "malformed line number"; return false; }
 
-        string full = Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
-        // Refuse paths that escape the corpus root (a malformed/hostile manifest with '..').
-        string prefix = corpus.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        // Refuse paths that escape the corpus root (a malformed/hostile manifest with '..'); --linked-roots
+        // siblings (../<corpus>_rootN/...) are part of the corpus.
+        if (Generation.PathUtil.ResolveInCorpus(corpus, rel) is not { } full)
         { why = $"path escapes corpus root: {rel}"; return false; }
 
         if (!cache.TryGetValue(full, out var lines))

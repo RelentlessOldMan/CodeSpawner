@@ -10,9 +10,11 @@ namespace CodeSpawner.Profile;
 /// </summary>
 public static class ProfileWriter
 {
-    public static void Write(ProfileModel m, string path)
+    public static void Write(ProfileModel m, string path) =>
+        Manifest.AtomicFile.Write(path, fs => WriteTo(m, fs), bufferSize: 1 << 20);
+
+    private static void WriteTo(ProfileModel m, Stream fs)
     {
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
 
         bool content = m.Posture.ReadsContent();

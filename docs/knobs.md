@@ -28,7 +28,7 @@ never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` kee
 | `--depth <n>` | `8` | Approximate max path depth — long/deep paths. |
 | `--linked-roots <n>` | `1` | Split output across N sibling trees — multi-root / federation. |
 | `--manifest true\|false` | `true` | Emit the ground-truth manifest. |
-| `--force` | off | Overwrite `--out` even if it exists and was not created by CodeSpawner. Without it, a non-empty directory CodeSpawner didn't create is protected from deletion. |
+| `--force` | off | Overwrite `--out` even if it exists and was not created by CodeSpawner. Without it, a non-empty directory CodeSpawner didn't create is protected from deletion. Never honoured for a drive/share root, the cwd or home dir (or a parent), a git checkout, or a well-known user/system folder. |
 
 ### Batch 1 pathology knobs (all OFF by default; see [ROADMAP.md](ROADMAP.md))
 

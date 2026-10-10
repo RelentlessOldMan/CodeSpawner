@@ -136,6 +136,20 @@ public class ArgParserTests
     public void Gen_BadDoubleValue_ThrowsArgException()
         => Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--scale", "abc" }));
 
+    // NaN/±Infinity parse as doubles but pass every range check (NaN compares false both ways), so they used to
+    // reach the JSON writer and crash it — after mutate had already edited files in place. Rejected at parse now.
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    public void NonFiniteDoubles_ThrowArgException(string v)
+    {
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--scale", v }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--hot-token-share", v }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--edit-density", v }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--target", "source", "--three-way", "--overlap-fraction", v }));
+    }
+
     [Fact]
     public void Scan_BadIntValue_ThrowsArgException()
         => Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "/t", "--out", "p", "--min-cluster", "xx" }));

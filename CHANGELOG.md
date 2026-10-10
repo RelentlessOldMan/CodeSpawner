@@ -11,6 +11,36 @@ reads it.
 
 ## [Unreleased]
 
+### Fixed (safety)
+- `gen --force` no longer deletes any path it is given. A drive or share root,
+  the current directory, the user profile (or a parent of either), a git
+  checkout, and well-known user/system folders are refused even with `--force`.
+  Previously `gen --out . --force` recursively deleted the working directory's
+  contents before failing.
+- `mutate` only edits or deletes files inside the corpus. Manifest def paths
+  that escape it (`..`, absolute or drive-relative paths) are refused before
+  any disk change; `--linked-roots` siblings (`../<corpus>_rootN/...`) count as
+  inside. Junctions/symlinks inside the corpus are no longer followed when
+  selecting targets, scanning, or copying 3-way variants.
+- `mutate --three-way` refuses to wipe an existing `<corpus>_v1`/`_v2` that
+  CodeSpawner did not create (checked before anything is touched), and the
+  stale-delta sweep only deletes `<corpus>-delta.shard-<digits>.json`, not any
+  file matching `shard-*`.
+- `gen --from-profile` refuses archetype labels/extensions that are not plain
+  file-name fragments (e.g. `../x`, `a/b`, `x:stream`), so a profile can no
+  longer write outside `--out`.
+- `NaN`/`Infinity` are rejected for every numeric option. They used to pass
+  the range checks, let `mutate` edit files in place, and then crash the JSON
+  writer, leaving a truncated delta.
+- Manifests, deltas, shards, the conflict file and scan profiles are written to
+  a temp file and renamed into place, so an interrupted run never leaves a
+  truncated artifact at the real name. Regenerating over a corpus deletes its
+  old sibling manifest first, so a stale manifest never sits beside a new tree.
+- `verify` accepts `--linked-roots` corpora (it reported every federated def as
+  "path escapes corpus root").
+- Malformed JSON input (manifest/profile) is reported as `error: malformed
+  JSON input: …` with exit 2 instead of an unhandled-exception stack dump.
+
 ## [1.1.3] - 2026-10-09
 
 ### Fixed

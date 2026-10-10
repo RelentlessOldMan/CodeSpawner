@@ -9,9 +9,11 @@ namespace CodeSpawner.Manifest;
 /// </summary>
 public static class ManifestWriter
 {
-    public static void Write(ManifestModel m, string path)
+    public static void Write(ManifestModel m, string path) =>
+        AtomicFile.Write(path, fs => WriteTo(m, fs), bufferSize: 1 << 20);   // never a truncated manifest
+
+    private static void WriteTo(ManifestModel m, Stream fs)
     {
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
 
         w.WriteStartObject();

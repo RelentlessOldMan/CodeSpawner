@@ -242,9 +242,11 @@ public static class ArgParser
         int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out int v)
             ? v : throw new ArgException($"--{key} expects an integer, got '{val}'");
 
+    // Finite only: "NaN" / "Infinity" parse as doubles but slip past every range check (NaN compares false
+    // both ways) and only blow up later in the JSON writer — after mutate has already edited files in place.
     private static double Dbl(string key, string val) =>
-        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
-            ? v : throw new ArgException($"--{key} expects a number, got '{val}'");
+        double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double v) && double.IsFinite(v)
+            ? v : throw new ArgException($"--{key} expects a finite number, got '{val}'");
 
     private static bool ParseBool(string s) => s.ToLowerInvariant() switch
     {
