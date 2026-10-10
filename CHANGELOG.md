@@ -41,6 +41,25 @@ reads it.
 - Malformed JSON input (manifest/profile) is reported as `error: malformed
   JSON input: …` with exit 2 instead of an unhandled-exception stack dump.
 
+### Changed (release tooling)
+- `scripts\release.ps1` runs the test suite and builds + version-checks the
+  AOT exe **before** anything is pushed. It commits and tags locally first, and
+  rolls that back if the tests, the build, the `codespawner version` check or
+  the push of main fail. A failed run can be re-run as-is.
+- `release.ps1` refuses to run off `main`, when local main is behind or has
+  diverged from `origin/main`, when `gh` is not authenticated, or when the tag
+  already exists locally or on origin. The "already at this version" guard now
+  works for an explicit version, and the version bump only matches
+  `const string Version`.
+- If `gh release create` fails, the notes file is kept and the exact command to
+  finish by hand is printed. Release notes now include the exe's SHA-256.
+- New `release.ps1 -DryRun`: every check, the tests, and the AOT build + version
+  check, with no commit, tag, push or release.
+- `scripts\build.ps1` deletes the previous `dist\codespawner.exe` before
+  publishing and fails when `dotnet publish` fails. Before, a failed publish
+  next to an old exe printed "OK", and a release could ship the previous
+  version's binary under the new tag.
+
 ## [1.1.3] - 2026-10-09
 
 ### Fixed
