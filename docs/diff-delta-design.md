@@ -179,6 +179,16 @@ modified-files section is exactly the six fields above). The honesty guard drops
 actually change, and the content rewrite preserves LF/CRLF + a missing final newline so a no-op is a true
 no-op.
 
+**Byte-faithful text edits (after 1.1.3).** Every line-level kind (`content`, `whitespace`, `line-insert`,
+`line-delete`, `eol`, rename+edit, the 3-way variants, giant strided/single) writes a file back in the
+encoding it was read in — UTF-16LE/BE stay UTF-16, a UTF-8 or UTF-16 BOM stays — so the only bytes that
+change are the edited lines (or, for `eol`, the terminators). Decoding is strict. A file that cannot be
+round-tripped exactly is **not editable text** and those kinds leave it untouched and unrecorded. That covers
+invalid UTF-8, NUL bytes without a UTF-16 BOM (binary), and a UTF-32 BOM. `encoding` likewise skips such files,
+since "decoded text identical" must hold; under rename it becomes a pure rename; in 3-way neither variant
+edits it. `binary` and `metadata` apply to any file. The generator's root `compile_commands.json` (absolute
+paths) and stray `*.mut.tmp` files are never selected as targets.
+
 **Step 3 status:** IMPLEMENTED. `--edit-kind rename` renames chosen files with GRADED `similarityMilli` (a
 rotating band {1000,900,600,300}; the emitted value is the REALIZED overlap `round((L-changed)/L*1000)`, not
 the target, so tiny files honestly report low similarity). Pure renames (1000) are identical bytes with no

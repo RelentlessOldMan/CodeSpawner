@@ -191,10 +191,16 @@ public static class Mutator
                 continue;
             }
 
-            // rename+edit: change ceil((1-sim)*L) lines so realized similarity lands on the band.
-            var lines = SplitLines(File.ReadAllText(toAbs));
+            // rename+edit: change ceil((1-sim)*L) lines so realized similarity lands on the band. A file that isn't
+            // editable text (see TryReadText) can't take a faithful line edit: it stays a PURE rename.
+            if (!TryReadText(toAbs, out string text, out var encoding))
+            {
+                renames.Add(new Rename(rel, toRel, 1000));
+                continue;
+            }
+            var lines = SplitLines(text);
             int toChange = Math.Min(lines.Count, (int)Math.Ceiling((1 - target / 1000.0) * lines.Count));
-            var changed = ChangeFirstNLines(toAbs, toChange, i);
+            var changed = ChangeFirstNLines(toAbs, lines, encoding, toChange, i);
             if (changed.Count == 0)                            // empty file (or band rounds to 0 changed lines):
             {                                                  // byte-identical ⇒ a PURE rename, NOT a modified
                 renames.Add(new Rename(rel, toRel, 1000));     // record with an empty diff (the honesty guard).
@@ -220,10 +226,10 @@ public static class Mutator
     }
 
     /// <summary>Append a marker to the first <paramref name="n"/> lines (contiguous ⇒ one coalesced hunk),
-    /// preserving terminators. Returns the 1-based changed line numbers.</summary>
-    private static List<int> ChangeFirstNLines(string abs, int n, int idx)
+    /// preserving terminators and the file's encoding. Returns the 1-based changed line numbers.</summary>
+    private static List<int> ChangeFirstNLines(string abs, List<(string content, string term)> lines, Encoding encoding,
+        int n, int idx)
     {
-        var lines = SplitLines(File.ReadAllText(abs));
         var changed = new List<int>();
         var sb = new StringBuilder();
         for (int k = 0; k < lines.Count; k++)
@@ -232,7 +238,7 @@ public static class Mutator
             if (k < n) { content += $" /*ren:{idx}:{k}*/"; changed.Add(k + 1); }
             sb.Append(content).Append(lines[k].term);
         }
-        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        if (changed.Count > 0) WriteText(abs, sb.ToString(), encoding);   // nothing to change ⇒ never rewrite
         return changed;
     }
 
@@ -275,7 +281,10 @@ public static class Mutator
         for (int i = 0; i < chosen.Count; i++)
         {
             string rel = chosen[i];
-            int L = SplitLines(File.ReadAllText(AbsOf(corpus, rel))).Count;
+            // Not editable text ⇒ no edits on either side; its variant copies stay byte-identical to B (and the
+            // per-file RNG streams below are keyed by i, so skipping one never shifts another file's edits).
+            if (!TryReadText(AbsOf(corpus, rel), out string baseText, out _)) continue;
+            int L = SplitLines(baseText).Count;
             var rV2 = Rng.For(o.Seed, Category.Mutate, 300_000 + i);
             var rShare = Rng.For(o.Seed, Category.Mutate, 400_000 + i);
             var rV1 = Rng.For(o.Seed, Category.Mutate, 500_000 + i);
@@ -328,10 +337,14 @@ public static class Mutator
     }
 
     /// <summary>Append <paramref name="marker"/>(line) to each 1-based line in <paramref name="lines"/>,
-    /// preserving terminators (an in-place replace, line count unchanged).</summary>
+    /// preserving terminators and the file's encoding (an in-place replace, line count unchanged). A side with no
+    /// edits for this file is not rewritten at all — its bytes must stay identical to B, since its delta has no
+    /// record for the file.</summary>
     private static void AppendToLines(string abs, HashSet<int> lines, Func<int, string> marker)
     {
-        var ls = SplitLines(File.ReadAllText(abs));
+        if (lines.Count == 0) return;
+        if (!TryReadText(abs, out string text, out var encoding)) return;   // unreachable: the caller checked B's copy
+        var ls = SplitLines(text);
         var sb = new StringBuilder();
         for (int k = 0; k < ls.Count; k++)
         {
@@ -339,7 +352,7 @@ public static class Mutator
             if (lines.Contains(k + 1)) content += marker(k + 1);
             sb.Append(content).Append(ls[k].term);
         }
-        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        WriteText(abs, sb.ToString(), encoding);
     }
 
     private static void CopyTree(string src, string dst)
@@ -405,15 +418,16 @@ public static class Mutator
 
         foreach (var rel in chosen)                            // chosen is ordinal-sorted
         {
-            var baseLines = SplitLines(File.ReadAllText(AbsOf(corpus, rel)));
+            if (!TryReadText(AbsOf(corpus, rel), out string baseText, out var encoding)) continue;   // not editable text
+            var baseLines = SplitLines(baseText);
             if (baseLines.Count < EdgeMinLines) continue;      // too short for the fixed layout
             applied++;
 
             var p = EdgePlanFor();
             var r1 = RenderEdgeSide(baseLines, p, side: 1);
             var r2 = RenderEdgeSide(baseLines, p, side: 2);
-            File.WriteAllText(AbsOf(v1Root, rel), r1.Text, Encodings.Utf8NoBom);
-            File.WriteAllText(AbsOf(v2Root, rel), r2.Text, Encodings.Utf8NoBom);
+            WriteText(AbsOf(v1Root, rel), r1.Text, encoding);  // same encoding + BOM as B
+            WriteText(AbsOf(v2Root, rel), r2.Text, encoding);
 
             var (oldSha, oldSize) = HashFile(AbsOf(corpus, rel));
             v1Files.Add(EdgeDiffFile(rel, oldSha, oldSize, AbsOf(v1Root, rel), r1.Hunks));
@@ -682,14 +696,20 @@ public static class Mutator
         return hunks;
     }
 
-    /// <summary>Rel paths in the corpus matching the target population, sorted ordinally.</summary>
+    /// <summary>Rel paths in the corpus matching the target population, sorted ordinally. Never the corpus's own
+    /// bookkeeping: the <c>.codespawner</c> marker, the generator's root <c>compile_commands.json</c> (it embeds the
+    /// corpus's ABSOLUTE path, so editing it would make the delta's truth depend on where the corpus lives), or a
+    /// <c>*.mut.tmp</c> left by an interrupted giant edit (its presence would shift the selection).</summary>
     private static List<string> SelectTargets(string corpus, string target, int giantMinMb)
     {
         long giantFloor = (long)giantMinMb * 1024 * 1024;
         var result = new List<string>();
+        string compileDb = Path.Combine(corpus, "compile_commands.json");
         foreach (var abs in Directory.EnumerateFiles(corpus, "*", TreeWalk))
         {
             if (string.Equals(Path.GetFileName(abs), MarkerName, StringComparison.Ordinal)) continue;
+            if (string.Equals(abs, compileDb, StringComparison.OrdinalIgnoreCase)) continue;
+            if (abs.EndsWith(".mut.tmp", StringComparison.OrdinalIgnoreCase)) continue;
             bool match = target switch
             {
                 "source"  => HasExt(abs, ".c", ".cc", ".cpp", ".cxx"),
@@ -709,14 +729,15 @@ public static class Mutator
     /// change a diff tool sees, preserving the tokens already on each line (so def sites and the symbol table
     /// stay put). Line terminators (LF/CRLF) and a missing final newline are preserved EXACTLY, so a rewrite
     /// that marks zero lines is a byte-for-byte no-op (caught by the honesty guard) rather than a spurious
-    /// EOL/trailing-newline change. Returns the 1-based changed line numbers, ascending.
+    /// EOL/trailing-newline change. The file keeps its encoding + BOM (byte-faithful round-trip). Returns the
+    /// 1-based changed line numbers, ascending — or null if the file is not editable text (left untouched).
     /// </summary>
-    private static List<int> AppendPerLine(string path, double density, int seed, int fileIndex, Func<long, string> suffix)
+    private static List<int>? AppendPerLine(string path, double density, int seed, int fileIndex, Func<long, string> suffix)
     {
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + fileIndex);   // distinct stream per chosen file
         var changed = new List<int>();
-        string text = File.ReadAllText(path);                            // normal files are < giantFloor
+        if (!TryReadText(path, out string text, out var encoding)) return null;   // normal files are < giantFloor
         var sb = new StringBuilder(text.Length + 64);
         int i = 0; long lineNo = 0;
         while (i < text.Length)
@@ -734,7 +755,7 @@ public static class Mutator
             sb.Append(content).Append(term);
             lineNo++;
         }
-        File.WriteAllText(path, sb.ToString(), Encodings.Utf8NoBom);
+        WriteText(path, sb.ToString(), encoding);
         return changed;
     }
 
@@ -743,15 +764,18 @@ public static class Mutator
     /// line 1+k*stride) — the exact pattern a <see cref="RunHunk"/> with rangeStart=1 reproduces. Keeps the
     /// 1 GB headers off the heap. Returns the total line count (the run-rule's inclusive rangeEnd).
     /// </summary>
-    private static long ModifyGiant(string path, int stride, int fileIndex)
+    private static long? ModifyGiant(string path, int stride, int fileIndex)
     {
+        if (SniffEncoding(path) is not { } enc) return null;   // not editable text ⇒ untouched
+        bool nulIsBinary = enc.GetPreamble().Length == 0;      // BOM-less UTF-8 with a NUL ⇒ binary (TryReadText's rule)
         string tmp = path + ".mut.tmp";
         long lineNo = 0;
         var sb = new StringBuilder();                          // holds the current line's content (sans terminator)
         bool pendingCr = false;                                // a lone '\r' seen, waiting to see if it's CRLF
-        using (var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
-        using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
+        try
         {
+            using var reader = new StreamReader(path, enc, detectEncodingFromByteOrderMarks: false);   // skips enc's BOM
+            using var writer = new StreamWriter(tmp, false, enc);                                       // re-emits it
             var buf = new char[1 << 16];
             int read;
             while ((read = reader.Read(buf, 0, buf.Length)) > 0)
@@ -759,6 +783,7 @@ public static class Mutator
                 for (int k = 0; k < read; k++)
                 {
                     char c = buf[k];
+                    if (c == '\0' && nulIsBinary) throw new NotTextException();
                     if (pendingCr)                             // resolve the pending '\r': CRLF or a lone CR?
                     {
                         pendingCr = false;
@@ -772,6 +797,11 @@ public static class Mutator
             }
             if (pendingCr) EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);  // trailing lone CR
             if (sb.Length > 0) EmitGiantLine(writer, sb, "", stride, fileIndex, ref lineNo); // final line, no terminator
+        }
+        catch (Exception ex) when (ex is DecoderFallbackException or NotTextException)
+        {
+            File.Delete(tmp);                                  // not editable text: original untouched
+            return null;
         }
         File.Delete(path);
         File.Move(tmp, path);
@@ -829,12 +859,12 @@ public static class Mutator
             };
         }
 
-        EditResult r = kind switch
+        EditResult? edit = kind switch
         {
             "content"     => oldSize >= giantFloor ? (o.GiantEditMode == "single" ? GiantSingleEdit(abs, idx)
                                                                                   : GiantContentEdit(abs, stride, idx))
-                                                   : new EditResult(Coalesce(AppendPerLine(abs, o.EditDensity, o.Seed, idx, n => $" /*mut:{idx}:{n}*/")), null),
-            "whitespace"  => new EditResult(Coalesce(AppendPerLine(abs, o.EditDensity, o.Seed, idx, _ => "   ")), null),
+                                                   : Lines(AppendPerLine(abs, o.EditDensity, o.Seed, idx, n => $" /*mut:{idx}:{n}*/")),
+            "whitespace"  => Lines(AppendPerLine(abs, o.EditDensity, o.Seed, idx, _ => "   ")),
             "line-insert" => LineInsertEdit(abs, o.EditDensity, o.Seed, idx),
             "line-delete" => LineDeleteEdit(abs, o.EditDensity, o.Seed, idx),
             "eol"         => EolEdit(abs),
@@ -842,6 +872,7 @@ public static class Mutator
             "binary"      => BinaryEdit(abs, o.EditDensity, o.Seed, idx),
             _             => throw new ArgException($"unsupported --edit-kind '{kind}'"),
         };
+        if (edit is not { } r) return null;                    // not editable text for a text kind: untouched, not recorded
 
         var (newSha, newSize) = HashFile(abs);
         if (newSha == oldSha) return null;                     // honesty: no actual change ⇒ not recorded
@@ -855,9 +886,11 @@ public static class Mutator
         return df;
     }
 
-    private static EditResult GiantContentEdit(string abs, int stride, int idx)
+    private static EditResult? Lines(List<int>? changed) => changed is null ? null : new EditResult(Coalesce(changed), null);
+
+    private static EditResult? GiantContentEdit(string abs, int stride, int idx)
     {
-        long lines = ModifyGiant(abs, stride, idx);
+        if (ModifyGiant(abs, stride, idx) is not { } lines) return null;
         return new EditResult(new List<Hunk>(), new RunHunk(HunkOp.Replace, stride, 1, (int)Math.Min(lines, int.MaxValue), 1));
     }
 
@@ -867,9 +900,10 @@ public static class Mutator
     /// a multi-GB file that must re-diff ~one block out of thousands. Two streaming passes (count, then rewrite),
     /// so a 1 GB file never lands on the heap.
     /// </summary>
-    private static EditResult GiantSingleEdit(string abs, int idx)
+    private static EditResult? GiantSingleEdit(string abs, int idx)
     {
-        long total = CountGiantLines(abs);
+        if (SniffEncoding(abs) is not { } enc) return null;    // not editable text ⇒ untouched
+        if (CountGiantLines(abs, enc) is not { } total) return null;
         long anchor = Math.Max(1, total / 2);                  // insert AFTER this 1-based line (unified insert anchor)
         string inserted = $"// mutate single-locality insert {idx}";
 
@@ -877,8 +911,8 @@ public static class Mutator
         var sb = new StringBuilder();
         bool pendingCr = false;
         long lineNo = 0;
-        using (var reader = new StreamReader(abs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true))
-        using (var writer = new StreamWriter(tmp, false, Encodings.Utf8NoBom))
+        using (var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false))   // skips enc's BOM
+        using (var writer = new StreamWriter(tmp, false, enc))                                      // re-emits it
         {
             void Flush(string term)
             {
@@ -908,33 +942,42 @@ public static class Mutator
     }
 
     /// <summary>Stream-count the lines of a giant file (terminator-faithful: a missing final newline still
-    /// counts its line), without loading it.</summary>
-    private static long CountGiantLines(string abs)
+    /// counts its line), without loading it. Doubles as the text check for the single edit's rewrite pass:
+    /// null if the file is not editable text (strict decode failed, or a NUL in BOM-less UTF-8).</summary>
+    private static long? CountGiantLines(string abs, Encoding enc)
     {
         long lines = 0; bool pendingCr = false, sawContent = false;
-        using var reader = new StreamReader(abs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        bool nulIsBinary = enc.GetPreamble().Length == 0;
+        using var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false);
         var buf = new char[1 << 16];
         int read;
-        while ((read = reader.Read(buf, 0, buf.Length)) > 0)
+        while (true)
+        {
+            try { read = reader.Read(buf, 0, buf.Length); }
+            catch (DecoderFallbackException) { return null; }
+            if (read <= 0) break;
             for (int k = 0; k < read; k++)
             {
                 char c = buf[k];
+                if (c == '\0' && nulIsBinary) return null;
                 if (pendingCr) { pendingCr = false; lines++; sawContent = false; if (c == '\n') continue; }
                 if (c == '\r') { pendingCr = true; sawContent = true; continue; }
                 if (c == '\n') { lines++; sawContent = false; continue; }
                 sawContent = true;
             }
+        }
         if (pendingCr) lines++;
         else if (sawContent) lines++;                          // final line without a trailing terminator
         return lines;
     }
 
     /// <summary>Insert a fixed block of filler lines before ~density of the lines → insert hunks that renumber
-    /// everything after them (delta carries NEW coords). Inserted lines use LF (corpus is LF).</summary>
-    private static EditResult LineInsertEdit(string abs, double density, int seed, int idx)
+    /// everything after them (delta carries NEW coords). Inserted lines use LF (corpus is LF). Null = not text.</summary>
+    private static EditResult? LineInsertEdit(string abs, double density, int seed, int idx)
     {
         const int K = 2;
-        var lines = SplitLines(File.ReadAllText(abs));
+        if (!TryReadText(abs, out string text, out var encoding)) return null;
+        var lines = SplitLines(text);
         var sel = Selection(lines.Count, density, seed, idx);
         var hunks = new List<Hunk>();
         var sb = new StringBuilder();
@@ -950,15 +993,16 @@ public static class Mutator
             sb.Append(lines[k].content).Append(lines[k].term);
             newLine++;
         }
-        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        WriteText(abs, sb.ToString(), encoding);
         return new EditResult(hunks, null);
     }
 
     /// <summary>Delete ~density of the lines (consecutive runs coalesced) → delete hunks that renumber what
-    /// follows.</summary>
-    private static EditResult LineDeleteEdit(string abs, double density, int seed, int idx)
+    /// follows. Null = not text.</summary>
+    private static EditResult? LineDeleteEdit(string abs, double density, int seed, int idx)
     {
-        var lines = SplitLines(File.ReadAllText(abs));
+        if (!TryReadText(abs, out string text, out var encoding)) return null;
+        var lines = SplitLines(text);
         var sel = Selection(lines.Count, density, seed, idx);
         var hunks = new List<Hunk>();
         var sb = new StringBuilder();
@@ -978,24 +1022,28 @@ public static class Mutator
                 newLine++; k++;
             }
         }
-        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        WriteText(abs, sb.ToString(), encoding);
         return new EditResult(hunks, null);
     }
 
-    /// <summary>Flip every line terminator LF↔CRLF: bytes differ, ZERO textual hunks (the eol honesty case).</summary>
-    private static EditResult EolEdit(string abs)
+    /// <summary>Flip every line terminator LF↔CRLF: bytes differ, ZERO textual hunks (the eol honesty case). The
+    /// encoding + BOM are kept, so the terminators are the ONLY change. Null = not text.</summary>
+    private static EditResult? EolEdit(string abs)
     {
+        if (!TryReadText(abs, out string text, out var encoding)) return null;
         var sb = new StringBuilder();
-        foreach (var (content, term) in SplitLines(File.ReadAllText(abs)))
+        foreach (var (content, term) in SplitLines(text))
             sb.Append(content).Append(term switch { "\n" => "\r\n", "\r\n" => "\n", "\r" => "\n", _ => term });
-        File.WriteAllText(abs, sb.ToString(), Encodings.Utf8NoBom);
+        WriteText(abs, sb.ToString(), encoding);
         return NoHunks();
     }
 
-    /// <summary>Re-encode UTF-8(no BOM) → UTF-16LE(with BOM): bytes differ, decoded text identical, ZERO hunks.</summary>
-    private static EditResult EncodingEdit(string abs)
+    /// <summary>Re-encode to UTF-16LE(with BOM): bytes differ, decoded text identical, ZERO hunks. Strict decode, so
+    /// "decoded text identical" holds — a file that isn't valid text is skipped (null) rather than re-encoded with
+    /// U+FFFD substitutions; one already UTF-16LE produces no change (dropped by the honesty guard).</summary>
+    private static EditResult? EncodingEdit(string abs)
     {
-        string text = File.ReadAllText(abs);
+        if (!TryReadText(abs, out string text, out _)) return null;
         File.WriteAllText(abs, text, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
         return NoHunks();
     }
@@ -1009,6 +1057,57 @@ public static class Mutator
         for (int k = 0; k < bytes.Length; k++) if (rng.Next(10000) < threshold) bytes[k] ^= 0x5A;
         File.WriteAllBytes(abs, bytes);
         return NoHunks();
+    }
+
+    // ---- byte-faithful text round-trip -----------------------------------------------------------------
+    // Every line-level edit decodes a file, edits lines, and re-encodes it. That round-trip must not change any
+    // byte the edit didn't mean to change: the file is written back in the encoding it was read in (UTF-16 stays
+    // UTF-16, a BOM stays), and decoding is STRICT. A file that can't be round-tripped exactly — invalid UTF-8,
+    // NUL bytes without a UTF-16 BOM (binary; diff tools treat it as such), a UTF-32 BOM — is not editable text:
+    // the text edit kinds leave it untouched and record nothing, instead of silently transcoding it or replacing
+    // bytes with U+FFFD while the truth claimed a line edit.
+
+    /// <summary>Signals mid-stream that a giant file is not editable text (see the round-trip rules above).</summary>
+    private sealed class NotTextException : Exception;
+
+    /// <summary>The strict encoding to read AND write a file with, from its leading bytes, plus the BOM length
+    /// (0 if none). Null for a UTF-32 BOM, which the line edits can't handle faithfully.</summary>
+    private static Encoding? EncodingFor(ReadOnlySpan<byte> head, out int bomLen)
+    {
+        bomLen = 0;
+        if (head.Length >= 4 && head[0] == 0xFF && head[1] == 0xFE && head[2] == 0 && head[3] == 0) return null;   // UTF-32LE
+        if (head.Length >= 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF)
+        { bomLen = 3; return new UTF8Encoding(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true); }
+        if (head.Length >= 2 && head[0] == 0xFF && head[1] == 0xFE)
+        { bomLen = 2; return new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true); }
+        if (head.Length >= 2 && head[0] == 0xFE && head[1] == 0xFF)
+        { bomLen = 2; return new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true); }
+        return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    }
+
+    /// <summary>Decode a whole (non-giant) file for a line edit. False = not editable text; the file is untouched.</summary>
+    private static bool TryReadText(string abs, out string text, out Encoding encoding)
+    {
+        byte[] bytes = File.ReadAllBytes(abs);
+        text = "";
+        encoding = EncodingFor(bytes, out int bom)!;
+        if (encoding is null) return false;
+        if (bom == 0 && Array.IndexOf(bytes, (byte)0) >= 0) return false;      // NUL without a UTF-16 BOM ⇒ binary
+        try { text = encoding.GetString(bytes, bom, bytes.Length - bom); }
+        catch (DecoderFallbackException) { return false; }
+        return true;
+    }
+
+    /// <summary>Write edited text back in the file's own encoding (its BOM re-emitted iff it had one).</summary>
+    private static void WriteText(string abs, string text, Encoding encoding) => File.WriteAllText(abs, text, encoding);
+
+    /// <summary>The strict encoding for streaming a GIANT file, sniffed from its first bytes (null = not text).</summary>
+    private static Encoding? SniffEncoding(string abs)
+    {
+        Span<byte> head = stackalloc byte[4];
+        int n;
+        using (var fs = new FileStream(abs, FileMode.Open, FileAccess.Read, FileShare.Read)) n = fs.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+        return EncodingFor(head[..n], out _);
     }
 
     /// <summary>Split text into (content, terminator) pairs, preserving LF/CRLF and a missing final newline.</summary>
