@@ -1,0 +1,36 @@
+name: Tests
+
+# Runs the xUnit suite on every push to main, so the determinism goldens and regen-identity guards are an
+# enforced gate rather than something that only runs locally. JIT build + test only — the Native AOT publish
+# stays in scripts\release.ps1. Deliberately NOT triggered on pull_request: PRs are auto-closed (close-prs.yml)
+# and there's no reason to run untrusted code here.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Windows: the tool's home platform (Windows paths, the cross-machine regen workflow, the AOT target).
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Test
+        run: dotnet test CodeSpawner.sln --configuration Release --nologo
