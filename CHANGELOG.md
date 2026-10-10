@@ -41,6 +41,21 @@ reads it.
 - Malformed JSON input (manifest/profile) is reported as `error: malformed
   JSON input: …` with exit 2 instead of an unhandled-exception stack dump.
 
+### Fixed (diff truth)
+- Line-level `mutate` edits are byte-faithful. Before, every text edit kind
+  re-wrote the file as UTF-8 without a BOM, so UTF-16 files were silently
+  transcoded and BOMs dropped while the truth recorded only line hunks; invalid
+  UTF-8 had bytes replaced by U+FFFD; and 3-way rewrote files on a side that
+  drew no edits, leaving changes with no record. Now a file keeps its encoding
+  and BOM, only the edited lines change, and a file that is not exactly
+  round-trippable text (invalid UTF-8, NUL-bearing binary, UTF-32) is left
+  untouched and unrecorded by the text kinds (a pure rename under `rename`).
+  Plain UTF-8 corpora produce byte-identical output to 1.1.3. Both CodeDiffer
+  fixtures re-generate with the same `diffTruthSha`.
+- `mutate --target all` never selects the generator's root
+  `compile_commands.json`. Its absolute paths made `diffTruthSha` depend on
+  where the corpus lived. Leftover `*.mut.tmp` files are also skipped.
+
 ### Changed (release tooling)
 - `scripts\release.ps1` runs the test suite and builds + version-checks the
   AOT exe **before** anything is pushed. It commits and tags locally first, and
