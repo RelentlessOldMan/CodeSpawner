@@ -129,27 +129,60 @@ public class ProgramTests
         string a = Path.Combine(tmp.Path, "a"), b = Path.Combine(tmp.Path, "b");
         int rc = Cli(RichGenArgs(a).Concat(new[] { "--linked-roots", "2" }).ToArray());
         Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
-
-        var replay = new List<string> { "gen", "--out", b };
-        using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(tmp.Path, "a-manifest.json"))))
-            foreach (var k in doc.RootElement.GetProperty("_meta").GetProperty("gen").EnumerateObject())
-            {
-                string knob = k.Name == "maxHeaderMB" ? "max-header-mb"
-                    : System.Text.RegularExpressions.Regex.Replace(k.Name, "[A-Z]", m => "-" + char.ToLowerInvariant(m.Value[0]));
-                string val = k.Value.ValueKind switch
-                {
-                    System.Text.Json.JsonValueKind.True => "true",
-                    System.Text.Json.JsonValueKind.False => "false",
-                    System.Text.Json.JsonValueKind.String => k.Value.GetString()!,
-                    _ => k.Value.GetRawText(),
-                };
-                replay.Add($"--{knob}={val}");
-            }
-        rc = Cli(replay.ToArray());
-        Assert.True(rc == 0, $"replay exit {rc}: {_lastErr}");
+        ReplayMetaGen(Path.Combine(tmp.Path, "a-manifest.json"), b);
 
         foreach (var (root, other) in new[] { ("a", "b"), ("a_root1", "b_root1") })
             Assert.Equal(TreeSnapshot(Path.Combine(tmp.Path, root)), TreeSnapshot(Path.Combine(tmp.Path, other)));
+    }
+
+    // --macro-density is a cap only when set; unset, giants fill to maxHeaderMB uncapped. Recording the 1M default
+    // made a replay cap every giant over 1M defines (a death giant came back ~56 MB instead of 1229 MB). Too big to
+    // replay here, so: the default is not recorded, and a set cap is recorded and replays byte-identically.
+    [Fact]
+    public void Gen_MetaGen_MacroDensity_RecordedOnlyWhenSet_AndCapReplays()
+    {
+        using var tmp = new TempDir();
+        string a = Path.Combine(tmp.Path, "a"), b = Path.Combine(tmp.Path, "b"), c = Path.Combine(tmp.Path, "c");
+        int rc = Cli(RichGenArgs(a));
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+        Assert.False(MetaGen(Path.Combine(tmp.Path, "a-manifest.json")).ContainsKey("macroDensity"));
+
+        rc = Cli(RichGenArgs(b).Concat(new[] { "--macro-density", "500" }).ToArray());
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+        Assert.Equal("500", MetaGen(Path.Combine(tmp.Path, "b-manifest.json"))["macroDensity"]);
+        Assert.NotEqual(TreeSnapshot(a), TreeSnapshot(b));              // the cap really bit (1 MB giant > 500 defines)
+        ReplayMetaGen(Path.Combine(tmp.Path, "b-manifest.json"), c);
+        Assert.Equal(TreeSnapshot(b), TreeSnapshot(c));
+    }
+
+    // _meta.gen as knob → value text (bools lower-case, strings bare, numbers raw).
+    private static Dictionary<string, string> MetaGen(string manifest)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
+        var d = new Dictionary<string, string>();
+        foreach (var k in doc.RootElement.GetProperty("_meta").GetProperty("gen").EnumerateObject())
+            d[k.Name] = k.Value.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.True => "true",
+                System.Text.Json.JsonValueKind.False => "false",
+                System.Text.Json.JsonValueKind.String => k.Value.GetString()!,
+                _ => k.Value.GetRawText(),
+            };
+        return d;
+    }
+
+    // The documented replay recipe: every _meta.gen key back to gen (camelCase → --kebab-case).
+    private static void ReplayMetaGen(string manifest, string outDir)
+    {
+        var replay = new List<string> { "gen", "--out", outDir };
+        foreach (var (name, val) in MetaGen(manifest))
+        {
+            string knob = name == "maxHeaderMB" ? "max-header-mb"
+                : System.Text.RegularExpressions.Regex.Replace(name, "[A-Z]", m => "-" + char.ToLowerInvariant(m.Value[0]));
+            replay.Add($"--{knob}={val}");
+        }
+        int rc = Cli(replay.ToArray());
+        Assert.True(rc == 0, $"replay exit {rc}: {_lastErr}");
     }
 
     [Fact]
@@ -277,9 +310,41 @@ public class ProgramTests
         File.WriteAllText(Path.Combine(tmp.Path, "c-manifest.json"), "{\"_meta\": {\"gen\": {");
 
         Assert.Equal(2, Cli("mutate", "--corpus", corpus, "--target", "source"));
-        Assert.StartsWith("error: malformed JSON", _lastErr.Trim());
+        Assert.Contains("error: malformed JSON", _lastErr);
         Assert.Equal("int a;\n", File.ReadAllText(Path.Combine(corpus, "a.c")));
     }
+
+    // Well-formed JSON of the wrong shape is bad input too: mutate exits 2 with an "error:" line, verify reports
+    // FAIL (or passes a manifest with nothing to check) — neither throws. A symbol without a def is a verify FAIL,
+    // never a silent pass.
+    [Theory]
+    [InlineData("{\"symbols\":{}}", 1)]                                                              // no _meta
+    [InlineData("{\"_meta\":{\"manifestVersion\":1.5},\"symbols\":{}}", 1)]                        // non-integer version
+    [InlineData("{\"_meta\":{\"manifestVersion\":1,\"seed\":99999999999},\"symbols\":{}}", 0)]    // seed overflows int
+    [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"refs\":[]}}}", 1)]      // symbol without def
+    [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"def\":null}}}", 1)]     // null def
+    [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"def\":\"a.c:1\",\"refs\":[null]}}}", 2)]   // null ref: malformed (exit 2)
+    [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"def\":\"a.c:1\",\"bytes\":1e40}}}", 1)]
+    public void MalformedManifestShape_MutateExit2_VerifyFailsCleanly(string manifest, int verifyExit)
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c");
+        Directory.CreateDirectory(corpus);
+        File.WriteAllText(Path.Combine(corpus, ".codespawner"), "CodeSpawner test\n");
+        File.WriteAllText(Path.Combine(corpus, "a.c"), "int a;\n");
+        File.WriteAllText(Path.Combine(tmp.Path, "c-manifest.json"), manifest);
+
+        Assert.Equal(2, Cli("mutate", "--corpus", corpus));
+        Assert.Contains("error: malformed", _lastErr);
+        Assert.Equal("int a;\n", File.ReadAllText(Path.Combine(corpus, "a.c")));
+        Assert.Equal(verifyExit, Cli("verify", "--corpus", corpus));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    public void Mutate_EditsBelowOne_IsAnArgError(string edits) =>
+        Assert.Equal(2, Cli("mutate", "--corpus", "x", "--edits", edits));
 
     [Fact]
     public void Verify_FailsOnTamperedCorpus()

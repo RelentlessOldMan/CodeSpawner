@@ -186,6 +186,7 @@ public static class ArgParser
         if (o.ShardSize > 0) throw new ArgException("--shard-size requires --target (bulk mode)");
         if (o.DecoyFraction > 0) throw new ArgException("--decoy-fraction requires --target (bulk mode)");
         if (o.FilesChanged is not null) throw new ArgException("--files-changed requires --target (bulk mode)");
+        if (o.Edits < 1) throw new ArgException("--edits must be >= 1");
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
         if (o.Step is { } k && (k < 1 || k > o.Edits)) throw new ArgException($"--step must be in 1..{o.Edits}");
         return o;

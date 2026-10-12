@@ -81,6 +81,13 @@ public static class Program
             Console.Error.WriteLine($"error: malformed JSON input: {ex.Message}");
             return 2;
         }
+        catch (Exception ex) when (ex is FormatException or KeyNotFoundException)
+        {
+            // Well-formed JSON of the wrong shape: a missing required key, a non-string where a string belongs, or a
+            // number that doesn't fit (1.5 or 1e40 where an integer belongs). Also bad input, not a crash.
+            Console.Error.WriteLine($"error: malformed input: {ex.Message}");
+            return 2;
+        }
     }
 
     // Asserts the canonical truth digest still reproduces the golden vector locked with CodeCompass.

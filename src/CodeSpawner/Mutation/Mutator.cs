@@ -64,11 +64,11 @@ public static class Mutator
             // Replay edits 1..k-1 on the table only (their disk ops were done by prior --step calls),
             // then apply edit k for real (disk + table). Delta composes onto truth_{k-1}.
             var work = Clone(basem.Symbols);
-            for (int j = 0; j < k - 1; j++) ApplyEdit(plan[j], corpus, work, touchDisk: false);
+            for (int j = 0; j < k - 1; j++) ApplyEdit(plan[j], corpus, work, live: false);
             string prevSha = TruthDigest.Compute(work);
             var before = Clone(work);
-            var ops = ApplyEdit(plan[k - 1], corpus, work, touchDisk: true);
-            WriteDelta(corpus, basem, o, k, prevSha, before, work, ops);
+            var ops = ApplyEdit(plan[k - 1], corpus, work, live: true);
+            CommitStep(corpus, basem, o, k, prevSha, before, work, ops, plan[k - 1]);
         }
         else if (o.Through)
         {
@@ -76,7 +76,11 @@ public static class Mutator
             string prevSha = TruthDigest.Compute(basem.Symbols); // composes onto base
             var before = Clone(basem.Symbols);
             var ops = new FileOps();
-            for (int j = 0; j < plan.Count; j++) Merge(ops, ApplyEdit(plan[j], corpus, work, touchDisk: true));
+            for (int j = 0; j < plan.Count; j++)
+            {
+                Merge(ops, ApplyEdit(plan[j], corpus, work, live: true));
+                ApplyDisk(plan[j]);
+            }
             WriteDelta(corpus, basem, o, null, prevSha, before, work, ops);
         }
         else
@@ -87,11 +91,24 @@ public static class Mutator
             {
                 string prevSha = TruthDigest.Compute(work);
                 var before = Clone(work);
-                var ops = ApplyEdit(plan[j], corpus, work, touchDisk: true);
-                WriteDelta(corpus, basem, o, j + 1, prevSha, before, work, ops);
+                var ops = ApplyEdit(plan[j], corpus, work, live: true);
+                CommitStep(corpus, basem, o, j + 1, prevSha, before, work, ops, plan[j]);
             }
         }
         return 0;
+    }
+
+    /// <summary>
+    /// One step: delta first, then the disk edit; a failed disk edit deletes the delta. Either failure leaves the
+    /// file untouched and no step-k delta, so retrying <c>--step k</c> is safe (editing first left the edit on disk
+    /// unrecorded when the delta write failed, and a retry applied it twice).
+    /// </summary>
+    private static void CommitStep(string corpus, BaseManifest basem, MutateOptions o, int k, string prevSha,
+        Dictionary<string, SymbolEntry> before, Dictionary<string, SymbolEntry> after, FileOps ops, Edit e)
+    {
+        string delta = WriteDelta(corpus, basem, o, k, prevSha, before, after, ops);
+        try { ApplyDisk(e); }
+        catch { File.Delete(delta); throw; }
     }
 
     // ---- bulk in-place mutation (diff-oracle mode) ----------------------------------------------------
@@ -1278,7 +1295,7 @@ public static class Mutator
         if (restreamNeed > restreamPool.Count)
             throw new ArgException($"--edits {o.Edits} needs {restreamNeed} restream seed(s) but this corpus has {restreamPool.Count}; regenerate the base with --restream-seeds {restreamNeed} or use fewer --edits.");
 
-        var plan = new List<Edit>(o.Edits);
+        var plan = new List<Edit>();                      // no pre-size: a huge --edits runs out of source files (ArgException), not memory
         int srcCur = 0, growCur = 0, shrinkCur = 0, restreamCur = 0;
         for (int k = 0; k < o.Edits; k++)
         {
@@ -1309,7 +1326,10 @@ public static class Mutator
 
     // ---- applying one edit (disk + table) -------------------------------------------------------------
 
-    private static FileOps ApplyEdit(Edit e, string corpus, Dictionary<string, SymbolEntry> work, bool touchDisk)
+    /// <summary>Apply one edit to the symbol table and return its file ops; <see cref="ApplyDisk"/> does the disk
+    /// half. <paramref name="live"/>: the edit is about to hit disk, so a removal lists the sibling files that
+    /// really exist (a table-only replay of an earlier step records just the source path).</summary>
+    private static FileOps ApplyEdit(Edit e, string corpus, Dictionary<string, SymbolEntry> work, bool live)
     {
         var ops = new FileOps();
         string rel = RelOf(corpus, e.Path);
@@ -1322,11 +1342,8 @@ public static class Mutator
                     if (SplitSite(work[name].Def).path == rel) work.Remove(name);
                 foreach (var s in work.Values)
                     s.Refs.RemoveAll(r => SplitSite(r).path == rel);
-                if (touchDisk)
-                {
-                    foreach (var f in SiblingSet(e.Path)) if (File.Exists(f)) File.Delete(f);
+                if (live)
                     foreach (var f in SiblingSet(e.Path)) ops.Removed.Add(RelOf(corpus, f));
-                }
                 else ops.Removed.Add(rel);
                 break;
             }
@@ -1338,44 +1355,54 @@ public static class Mutator
                     s.Def = ShiftSite(s.Def, rel, insertPos, LineShiftLines);
                     for (int i = 0; i < s.Refs.Count; i++) s.Refs[i] = ShiftSite(s.Refs[i], rel, insertPos, LineShiftLines);
                 }
-                if (touchDisk)
-                {
-                    var lines = new List<string>(File.ReadAllLines(e.Path));
-                    int at = Math.Clamp(insertPos - 1, 0, lines.Count);
-                    var pad = Enumerable.Range(0, LineShiftLines).Select(i => $"// mutate line-shift filler {i}");
-                    lines.InsertRange(at, pad);
-                    File.WriteAllText(e.Path, string.Join('\n', lines), Encodings.Utf8NoBom);
-                }
                 ops.Modified.Add(rel);
                 break;
             }
             case EditType.Add:
             {
-                string body = $"#include <stddef.h>\nint {e.Symbol}(int x) {{ return x + 1; }}\n"; // def on line 2
                 work[e.Symbol!] = new SymbolEntry { Def = $"{rel}:{e.DefLine}" };
-                if (touchDisk) File.WriteAllText(e.Path, body, Encodings.Utf8NoBom);
                 ops.Added.Add(rel);
                 break;
             }
             case EditType.Grow:
-                if (touchDisk) GrowTo(e.Path, GrowTargetBytes);
-                ops.Modified.Add(rel);
-                break;
             case EditType.Shrink:
-                if (touchDisk) OverwriteTo(e.Path, ShrinkTargetBytes);
-                ops.Modified.Add(rel);
-                break;
             case EditType.Restream:
-                if (touchDisk) OverwriteTo(e.Path, RestreamTargetBytes);
                 ops.Modified.Add(rel);
                 break;
         }
         return ops;
     }
 
+    /// <summary>The disk half of an edit (<see cref="ApplyEdit"/> is the table half).</summary>
+    private static void ApplyDisk(Edit e)
+    {
+        switch (e.Type)
+        {
+            case EditType.Remove:
+                foreach (var f in SiblingSet(e.Path)) if (File.Exists(f)) File.Delete(f);
+                break;
+            case EditType.LineShift:
+            {
+                var lines = new List<string>(File.ReadAllLines(e.Path));
+                int at = Math.Clamp(e.DefLine - 1, 0, lines.Count);
+                var pad = Enumerable.Range(0, LineShiftLines).Select(i => $"// mutate line-shift filler {i}");
+                lines.InsertRange(at, pad);
+                File.WriteAllText(e.Path, string.Join('\n', lines), Encodings.Utf8NoBom);
+                break;
+            }
+            case EditType.Add:                                 // def on line 2
+                File.WriteAllText(e.Path, $"#include <stddef.h>\nint {e.Symbol}(int x) {{ return x + 1; }}\n",
+                    Encodings.Utf8NoBom);
+                break;
+            case EditType.Grow: GrowTo(e.Path, GrowTargetBytes); break;
+            case EditType.Shrink: OverwriteTo(e.Path, ShrinkTargetBytes); break;
+            case EditType.Restream: OverwriteTo(e.Path, RestreamTargetBytes); break;
+        }
+    }
+
     // ---- delta emission -------------------------------------------------------------------------------
 
-    private static void WriteDelta(string corpus, BaseManifest basem, MutateOptions o, int? step, string prevSha,
+    private static string WriteDelta(string corpus, BaseManifest basem, MutateOptions o, int? step, string prevSha,
         Dictionary<string, SymbolEntry> before, Dictionary<string, SymbolEntry> after, FileOps ops)
     {
         string path = step is { } k ? $"{TrimDir(corpus)}-delta-{k}.json" : $"{TrimDir(corpus)}-delta.json";
@@ -1383,6 +1410,7 @@ public static class Mutator
         AtomicFile.Write(path, fs => (changed, tombs) = WriteDeltaJson(fs, basem, o, step, prevSha, before, after, ops));
         Console.WriteLine($"  {Path.GetFileName(path)}: {changed} changed, {tombs} tombstoned, " +
                           $"+{ops.Added.Count}/-{ops.Removed.Count}/~{ops.Modified.Count} files");
+        return path;
     }
 
     private static (int changed, int tombs) WriteDeltaJson(Stream fs, BaseManifest basem, MutateOptions o, int? step,
