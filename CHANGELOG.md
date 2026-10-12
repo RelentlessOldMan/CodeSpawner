@@ -73,6 +73,22 @@ reads it.
   skipped, so a truncated manifest could drop def sites and still pass.
 - Malformed manifest values no longer crash verify.
 
+### Docs
+- diff-delta-design.md: the 3-way conflict JSON example now matches what is
+  written (`v1`/`v2` objects with op/newStart/newLines; flat `mergedClean`
+  records with `side`); the edit kinds are `line-insert`/`line-delete`; an
+  empty digest section is zero bytes (there is no header); the
+  `conflictTruthSha` golden vector's input is spelled out.
+- knobs.md: the bulk and 3-way mutate options and the `--from-profile` /
+  oracle knobs are listed; `--io-parallelism` is in its own section with its
+  real auto default; `--preset memory` has 3 includers, not 5.
+- mutate-design.md: status, output and edit-kind list brought up to date;
+  symbol-mode rename is marked as never built.
+- `digest-selftest` is in `--help`, the README and USAGE; manifest-schema.md
+  says it prints all four vectors.
+- `vendor-codespawner.ps1` also copies mutate-design.md, diff-delta-design.md
+  and oracle-v1-design.md, not just manifest-schema.md.
+
 ### Tests
 - The emitted `diffTruthSha` and `conflictTruthSha` are recomputed from the
   delta/conflict JSON alone (every edit kind, giant run rule, reassembled

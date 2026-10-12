@@ -185,6 +185,7 @@ public static class Program
               codespawner gen --from-profile <p> --out <dir>   regenerate a look-alike from a profile
               codespawner verify --corpus <dir> [--manifest <path>]   self-check a corpus against its manifest
               codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest
+              codespawner digest-selftest                reproduce the four golden digest vectors (exit 1 on drift)
               codespawner version
 
             SCAN (privacy-preserving characterize -> regenerate; see docs/scan-design.md):

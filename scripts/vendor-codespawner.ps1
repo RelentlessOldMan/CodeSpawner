@@ -4,9 +4,9 @@
 
 .DESCRIPTION
   Per the shared plan (§6.1/§10): consumers VENDOR a pinned generator, they do NOT submodule it. This
-  copies dist\codespawner.exe + the manifest schema into <Target>\tools\codespawner\ and records a
+  copies dist\codespawner.exe + the contract docs into <Target>\tools\codespawner\ and records a
   GENERATOR_VERSION file (generator version, manifestVersion, source commit-less stamp). The real coupling
-  is the manifest contract, so the schema travels with the binary and the version is asserted downstream.
+  is the manifest + delta contracts, so their docs travel with the binary and the version is asserted downstream.
 
 .PARAMETER Target   The consumer repo root to vendor into (e.g. C:\Playground\CodeCompass).
 .PARAMETER Exe      Path to a prebuilt codespawner.exe (default: .\dist\codespawner.exe).
@@ -27,7 +27,9 @@ $destDir = Join-Path $Target "tools\codespawner"
 New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 
 Copy-Item $Exe (Join-Path $destDir "codespawner.exe") -Force
-Copy-Item (Join-Path $root "docs\manifest-schema.md") (Join-Path $destDir "manifest-schema.md") -Force
+# The contract docs: the manifest, the symbol/diff/conflict deltas, and the oracle overlay they cite.
+$docs = "manifest-schema.md", "mutate-design.md", "diff-delta-design.md", "oracle-v1-design.md"
+foreach ($d in $docs) { Copy-Item (Join-Path $root "docs\$d") (Join-Path $destDir $d) -Force }
 
 $stamp = @"
 CodeSpawner generator vendored into this repo.
@@ -41,4 +43,4 @@ note             : Vendored, not a submodule. Re-run scripts\vendor-codespawner.
 Set-Content (Join-Path $destDir "GENERATOR_VERSION") $stamp -Encoding utf8
 
 Write-Host "Vendored codespawner $version -> $destDir" -ForegroundColor Green
-Write-Host "  codespawner.exe, manifest-schema.md, GENERATOR_VERSION"
+Write-Host "  codespawner.exe, $($docs -join ', '), GENERATOR_VERSION"

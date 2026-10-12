@@ -55,7 +55,45 @@ the base (`truth = base ⊕ delta`). See [mutate-design.md](mutate-design.md). G
 marker. Options: `--corpus <dir>`, `--seed <n>` (edit seed), `--edits <n>`, `--step <k>` (apply one edit →
 `<corpus>-delta-{k}.json`, the chain driver), `--through` (all edits → one cumulative delta), `--restream`.
 Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the threshold-crossing edits.
-| `--io-parallelism <n>` | `#cores` | Max concurrent large-header writes. Header emission is CPU-bound (~40 MB/s/core) so it scales with cores on SSD; lower it on a spinning disk. |
+
+**Bulk mode** (the diff oracle; `--target` switches it on — see [diff-delta-design.md](diff-delta-design.md)):
+
+| Option | Default | What it does |
+|---|---|---|
+| `--target source\|headers\|giant\|all` | — | Population to change. Its presence selects bulk mode. |
+| `--files-changed <n>` | all matching | How many target files to change (chosen deterministically from `--seed`). |
+| `--edit-density <f>` | `0.05` | Fraction of each file's lines changed, 0..1. |
+| `--giant-min-mb <n>` | `100` | Size floor for `--target giant`, and above which a `content` edit uses the giant-file path. |
+| `--giant-edit strided\|single` | `strided` | Giant `content` edit: every stride-th line (one run-rule hunk), or one inserted line mid-file. |
+| `--edit-kind <k>` | `content` | `content`, `line-insert`, `line-delete`, `whitespace`, `eol`, `encoding`, `binary`, `metadata`, `mixed` (one kind per file, cycling the six reasons), `rename`. |
+| `--decoy-fraction <f>` | `0` | `rename` only: fraction of files copied as near-duplicate ADD decoys instead of renamed. |
+| `--shard-size <n>` | `0` | `0` = one `<corpus>-delta.json`; `>0` = an index + shards of ≤ n modified records each. |
+| `--three-way` | off | Leave the base pristine; emit `<corpus>_v1/` + `<corpus>_v2/`, their deltas and `<corpus>-conflict.json`. |
+| `--overlap-fraction <f>` | `0.5` | 3-way: fraction of V2's edits that land on V1's lines (conflicts). |
+| `--conflict-edges` | off | 3-way: the fixed edge-case layout (adjacent, modify/delete, add/add, identical-overlap) instead. |
+
+## Generation performance
+
+| Knob | Default | Property it stresses |
+|---|---|---|
+| `--io-parallelism <n>` | auto | Max concurrent large-header writes. Auto picks all cores on an SSD, 1 on a spinning disk, and min(cores, 4) when the disk type can't be detected (e.g. a network share); the choice is printed. |
+
+## `gen --from-profile` and the oracle overlay
+
+See [scan-design.md](scan-design.md) and [oracle-v1-design.md](oracle-v1-design.md).
+
+| Knob | Default | What it does |
+|---|---|---|
+| `--from-profile <p>` | — | Regenerate a look-alike tree from a `scan` profile instead of the knobs above. |
+| `--with-oracle` | off | Overlay the ground-truth call-graph spine and write a manifest. |
+| `--oracle-scale` | off | Scale spine function bodies to the profile's measured `.c` size. |
+| `--oracle-chain <n>` | `12` | `func_i` node budget. |
+| `--oracle-fanout <n>` | `0` | Out-degree per node; >0 builds a seeded DAG instead of a linear chain. |
+| `--oracle-depth <n>` | `0` | Cap on DAG depth (0 = sized by `--oracle-chain`). |
+| `--oracle-shared-leaves <n>` | `0` | Shared sink nodes reached by several callers (diamonds). |
+| `--oracle-reachable-frac <f>` | `0` | Target reachable fraction from `_meta.roots` (adds dead subgraphs). |
+| `--oracle-indirect <n>` | `0` | Indirect edges (fnptr / vector-table / init_array) with `_meta.indirectTruthSha`. |
+| `--oracle-bytes` | off | Per-symbol byte mass and `_meta.totalOracleBytes`. |
 
 ## Presets
 
@@ -63,7 +101,7 @@ Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the thresho
 |---|---|---|
 | `--preset death` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale "repo of death". |
 | `--preset ci` | `--scale 0.01` | Fast smoke tier; keeps ≥1 pathology header. |
-| `--preset memory` | one giant + 5 includers, everything else off, 1M macro density | Pure preprocessor-memory repro. |
+| `--preset memory` | one giant header, 5 `.c` files of which 3 include it (`--giant-includers` default), everything else off, 1M macro density | Pure preprocessor-memory repro. |
 | `--preset dense-band` | `--dense-headers 40 --dense-under-mb 127` (noise off) | Posting/trigram memory explosion — the OOM regression (~5 GB). |
 | `--preset broad-token` | `--broad-token-files 200 --hot-token-share 0.5` (noise off) | `find_references`-at-scale + sidecar read amplification (~1 GB). |
 | `--preset long-lines` | `--long-line-files 8 --max-line-bytes 8388608` (noise off) | Long-line / no-newline block-building stress. |

@@ -112,6 +112,12 @@ tree then matches neither its base manifest nor any delta, so mutate refuses the
 until you regenerate it. Each file is rewritten through a temp file and renamed into place, so a single file
 is never left half-written.
 
+### `digest-selftest`
+Recomputes the four golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`,
+`conflictTruthSha`) from their frozen fixtures and prints them; exit 1 if any drifted. Consumers reproduce
+the same vectors to prove their own recompute matches (see [manifest-schema.md](manifest-schema.md) and
+[diff-delta-design.md](diff-delta-design.md)).
+
 ### `version`
 Prints the generator version (used by the vendoring stamp).
 
@@ -228,7 +234,8 @@ contract, versioned in [`manifest-schema.md`](manifest-schema.md)).
 .\scripts\vendor-codespawner.ps1 -Target C:\Playground\CodeCarver
 ```
 
-This copies `codespawner.exe` + `manifest-schema.md` into `<repo>\tools\codespawner\` and writes a
+This copies `codespawner.exe` and the contract docs (`manifest-schema.md`, `mutate-design.md`,
+`diff-delta-design.md`, `oracle-v1-design.md`) into `<repo>\tools\codespawner\` and writes a
 `GENERATOR_VERSION` stamp. Each consumer keeps its own thin verify adapter and **asserts
 `_meta.manifestVersion == 1`** before trusting a manifest:
 
