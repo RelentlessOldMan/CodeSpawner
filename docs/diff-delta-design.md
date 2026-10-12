@@ -273,7 +273,11 @@ The **gen** manifest (`<corpus>-manifest.json`) now carries a `_meta.gen` object
 produced the corpus (post-scale counts + literal sizes/flags + seed/scale), i.e. the self-contained recipe to
 regenerate the tree byte-identically. Additive and ignored by readers that don't look for it; it does **not**
 enter any `truthSha` (it only changes the manifest file's own `baseManifestSha`, which is not a digest input).
-A corpus genned pre-1.1.1 simply lacks the block.
+A corpus genned pre-1.1.1 simply lacks the block. To replay it, pass every key back to `gen` as a knob
+(camelCase → `--kebab-case`, `maxHeaderMB` → `--max-header-mb`, e.g. `--giant-headers=0 --no-newline=false`);
+all counts are then explicit, so scaling is bypassed. The tree regenerates byte-identically, except
+`compile_commands.json`, which embeds the absolute `--out` path. Before 1.1.5, `dirs` was recorded unscaled,
+so a replay of a corpus that used the default (scaled) `--dirs` placed files in different directories.
 
 ### Paged / sharded delta (`--shard-size N`)
 A death-scale 2-way delta can exceed what a consumer streams through `JsonDocument.Parse` whole. `--shard-size

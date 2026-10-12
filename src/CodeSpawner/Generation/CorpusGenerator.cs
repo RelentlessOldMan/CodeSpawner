@@ -291,7 +291,7 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("shrinkSeeds", (long)_o.ShrinkSeeds));
         g.Add(GenKnob.Of("restreamSeeds", (long)_o.RestreamSeeds));
         g.Add(GenKnob.Of("giantIncluders", (long)_o.GiantIncluders));
-        g.Add(GenKnob.Of("dirs", (long)_o.Dirs));
+        g.Add(GenKnob.Of("dirs", (long)_o.Eff("Dirs", _o.Dirs)));          // scaled like the counts (DirTree)
         g.Add(GenKnob.Of("depth", (long)_o.Depth));
         g.Add(GenKnob.Of("linkedRoots", (long)_o.LinkedRoots));
         g.Add(GenKnob.Of("unresolvedIncludes", (long)_o.UnresolvedIncludes));
