@@ -1316,6 +1316,7 @@ public static class Mutator
 
         w.WriteStartObject("_meta");
         w.WriteNumber("manifestVersion", 1);
+        w.WriteString("deltaKind", "symbol");          // every delta names its kind (diff / conflict-3way / symbol)
         w.WriteNumber("baseSeed", basem.Seed);
         w.WriteNumber("editSeed", o.Seed);
         if (step is { } s) w.WriteNumber("step", s);

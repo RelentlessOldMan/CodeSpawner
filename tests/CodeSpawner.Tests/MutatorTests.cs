@@ -162,17 +162,10 @@ public class MutatorTests
             using var tmp = new TempDir();
             var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6);
             Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 7 });
-            // Compare only root-independent content (prevTruthSha + fileOps + symbols overlay); baseManifestSha
-            // can embed the absolute corpus root, which legitimately differs between temp dirs.
+            // The whole delta files, byte for byte: baseManifestSha ignores the corpus root, so two temp dirs
+            // produce identical deltas.
             var sb = new System.Text.StringBuilder();
-            for (int k = 1; k <= 3; k++)
-            {
-                using var d = Doc(StepDelta(corpus, k));
-                sb.Append(d.RootElement.GetProperty("_meta").GetProperty("prevTruthSha").GetString());
-                sb.Append(d.RootElement.GetProperty("fileOps").GetRawText());
-                sb.Append(d.RootElement.GetProperty("symbols").GetRawText());
-                sb.Append('|');
-            }
+            for (int k = 1; k <= 3; k++) sb.Append(File.ReadAllText(StepDelta(corpus, k))).Append('|');
             return sb.ToString();
         }
         Assert.Equal(Fingerprint(), Fingerprint());

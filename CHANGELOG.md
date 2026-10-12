@@ -66,6 +66,22 @@ reads it.
   `binary` deltas get a new `diffTruthSha`.
 - The shard count for `--shard-size` no longer overflows near `int.MaxValue`.
 
+### Changed (artifact contract — agreed with CodeDiffer and CodeCompass)
+- Symbol deltas now carry `"_meta.deltaKind": "symbol"`, so every delta names
+  its kind (`diff`, `conflict-3way`, `symbol`). Older symbol deltas omit it.
+- `baseManifestSha` no longer depends on where the corpus lives or which OS
+  wrote the manifest. It is SHA-256 of the manifest bytes with CR bytes dropped
+  and `_meta.corpusRoot` blanked. Before, it hashed the raw file, so a corpus
+  regenerated at another path got a different value for identical content.
+  Every `baseManifestSha` value changes once. Symbol deltas made from the same
+  seed are now byte-identical wherever the corpus is.
+- Every JSON artifact (manifest, deltas, shards, index, conflict file,
+  profile) is written with LF line endings on every OS. On Windows these used
+  CRLF, so the bytes and shard shas differed from Linux. Windows shard shas
+  change once. No `truthSha`/`diffTruthSha`/`conflictTruthSha` changes: they
+  are digests of the content, not of the file bytes. Corpus files, including
+  `compile_commands.json`, are unchanged.
+
 ### Changed (release tooling)
 - `scripts\release.ps1` runs the test suite and builds + version-checks the
   AOT exe **before** anything is pushed. It commits and tags locally first, and

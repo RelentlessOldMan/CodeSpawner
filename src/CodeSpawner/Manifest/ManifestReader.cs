@@ -10,7 +10,8 @@ public sealed class BaseManifest
     public required int Seed { get; init; }
     public required string GeneratorVersion { get; init; }
     public required string CorpusRoot { get; init; }
-    /// <summary>sha256 of the manifest file bytes — a delta records this to bind to its exact base.</summary>
+    /// <summary>The base's identity sha (<see cref="ManifestReader.IdentitySha"/>) — a delta records this as
+    /// baseManifestSha to bind to its exact base.</summary>
     public required string Sha256 { get; init; }
     public required Dictionary<string, SymbolEntry> Symbols { get; init; }
     /// <summary>Declared entry-point symbol names (oracle overlay); empty when absent.</summary>
@@ -20,10 +21,42 @@ public sealed class BaseManifest
 /// <summary>Reads a v1 manifest (produced by <see cref="ManifestWriter"/>) back into a symbol table.</summary>
 public static class ManifestReader
 {
+    /// <summary>
+    /// baseManifestSha: sha256 of the manifest bytes with every CR byte dropped and the <c>_meta.corpusRoot</c>
+    /// string value replaced by <c>""</c>. So the same corpus regenerated at another path, or on another OS, binds
+    /// the same deltas; any other change to the manifest still changes it. (CR can only be whitespace in valid
+    /// JSON — strings escape it.)
+    /// </summary>
+    public static string IdentitySha(byte[] bytes)
+    {
+        byte[] lf = Array.FindAll(bytes, b => b != (byte)'\r');
+        var (start, end) = CorpusRootValueRange(lf);
+        byte[] id = start < 0 ? lf : [.. lf.AsSpan(0, start), (byte)'"', (byte)'"', .. lf.AsSpan(end)];
+        return Convert.ToHexString(SHA256.HashData(id)).ToLowerInvariant();
+    }
+
+    /// <summary>Byte range [start, end) of the _meta.corpusRoot string token, quotes included; (-1, -1) if absent.</summary>
+    private static (int start, int end) CorpusRootValueRange(byte[] json)
+    {
+        var r = new Utf8JsonReader(json);
+        bool inMeta = false;
+        while (r.Read())
+        {
+            if (r.TokenType != JsonTokenType.PropertyName) continue;
+            if (r.CurrentDepth == 1) { inMeta = r.ValueTextEquals("_meta"); continue; }
+            if (inMeta && r.CurrentDepth == 2 && r.ValueTextEquals("corpusRoot"))
+            {
+                r.Read();
+                return r.TokenType == JsonTokenType.String ? ((int)r.TokenStartIndex, (int)r.BytesConsumed) : (-1, -1);
+            }
+        }
+        return (-1, -1);
+    }
+
     public static BaseManifest Load(string path)
     {
         byte[] bytes = File.ReadAllBytes(path);
-        string sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        string sha = IdentitySha(bytes);
         using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
 
