@@ -116,10 +116,11 @@ Sibling file, same convention as `<corpus>-manifest.json`:
 {
   "_meta": {
     "manifestVersion": 1,
+    "deltaKind": "symbol",
     "baseSeed": 1337,
     "editSeed": 42,
     "step": 3,
-    "baseManifestSha": "<sha256 of the base manifest this delta composes against>",
+    "baseManifestSha": "<identity sha of the base manifest this delta composes against>",
     "prevTruthSha": "<canonical digest of truth_{k-1}, the state this delta composes ONTO>"
   },
   "fileOps": {
@@ -137,7 +138,12 @@ Sibling file, same convention as `<corpus>-manifest.json`:
 ```
 
 - **`_meta`** — `manifestVersion` stays **1** (the base schema is untouched; the delta is a new additive
-  artifact). `baseManifestSha` binds a delta to the exact base it composes against, so it can't be misapplied.
+  artifact). `deltaKind` is `"symbol"` (since 1.1.4; older symbol deltas omit it; diff deltas say `"diff"`,
+  3-way conflict files `"conflict-3way"`). `baseManifestSha` binds a delta to the exact base it composes
+  against, so it can't be misapplied. It is SHA-256 of the manifest bytes with every CR byte dropped and the
+  `_meta.corpusRoot` string value replaced by `""` (since 1.1.4; before, the raw file bytes), so the same corpus
+  regenerated at another path or on another OS binds the same deltas. All JSON artifacts are written with LF
+  line endings on every OS (since 1.1.4).
 - **`fileOps`** — the FS-effect checklist. Composition never needs it; it drives CodeCompass's orphan-cleanup
   / old-path-gone asserts AND doubles as the changed-paths to replay as synthetic FS events into the watcher.
   mutate emits **no** changed-list to `update` itself — that reconcile is the thing under test.
@@ -235,8 +241,9 @@ composed truth.
   every in-file site's new line from the insertion point.
 - **remove** must scan the base manifest for any symbol with a site in the removed file and emit its updated
   entry (or tombstone if defined there) — this is the ripple set.
-- **baseManifestSha** is computed over the on-disk base manifest bytes at mutate time; the adapter checks it
-  before composing.
+- **baseManifestSha** is computed from the base manifest at mutate time (path- and EOL-independent, see
+  `_meta` above). CodeCompass's adapter does not read it; its chain check is `prevTruthSha`, recomputed from its
+  own composed truth.
 - mutate updates `<corpus>-manifest.json` in place too? **No** — the base manifest stays the immutable base;
   deltas are the record of change. (A `--rebase` to fold deltas into a new base manifest could be a later
   convenience.)
