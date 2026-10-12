@@ -32,6 +32,12 @@ public static class Mutator
     private const int LineShiftLines = 12;         // lines inserted above a def for the line-shift edit
     // Size targets for the grow/shrink/restream edits. internal (not const) so tests can shrink them to avoid
     // multi-MB writes; defaults are the production values and are never changed at runtime outside tests.
+    /// <summary>Largest file a line-level edit decodes into one string (a .NET string caps near 1G chars). Above
+    /// it, eol/encoding stream and the hunk-bearing text kinds skip the file (untouched, unrecorded), as for
+    /// non-text. A test lowers it (per thread, so parallel test classes are unaffected) to exercise the streamed
+    /// path on small files.</summary>
+    internal static long InMemoryTextMax => InMemoryTextMaxOverride ?? 512L * 1024 * 1024;
+    [ThreadStatic] internal static long? InMemoryTextMaxOverride;
     internal static long GrowTargetBytes = 9L * 1024 * 1024;   // cross the 8 MB sidecar cutoff
     internal static long ShrinkTargetBytes = 1L * 1024 * 1024; // below the 2 MB network cutoff
     internal static long RestreamTargetBytes = 100L * 1024 * 1024;
@@ -645,6 +651,7 @@ public static class Mutator
         w.WriteStartArray("conflicts");                        // new* coords reference the respective variant tree
         foreach (var c in conflicts)
         {
+            w.Spill();
             w.WriteStartObject();
             w.WriteString("path", c.Path);
             w.WriteNumber("baseStart", c.BaseStart);
@@ -658,6 +665,7 @@ public static class Mutator
         w.WriteStartArray("mergedClean");                      // each clean hunk's text lives in exactly one tree (side)
         foreach (var m in clean)
         {
+            w.Spill();
             w.WriteStartObject();
             w.WriteString("path", m.Path);
             w.WriteString("side", m.Side);
@@ -1032,6 +1040,20 @@ public static class Mutator
     /// encoding + BOM are kept, so the terminators are the ONLY change. Null = not text.</summary>
     private static EditResult? EolEdit(string abs)
     {
+        if (new FileInfo(abs).Length > InMemoryTextMax)
+        {
+            bool pendingCr = false;                            // same mapping as below, one char at a time
+            return StreamText(abs, null, (buf, n, w) =>
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    char c = buf[k];
+                    if (pendingCr) { pendingCr = false; w.Write('\n'); if (c == '\n') continue; }
+                    if (c == '\r') { pendingCr = true; continue; }
+                    if (c == '\n') w.Write("\r\n"); else w.Write(c);
+                }
+            }, w => { if (pendingCr) w.Write('\n'); }) ? NoHunks() : null;
+        }
         if (!TryReadText(abs, out string text, out var encoding)) return null;
         var sb = new StringBuilder();
         foreach (var (content, term) in SplitLines(text))
@@ -1045,6 +1067,9 @@ public static class Mutator
     /// U+FFFD substitutions; one already UTF-16LE produces no change (dropped by the honesty guard).</summary>
     private static EditResult? EncodingEdit(string abs)
     {
+        if (new FileInfo(abs).Length > InMemoryTextMax)
+            return StreamText(abs, new UnicodeEncoding(bigEndian: false, byteOrderMark: true), (buf, n, w) => w.Write(buf, 0, n))
+                ? NoHunks() : null;
         if (!TryReadText(abs, out string text, out _)) return null;
         File.WriteAllText(abs, text, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
         return NoHunks();
@@ -1056,18 +1081,32 @@ public static class Mutator
     /// a leading wide BOM (FF FE / FE FF / 00 00 FE FF — which marks NULs as text) is broken by flipping byte 0.</summary>
     private static EditResult BinaryEdit(string abs, double density, int seed, int idx)
     {
-        byte[] bytes = File.ReadAllBytes(abs);
+        // Streamed in chunks (any size, giants included); the RNG is consumed one draw per byte in file order.
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + idx);
-        for (int k = 0; k < bytes.Length; k++) if (rng.Next(10000) < threshold) bytes[k] ^= 0x5A;
-        if (bytes.Length > 0)
+        string tmp = abs + ".mut.tmp";
+        using (var src = new FileStream(abs, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
+        using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
         {
-            bytes[Math.Min(4, bytes.Length - 1)] = 0;
-            if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE }) || bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF })
-                || bytes.AsSpan().StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF }))
-                bytes[0] ^= 0x01;
+            var buf = new byte[1 << 20];
+            bool first = true;
+            int n;
+            while ((n = src.ReadAtLeast(buf, buf.Length, throwOnEndOfStream: false)) > 0)
+            {
+                for (int k = 0; k < n; k++) if (rng.Next(10000) < threshold) buf[k] ^= 0x5A;
+                if (first)                                     // the first chunk holds the whole head (or the whole file)
+                {
+                    first = false;
+                    var head = buf.AsSpan(0, n);
+                    head[Math.Min(4, n - 1)] = 0;
+                    if (head.StartsWith(new byte[] { 0xFF, 0xFE }) || head.StartsWith(new byte[] { 0xFE, 0xFF })
+                        || head.StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF }))
+                        head[0] ^= 0x01;
+                }
+                dst.Write(buf, 0, n);
+            }
         }
-        File.WriteAllBytes(abs, bytes);
+        File.Move(tmp, abs, overwrite: true);
         return NoHunks();
     }
 
@@ -1097,16 +1136,54 @@ public static class Mutator
         return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     }
 
-    /// <summary>Decode a whole (non-giant) file for a line edit. False = not editable text; the file is untouched.</summary>
+    /// <summary>Decode a whole (non-giant) file for a line edit. False = not editable text, or too big to decode
+    /// in memory (&gt; <see cref="InMemoryTextMax"/>); the file is untouched.</summary>
     private static bool TryReadText(string abs, out string text, out Encoding encoding)
     {
-        byte[] bytes = File.ReadAllBytes(abs);
         text = "";
+        encoding = null!;
+        if (new FileInfo(abs).Length > InMemoryTextMax) return false;
+        byte[] bytes = File.ReadAllBytes(abs);
         encoding = EncodingFor(bytes, out int bom)!;
         if (encoding is null) return false;
         if (bom == 0 && Array.IndexOf(bytes, (byte)0) >= 0) return false;      // NUL without a UTF-16 BOM ⇒ binary
         try { text = encoding.GetString(bytes, bom, bytes.Length - bom); }
         catch (DecoderFallbackException) { return false; }
+        return true;
+    }
+
+    /// <summary>
+    /// Stream a file's text through <paramref name="chunk"/> into a sibling temp file, written in
+    /// <paramref name="outEnc"/> (null = the file's own encoding, BOM kept), then replace the file. Same text rules
+    /// as <see cref="TryReadText"/>: false (file untouched, temp removed) for a UTF-32 BOM, invalid bytes, or a NUL
+    /// without a UTF-16 BOM.
+    /// </summary>
+    private static bool StreamText(string abs, Encoding? outEnc, Action<char[], int, StreamWriter> chunk, Action<StreamWriter>? end = null)
+    {
+        if (SniffEncoding(abs) is not { } enc) return false;
+        bool nulIsBinary = enc.GetPreamble().Length == 0;
+        string tmp = abs + ".mut.tmp";
+        try
+        {
+            using (var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false))   // skips enc's BOM
+            using (var writer = new StreamWriter(tmp, false, outEnc ?? enc))                           // emits the out BOM
+            {
+                var buf = new char[1 << 16];
+                int read;
+                while ((read = reader.Read(buf, 0, buf.Length)) > 0)
+                {
+                    if (nulIsBinary && Array.IndexOf(buf, '\0', 0, read) >= 0) throw new NotTextException();
+                    chunk(buf, read, writer);
+                }
+                end?.Invoke(writer);
+            }
+        }
+        catch (Exception e) when (e is NotTextException or DecoderFallbackException)
+        {
+            File.Delete(tmp);
+            return false;
+        }
+        File.Move(tmp, abs, overwrite: true);
         return true;
     }
 
@@ -1341,6 +1418,7 @@ public static class Mutator
         int changed = 0, tombs = 0;
         foreach (var name in after.Keys.Concat(before.Keys).Distinct().OrderBy(n => n, StringComparer.Ordinal))
         {
+            w.Spill();
             bool inA = after.TryGetValue(name, out var a);
             bool inB = before.TryGetValue(name, out var b);
             if (inA && (!inB || !Equal(a!, b!)))
@@ -1500,6 +1578,7 @@ public static class Mutator
 
     private static void WriteModifiedRecord(Utf8JsonWriter w, DiffFile f)
     {
+        w.Spill();
         w.WriteStartObject();
         w.WriteString("path", f.Path);
         w.WriteString("reason", f.Reason);
@@ -1665,7 +1744,7 @@ public static class Mutator
     private static void WriteArray(Utf8JsonWriter w, string name, List<string> items)
     {
         w.WriteStartArray(name);
-        foreach (var i in items) w.WriteStringValue(i);
+        foreach (var i in items) { w.WriteStringValue(i); w.Spill(); }
         w.WriteEndArray();
     }
 

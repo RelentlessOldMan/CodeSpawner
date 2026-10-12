@@ -27,18 +27,18 @@ public static class TruthDigest
         var names = new List<string>(symbols.Keys);
         names.Sort(StringComparer.Ordinal);
 
-        var sb = new StringBuilder();
+        using var sink = new DigestSink();
         foreach (var name in names)
         {
             var s = symbols[name];
             var refs = new List<string>(s.Refs); refs.Sort(StringComparer.Ordinal);
             var edges = new List<string>(s.Edges); edges.Sort(StringComparer.Ordinal);
-            sb.Append(name).Append(US)
-              .Append(s.Def).Append(US)
-              .Append(string.Join(',', refs)).Append(US)
-              .Append(string.Join(',', edges)).Append(US)
-              .Append(s.ExpectedMiss ? '1' : '0').Append(RS);
+            sink.Append(name).Append(US)
+                .Append(s.Def).Append(US)
+                .Append(string.Join(',', refs)).Append(US)
+                .Append(string.Join(',', edges)).Append(US)
+                .Append(s.ExpectedMiss ? '1' : '0').Append(RS);
         }
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
+        return sink.Finish();
     }
 }

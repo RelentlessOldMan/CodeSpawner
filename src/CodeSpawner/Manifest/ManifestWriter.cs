@@ -68,6 +68,7 @@ public static class ManifestWriter
         w.WriteStartObject("symbols");
         foreach (var (name, s) in m.Symbols)
         {
+            w.Spill();
             w.WriteStartObject(name);
             w.WriteString("def", s.Def);
 
@@ -112,6 +113,7 @@ public static class ManifestWriter
             w.WriteStartObject("dupGroups");
             foreach (var d in m.DupGroups)
             {
+                w.Spill();
                 w.WriteStartObject(d.Name);
                 w.WriteString("sha256", d.Sha256);
                 w.WriteStartArray("paths");

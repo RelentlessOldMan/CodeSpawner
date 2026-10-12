@@ -95,18 +95,17 @@ public static class DiffDigest
         foreach (var r in renames)
             renameRecords.Add(string.Concat(r.From, US, r.To, US, Num(r.SimilarityMilli)));
 
-        var sb = new StringBuilder();
-        Emit(sb, modified);      sb.Append(GS);
-        Emit(sb, hunksExplicit); sb.Append(GS);
-        Emit(sb, hunksRun);      sb.Append(GS);
-        Emit(sb, renameRecords);
-
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
+        using var sink = new DigestSink();
+        Emit(sink, modified);      sink.Append(GS);
+        Emit(sink, hunksExplicit); sink.Append(GS);
+        Emit(sink, hunksRun);      sink.Append(GS);
+        Emit(sink, renameRecords);
+        return sink.Finish();
     }
 
-    private static void Emit(StringBuilder sb, List<string> records)
+    private static void Emit(DigestSink sink, List<string> records)
     {
-        foreach (var r in DedupSort(records)) sb.Append(r).Append(RS);
+        foreach (var r in DedupSort(records)) sink.Append(r).Append(RS);
     }
 
     private static List<string> DedupSort(List<string> records)
@@ -164,18 +163,18 @@ public static class ConflictDigest
                 x.Path, US, x.Side, US, x.Op.Label(), US,
                 Num(x.OldStart), US, Num(x.OldLines), US, Num(x.NewStart), US, Num(x.NewLines)));
 
-        var sb = new StringBuilder();
-        Emit(sb, c); sb.Append(GS);
-        Emit(sb, m);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
+        using var sink = new DigestSink();
+        Emit(sink, c); sink.Append(GS);
+        Emit(sink, m);
+        return sink.Finish();
     }
 
-    private static void Emit(StringBuilder sb, List<string> records)
+    private static void Emit(DigestSink sink, List<string> records)
     {
         var set = new HashSet<string>(records, StringComparer.Ordinal);
         var list = new List<string>(set);
         list.Sort(StringComparer.Ordinal);
-        foreach (var r in list) sb.Append(r).Append(RS);
+        foreach (var r in list) sink.Append(r).Append(RS);
     }
 
     private static string Num(long n) => n.ToString(CultureInfo.InvariantCulture);
