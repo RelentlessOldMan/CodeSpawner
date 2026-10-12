@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-10-12
+
 ### Fixed (safety)
 - `gen --force` no longer deletes any path it is given. A drive or share root,
   the current directory, the user profile (or a parent of either), a git
@@ -263,7 +265,8 @@ reads it.
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.0...v1.1.1
