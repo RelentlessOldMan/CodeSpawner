@@ -58,7 +58,7 @@ public sealed class DiffFile
 /// CodeDiffer session (code-spawner chat, 2026-10-02); do not change it without re-agreeing. See
 /// docs/diff-delta-design.md.
 ///
-///   four sections, GS(0x1D) between them, ALL always present (empty = header + zero records):
+///   four sections, GS(0x1D) between them, ALL always present (an empty section is zero bytes; its GS stays):
 ///     1 modified-files:  path US reason US oldSha US newSha US oldSize US newSize RS
 ///     2 hunks-explicit:  path US op US oldStart US oldLines US newStart US newLines RS
 ///     3 hunks-run:       path US op US stride US rangeStart US rangeEnd US perHunk RS
@@ -134,7 +134,7 @@ public sealed record CleanMerge(string Path, string Side, HunkOp Op, int OldStar
 /// the separate conflict artifact (kept off <c>diffTruthSha</c>, same discipline as the other component digests).
 /// Byte format LOCKED with CodeDiffer (code-spawner chat, 2026-10-02); see docs/diff-delta-design.md:
 ///
-///   two sections, GS(0x1D) between, BOTH always present (empty = header + zero records):
+///   two sections, GS(0x1D) between, BOTH always present (an empty section is zero bytes; the GS stays):
 ///     1 conflicts-3way: path US baseStart US baseLines US v1Op US v1NewStart US v1NewLines
 ///                            US v2Op US v2NewStart US v2NewLines RS
 ///     2 merged-clean:   path US side US op US oldStart US oldLines US newStart US newLines RS

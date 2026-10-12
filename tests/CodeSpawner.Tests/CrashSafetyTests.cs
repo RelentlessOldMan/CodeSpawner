@@ -122,7 +122,7 @@ public class CrashSafetyTests
     [InlineData("eol", false, null)]
     [InlineData("eol", true, null)]                                    // streamed (above the in-memory ceiling)
     [InlineData("binary", false, null)]
-    [InlineData("content", true, "run")]                               // giant strided run
+    [InlineData("content", true, "strided")]                             // giant strided run
     [InlineData("content", true, "single")]                            // giant single-locality insert
     public void FailedInPlaceRewrite_KeepsFileWhole_AndLeavesNoTemp(string kind, bool big, string? giantEdit)
     {
@@ -135,7 +135,7 @@ public class CrashSafetyTests
         byte[] before = File.ReadAllBytes(path);
 
         var o = new MutateOptions { Corpus = corpus, Target = giantEdit is null ? "source" : "giant", GiantMinMb = 1,
-                                    EditKind = kind, EditDensity = 0.5, Seed = 1, GiantEdit = giantEdit ?? "run" };
+                                    EditKind = kind, EditDensity = 0.5, Seed = 1, GiantEdit = giantEdit ?? "strided" };
         Mutator.InMemoryTextMaxOverride = big && giantEdit is null ? 1024 : null;
         try
         {

@@ -28,7 +28,7 @@ codespawner mutate --corpus <dir> --target ... --three-way --overlap-fraction f 
 
 - **`--edit-kind`** selects the *mechanism* of the edit; it maps onto a *classification* (`reason`) that
   CodeDiffer asserts against. Locked **reason tokens**: `content | eol | whitespace | encoding | binary |
-  metadata`. `line-add` / `line-remove` are edit-kinds that classify as **`reason=content`** with
+  metadata`. `line-insert` / `line-delete` are edit-kinds that classify as **`reason=content`** with
   `op=insert|delete` — they exist to exercise the diff tool's line-renumber path.
 - **`--three-way` + `--overlap-fraction f`** — the only 3-way dial (step 4); see below.
 
@@ -38,7 +38,7 @@ Each changed file in the delta carries its `reason`. One small carve-style label
 
 | reason | mechanism | bytes | textual hunks | notes |
 |---|---|---|---|---|
-| `content` | append marker / add / remove lines | differ | yes (replace, or insert/delete for line-add/remove) | the existing bulk edit; line-add/remove exercise renumbering |
+| `content` | append marker / add / remove lines | differ | yes (replace, or insert/delete for line-insert/line-delete) | the existing bulk edit; line-insert/line-delete exercise renumbering |
 | `eol` | flip LF↔CRLF | differ | **zero** | the "modified-with-empty-diff" honesty case |
 | `whitespace` | reindent / trailing spaces | differ | **yes** (all changes whitespace-only) | feeds the ws-insensitive collapse path |
 | `encoding` | UTF-8↔UTF-16, add/remove BOM | differ | **zero** (decoded text identical) | tests decode-before-diff |
@@ -128,10 +128,25 @@ graded **0%** (all clean-merge) / **50%** / **100%** (all conflict). Emits two d
 
 ```json
 {
-  "conflicts": [ { "path": "…", "baseStart": 120, "baseLines": 3, "v1Hunk": {…}, "v2Hunk": {…} } ],
-  "mergedClean": [ { "path": "…", "hunk": {…} } ]
+  "_meta": {
+    "manifestVersion": 1, "deltaKind": "conflict-3way", "baseSeed": 1337, "editSeed": 7,
+    "overlapFraction": 0.5, "baseManifestSha": "…", "v1Tree": "B_v1", "v2Tree": "B_v2",
+    "conflictTruthSha": "…"
+  },
+  "conflicts": [
+    { "path": "…", "baseStart": 121, "baseLines": 1,
+      "v1": { "op": "replace", "newStart": 121, "newLines": 1 },
+      "v2": { "op": "replace", "newStart": 121, "newLines": 1 } }
+  ],
+  "mergedClean": [
+    { "path": "…", "side": "v1", "op": "replace", "oldStart": 125, "oldLines": 1, "newStart": 125, "newLines": 1 }
+  ]
 }
 ```
+
+Each conflict's `v1`/`v2` carry only the op and the region's place in that variant tree (base coordinates are
+the shared `baseStart`/`baseLines`); each `mergedClean` record is flat and names the one `side` whose tree holds
+the text. These are exactly the fields of the two `conflictTruthSha` sections below.
 
 - A region **conflicts** iff both sides modify overlapping base line ranges with **differing** content.
   Non-overlapping → clean. **Identical** change both sides → clean (same result).
@@ -149,7 +164,8 @@ machinery):
 
 - **Ordinal** (byte-wise UTF-8) sort everywhere; separators are literal bytes **US `0x1F`** (field) /
   **RS `0x1E`** (record) / **GS `0x1D`** (section); bools as `0/1`; **dedup-then-sort** each section;
-  sha256 **lowercase hex**; **ALL sections always emitted** (empty = header + zero records).
+  sha256 **lowercase hex**; **ALL sections always emitted**: an empty section contributes zero bytes, but the
+  GS separators between sections are still written (there is no section header).
 - File-level metadata (`reason`, shas, sizes) is digested — a reason-flip or sha-flip **trips the digest**,
   not just the hunks.
 
@@ -219,7 +235,13 @@ fixed order:
 coordinate reads off a real on-disk file and CodeDiffer fetches replacement text from the variant trees (no
 text in the JSON). The conflict `kind` (modify/modify, modify/delete, add/add) is derivable from (ops,
 baseLines), not stored. Golden vector `68cd14ac9a54521fc967f8c4632536bb9f0725cd394b8296cd1d62d4a9310e6a`
-frozen in `digest-selftest` + `ConflictDigestTests`. The dial default produces replace/replace conflicts;
+frozen in `digest-selftest` + `ConflictDigestTests`, from this input (records given out of order, to prove the
+ordinal sort):
+
+| section | records |
+|---|---|
+| conflicts-3way | `f.c · 5 · 1 · replace · 5 · 1 · replace · 5 · 1` and `a.c · 9 · 2 · replace · 9 · 2 · delete · 9 · 0` |
+| merged-clean | `f.c · v1 · replace · 3 · 1 · 3 · 1` and `a.c · v2 · insert · 7 · 0 · 7 · 2` | The dial default produces replace/replace conflicts;
 modify/delete, add/add, adjacent-edit, and identical-overlap-clean ride the `--conflict-edges` fixture (§3-way-edges).
 
 ### §3-way-edges (step 4b — the edge conflict kinds)

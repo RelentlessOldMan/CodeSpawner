@@ -1,7 +1,8 @@
 # `mutate` / churn — design doc (v1, for review)
 
-**Status:** design for CodeCompass sign-off. No code until this is approved. Agreed shape from the
-`claudes-chatroom` design session (2026-09-28).
+**Status:** implemented (symbol mode since 1.0; bulk/diff mode since 1.1.0). Agreed shape from the
+`claudes-chatroom` design session (2026-09-28). The bulk mode's delta contract lives in
+[diff-delta-design.md](diff-delta-design.md).
 
 ## Why
 
@@ -47,7 +48,7 @@ dial exactly **which** population changed, **how many** files, and **how much** 
 ```
 codespawner mutate --corpus <dir> --target <source|headers|giant|all>
                    [--files-changed N] [--edit-density f] [--giant-min-mb N]
-                   [--edit-kind <content|line-insert|line-delete|whitespace|eol|encoding|binary|metadata|rename>]
+                   [--edit-kind <content|line-insert|line-delete|whitespace|eol|encoding|binary|metadata|mixed|rename>]
                    [--decoy-fraction f]   # rename only: near-duplicate ADD false-positive traps
                    [--seed S]
 ```
@@ -59,22 +60,24 @@ codespawner mutate --corpus <dir> --target <source|headers|giant|all>
   files are chosen deterministically from `S`.
 - **`--edit-density f`** (0..1, default 0.05) — fraction of each file's lines changed in place. The "a few vs
   a lot of changes within the file" dial — what makes a giant header interesting.
-- **In-place edit:** each chosen file is **streamed** line-by-line (a 1 GB header never loads into the heap);
-  ~`f` of its lines get a deterministic marker comment appended — a real textual change a diff tool sees,
+- **In-place edit:** ~`f` of each chosen file's lines get a deterministic marker comment appended (a file at
+  or above `--giant-min-mb` is **streamed**, so a 1 GB header never loads into the heap) — a real textual
+  change a diff tool sees,
   while **preserving the tokens already on the line** (def sites and the symbol table stay put, so the change
   is purely content).
 - **Determinism:** same `(corpus, target, files-changed, density, S)` ⇒ byte-identical variant (same seeded
   `Rng`, confirmed cross-machine) — so a variant can be **regenerated in place** on another box, not copied.
-- **Output:** one cumulative base→variant `<corpus>-delta.json`; the `symbols` overlay is empty (content-only)
-  and `fileOps.modified` lists exactly the changed files.
+- **Output:** one base→variant `<corpus>-delta.json` (`deltaKind:"diff"`): per changed file its `reason`,
+  old/new sha and size, and unified hunks (a run-rule for giant files), plus `_meta.diffTruthSha`. Files whose
+  bytes didn't change are not listed. `--shard-size` pages it; `--three-way` emits two variant deltas and a
+  conflict file instead. Schema: [diff-delta-design.md](diff-delta-design.md).
 
 ### Ground-truth granularity (contract now LOCKED → see diff-delta-design.md)
 
-Bulk mode records **file-level** truth today (`fileOps.modified` = the exact changed-file set — already a
-precision/recall oracle at file granularity among tens of thousands of files). **Hunk/line-level** truth
-(which line ranges changed), **rename/move**, and **native 3-way** (two divergent variants + a conflict
-manifest) were deferred pending the diff-tool contract — that contract is now **locked** with the CodeDiffer
-session (2026-10-02) and frozen in **[diff-delta-design.md](diff-delta-design.md)**: line/hunk truth in
+Bulk mode first recorded only **file-level** truth (the changed-file set). **Hunk/line-level** truth,
+**rename/move**, and **native 3-way** (two divergent variants + a conflict manifest) waited for the diff-tool
+contract, which was **locked** with the CodeDiffer session (2026-10-02), frozen in
+**[diff-delta-design.md](diff-delta-design.md)**, and is fully implemented as of 1.1.0: line/hunk truth in
 unified-diff coords + a run-rule for giant files, a `reason` taxonomy (`content|eol|whitespace|encoding|
 binary|metadata`) via `--edit-kind`, rename with a lines-preserved `similarityMilli` + decoys, native 3-way
 via a joint generator with `--overlap-fraction`, and a `_meta.diffTruthSha` reusing the locked
@@ -93,7 +96,7 @@ Ranked by how much each stresses a real incremental indexer (top = where increme
 | 4-grow | grow a small file **past the 8 MB sidecar cutoff** | ✅ v1 | Sidecar **CREATE** path. |
 | 4-shrink | shrink a ~9 MB seed **below the sidecar cutoff (to <2 MB)** | ✅ v1 | Sidecar **DELETE** / orphan-cleanup — CodeCompass's riskiest untested path. Needs the straddle seed (below). |
 | 4-restream | shrink a ~129 MB seed to ~100 MB | ✅ v1 (opt-in) | Sidecar **REWRITE** (streamed → whole-file). Distinct from DELETE. |
-| 2 | **rename / move** | v1.1 | FS-level remove+add; a naive incremental keeps BOTH paths. |
+| 2 | **rename / move** | not built | FS-level remove+add; a naive incremental keeps BOTH paths. Symbol mode never renames (`fileOps.renamed` is reserved and omitted); the diff oracle's `--edit-kind rename` covers renames for CodeDiffer. |
 
 > **Which threshold gates a sidecar (locked with CodeCompass):** a file has a positional sidecar iff
 > `size >= the SIDECAR cutoff` (**8 MB local / 2 MB network-adaptive**). The **128 MB STREAM threshold**
@@ -131,7 +134,7 @@ Sibling file, same convention as `<corpus>-manifest.json`:
   "fileOps": {
     "added":    ["blockA/.../new_7.c"],
     "removed":  ["blockB/.../src_5.c"],
-    "renamed":  [{ "from": "…/src_9.c", "to": "…/moved_9.c" }],
+    "renamed":  [{ "from": "…/src_9.c", "to": "…/moved_9.c" }],   // reserved: omitted, symbol mode never renames
     "modified": ["blockC/.../src_3.c"]
   },
   "symbols": {
@@ -238,7 +241,7 @@ composed truth.
 - Recomputing `_meta.populations` / `dupGroups` after edits (edits target symbol-bearing source files; the
   delta focuses on `symbols` + `fileOps`). The doc will state populations may drift post-mutate and are not
   asserted in v1.
-- rename/move (2) → v1.1.
+- rename/move (2) in symbol mode: not built (see the taxonomy table).
 
 ## Open implementation notes (not blocking sign-off)
 
