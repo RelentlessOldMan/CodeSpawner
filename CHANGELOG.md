@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-10-12
+
 ### Fixed (reproducibility)
 - Replaying `_meta.gen` no longer shrinks giant headers. `macroDensity` was
   recorded even when `--macro-density` was not passed, and passing it back
@@ -408,7 +410,8 @@ reads it.
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.5...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.6...HEAD
+[1.1.6]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.5...v1.1.6
 [1.1.5]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.4...v1.1.5
 [1.1.4]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.2...v1.1.3
