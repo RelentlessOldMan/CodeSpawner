@@ -26,6 +26,22 @@ public class PathUtilTests
         string root = Path.Combine("C:", "root");
         Assert.Equal(".", PathUtil.Rel(root, root));
     }
+
+    [Fact]
+    public void SlashOrdinal_SortsOsPathsAsTheirSlashForm()
+    {
+        // Plain ordinal on Windows puts block10\ before block1\ ('\' > '0'); the '/' form puts block1/ first, as
+        // Linux always did. Mutate's source pool and scan's --sample order rely on this.
+        string root = Path.Combine("C:", "root");
+        var paths = new List<string>
+        {
+            Path.Combine(root, "block10", "a.c"), Path.Combine(root, "block1", "z.c"),
+            Path.Combine(root, "block2", "a.c"), Path.Combine(root, "block1A", "a.c"),
+        };
+        paths.Sort(PathUtil.SlashOrdinal);
+        Assert.Equal(new[] { "block1/z.c", "block10/a.c", "block1A/a.c", "block2/a.c" },
+                     paths.Select(p => PathUtil.Rel(root, p)).ToArray());
+    }
 }
 
 /// <summary>

@@ -37,17 +37,19 @@ public static class Mutator
     public const string JournalName = ".codespawner-mutating";
 
     private const int LineShiftLines = 12;         // lines inserted above a def for the line-shift edit
-    // Size targets for the grow/shrink/restream edits. internal (not const) so tests can shrink them to avoid
-    // multi-MB writes; defaults are the production values and are never changed at runtime outside tests.
     /// <summary>Largest file a line-level edit decodes into one string (a .NET string caps near 1G chars). Above
     /// it, eol/encoding stream and the hunk-bearing text kinds skip the file (untouched, unrecorded), as for
     /// non-text. A test lowers it (per thread, so parallel test classes are unaffected) to exercise the streamed
     /// path on small files.</summary>
     internal static long InMemoryTextMax => InMemoryTextMaxOverride ?? 512L * 1024 * 1024;
     [ThreadStatic] internal static long? InMemoryTextMaxOverride;
-    internal static long GrowTargetBytes = 9L * 1024 * 1024;   // cross the 8 MB sidecar cutoff
-    internal static long ShrinkTargetBytes = 1L * 1024 * 1024; // below the 2 MB network cutoff
-    internal static long RestreamTargetBytes = 100L * 1024 * 1024;
+    // Size targets for the grow/shrink/restream edits. Tests shrink them through the overrides to avoid multi-MB
+    // writes; production never sets them.
+    internal static long GrowTargetBytes => GrowTargetOverride ?? 9L * 1024 * 1024;       // cross the 8 MB sidecar cutoff
+    internal static long ShrinkTargetBytes => ShrinkTargetOverride ?? 1L * 1024 * 1024;   // below the 2 MB network cutoff
+    internal static long RestreamTargetBytes => RestreamTargetOverride ?? 100L * 1024 * 1024;
+    // Per thread, like InMemoryTextMaxOverride, so a test shrinking them can't leak into a parallel test class.
+    [ThreadStatic] internal static long? GrowTargetOverride, ShrinkTargetOverride, RestreamTargetOverride;
 
     public static int Run(MutateOptions o)
     {
@@ -1326,14 +1328,14 @@ public static class Mutator
 
     // ---- planning -------------------------------------------------------------------------------------
 
-    private static List<Edit> BuildPlan(MutateOptions o, string corpus, BaseManifest basem)
+    internal static List<Edit> BuildPlan(MutateOptions o, string corpus, BaseManifest basem)
     {
         // Removable/shiftable source files: func_i defs (i>=1 so removal leaves a dangling caller ripple).
         var srcPool = basem.Symbols
             .Where(kv => kv.Key.StartsWith("func_", StringComparison.Ordinal) && int.TryParse(kv.Key[5..], out int n) && n >= 1)
             .Select(kv => (name: kv.Key, site: SplitSite(kv.Value.Def)))
             .Select(x => new Edit(EditType.Remove, ManifestAbs(corpus, x.name, x.site.path), x.name, x.site.line))
-            .OrderBy(e => e.Path, StringComparer.Ordinal).ToList();
+            .OrderBy(e => e.Path, PathUtil.SlashOrdinal).ToList();    // same order on every OS before the shuffle
         Shuffle(srcPool, o.Seed, 1);
 
         var growPool = ScanRel(corpus, "hdr_*.h");

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using CodeSpawner.Cli;
+using CodeSpawner.Generation;
 using CodeSpawner.Profile;
 
 namespace CodeSpawner.Scan;
@@ -255,7 +256,7 @@ public sealed class Scanner
         var clusters = new List<FileEntry[]>();
         foreach (var kv in map)
         {
-            kv.Value.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path)); // deterministic sample order
+            kv.Value.Sort((a, b) => PathUtil.SlashOrdinal.Compare(a.Path, b.Path)); // deterministic sample order on every OS
             clusters.Add(kv.Value.ToArray());
         }
         // Stable cluster order: by extension then size band.
