@@ -65,12 +65,19 @@ it never shells out to an indexer or carver — each consumer drives its own ver
 cleared and recreated; a directory CodeSpawner didn't create is protected unless you pass `--force`.
 Some paths are refused even with `--force`: a drive or share root, the current directory, your user
 profile or a parent of either, a git checkout, and well-known user/system folders. Re-generating over an
-existing corpus also removes its old sibling manifest first, so an interrupted run never leaves a stale one.
+existing corpus first removes everything the old one left beside it: its manifest, its mutate deltas
+(`-delta*.json`, `-conflict.json`), its 3-way variant trees (`_v1`/`_v2`) and its linked roots (`_rootN`).
+The marker is deleted last, so an interrupted regen still leaves a directory CodeSpawner recognises. A
+non-empty `<out>_rootN` that the new corpus would write into is refused unless you pass `--force`, when it
+isn't part of the CodeSpawner corpus at `--out` (an `--out` regenerated over 1.1.5 or earlier counts its
+in-range `_rootN` as its own).
 
 Output:
 - the corpus tree under `<out>/`,
 - `<out>-manifest.json` written **beside** the corpus dir (a sibling),
-- a small `.codespawner` marker file at the corpus root (internal bookkeeping; excluded from counts).
+- a small `.codespawner` marker file at the corpus root (internal bookkeeping; excluded from counts). It
+  records the generator version and the `--linked-roots` count; manifest paths into `../<out>_rootN/` are
+  accepted only for N below that count.
 
 Every run prints per-phase timings and the detected disk / concurrency, e.g.:
 ```
@@ -86,7 +93,8 @@ Tool-independent self-check: asserts the manifest accurately describes the emitt
 genuinely gated (behind `#ifdef VENDOR_OK` with its vendor header absent), and the `func_i → func_{i-1}`
 edge chain is intact. Resolves relative paths against `--corpus` (so a **copied** corpus validates against
 the same manifest). Exit 0 = pass, 1 = fail, 2 = bad input. Manifest defaults to the `<corpus>-manifest.json`
-sibling.
+sibling. A manifest path that goes through a junction or symlink inside the corpus fails as escaping it, and
+a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright.
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
@@ -97,6 +105,12 @@ all N and emits one cumulative delta. Edits: remove, line-shift modify, add, 4-g
 4-shrink (sidecar DELETE), opt-in 4-restream (REWRITE). Generate the base with
 `--shrink-seeds N [--restream-seeds N]` so the threshold edits have targets. See
 [mutate-design.md](mutate-design.md) for the delta schema, composition rule, and `prevTruthSha` chain guard.
+
+While it edits, mutate keeps a `.codespawner-mutating` journal in the tree (in each `_v1`/`_v2` for a 3-way
+run) and deletes it once the run's last artifact is written. If a run dies part-way, the journal stays: the
+tree then matches neither its base manifest nor any delta, so mutate refuses the corpus and verify fails it
+until you regenerate it. Each file is rewritten through a temp file and renamed into place, so a single file
+is never left half-written.
 
 ### `version`
 Prints the generator version (used by the vendoring stamp).

@@ -18,8 +18,13 @@ public static class AtomicFile
         try
         {
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize))
-            using (var lf = new LfOnlyStream(fs))
-                body(lf);
+            {
+                using (var lf = new LfOnlyStream(fs))
+                    body(lf);
+                // On disk before the rename: after a power cut the rename can survive while unflushed bytes don't,
+                // which would leave a complete-looking name over a zero-filled or short file.
+                fs.Flush(flushToDisk: true);
+            }
             File.Move(tmp, path, overwrite: true);
         }
         catch

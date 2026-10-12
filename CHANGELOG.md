@@ -32,6 +32,42 @@ reads it.
 - `--edits` below 1 is an argument error (exit 2); a huge `--edits` reports
   "not enough source files" instead of running out of memory.
 
+### Fixed (crash safety)
+- An interrupted mutate is no longer silent. Mutate keeps a
+  `.codespawner-mutating` journal in each tree it edits and deletes it once the
+  run's last artifact is written; if the run dies part-way, the next mutate
+  refuses the corpus and verify FAILs it, instead of the tree passing as a
+  corpus that matches neither its base manifest nor any delta.
+- Every in-place edit (line edits, eol, encoding, binary, giant files,
+  line-shift, add, grow, shrink, restream) writes a temp file and renames it
+  over the original, so a failure never leaves a truncated file. The giant and
+  binary edits no longer leave a `.mut.tmp` behind when they fail, and a giant
+  edit no longer deletes the original before moving the new file in.
+- Manifests, deltas, shards and profiles are flushed to disk before they are
+  renamed into place.
+- `gen --from-profile --with-oracle` checks that the manifest can be written
+  before synthesizing anything.
+
+### Fixed (regen)
+- Regenerating over a corpus also removes its mutate deltas (including
+  `--step` deltas), its 3-way variant trees and its stale `--linked-roots`
+  siblings. Before, they survived beside the new tree, and leftover files in
+  `<out>_rootN` were mixed into the new corpus.
+- The marker is deleted last, so an interrupted regen leaves a directory the
+  next run recognises without `--force`.
+- The marker now records the `--linked-roots` count. A non-empty `_rootN` the
+  new corpus would write into is refused without `--force` unless it belongs
+  to the CodeSpawner corpus at `--out` (for a 1.1.5 or older corpus, which
+  records no count, its `_rootN` in the new range are taken as its own).
+
+### Fixed (containment)
+- A manifest path through a junction or symlink inside the corpus (or a
+  linked root that is one) is refused by mutate and fails verify, so a link
+  planted in the tree can't steer an edit or delete outside it.
+- Manifest paths into `../<corpus>_rootN/` are accepted only for N below the
+  recorded `--linked-roots` count.
+- verify's "vendor header is absent" check no longer follows junctions.
+
 ### Fixed (verify)
 - A symbol with no `def` (or a non-string one) is a FAIL. Before, it was
   skipped, so a truncated manifest could drop def sites and still pass.
@@ -51,6 +87,9 @@ reads it.
   byte-identical.
 - `gen --from-profile` is checked against its archetype counts and sizes, and
   for byte-identical output from the same profile and seed.
+- Crash-safety tests: an interrupted bulk mutate, failed in-place rewrites of
+  every kind, regen sweeps, linked-root guards, an interrupted wipe, and
+  junction containment.
 
 ## [1.1.5] - 2026-10-12
 

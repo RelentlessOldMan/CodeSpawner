@@ -19,6 +19,11 @@ codespawner mutate --corpus <dir> --seed <S> --edits <N> [--step <k>] [--through
 
 - **In place.** Operates on an existing corpus; **guarded by the `.codespawner` marker** — refuses any dir
   CodeSpawner didn't create (never `--force`-clobbers here; mutate only edits its own corpus).
+- **Journaled.** A `.codespawner-mutating` journal is written before the first edit and deleted after the last
+  delta. A run that dies in between leaves it, and mutate then refuses the corpus and verify FAILs it: the
+  tree matches neither the base nor any delta, so the only way on is to regenerate. A `--step` (or a step of
+  the default run) that fails cleanly (file untouched, no delta) removes the journal, so the step can be
+  retried. Every file edit is written to a temp file and renamed over the original.
 - Reads the base `<corpus>-manifest.json` to know ground truth, then selects **N distinct target files**
   deterministically from `(S, k)` (distinct so edit order never conflicts).
 - **`--step k`** — apply exactly edit `k` to the current on-disk state; emit `<corpus>-delta-{k}.json`

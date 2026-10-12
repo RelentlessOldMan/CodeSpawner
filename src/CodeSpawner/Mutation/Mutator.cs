@@ -29,6 +29,13 @@ public sealed class FileOps
 public static class Mutator
 {
     private const string MarkerName = ".codespawner";
+
+    /// <summary>The mutate journal: written into a tree before mutate's first edit to it and deleted once the run's
+    /// last artifact is written. A mutate that dies in between leaves it behind, and that tree then matches neither
+    /// its base manifest nor any delta, so mutate refuses the corpus and verify FAILs it until it is regenerated.
+    /// (A symbol-mode step that fails cleanly, i.e. throws with its file untouched and no delta, removes it.)</summary>
+    public const string JournalName = ".codespawner-mutating";
+
     private const int LineShiftLines = 12;         // lines inserted above a def for the line-shift edit
     // Size targets for the grow/shrink/restream edits. internal (not const) so tests can shrink them to avoid
     // multi-MB writes; defaults are the production values and are never changed at runtime outside tests.
@@ -48,6 +55,11 @@ public static class Mutator
         if (!Directory.Exists(corpus)) { Console.Error.WriteLine($"error: corpus not found: {corpus}"); return 2; }
         if (!File.Exists(Path.Combine(corpus, MarkerName)))
             throw new ArgException($"--corpus '{corpus}' is not a CodeSpawner corpus (no .codespawner marker); refusing to edit it.");
+        if (File.Exists(Path.Combine(corpus, JournalName)))
+            throw new InvalidOperationException(
+                $"--corpus '{corpus}' has {JournalName}: an earlier mutate was interrupted part-way, so the tree matches " +
+                "neither its base manifest nor any delta. Regenerate the corpus (gen with the manifest's _meta.gen " +
+                "knobs), then mutate again.");
 
         string manifestPath = o.Manifest ?? DefaultManifestPath(corpus);
         if (!File.Exists(manifestPath)) { Console.Error.WriteLine($"error: base manifest not found: {manifestPath}"); return 2; }
@@ -68,7 +80,9 @@ public static class Mutator
             string prevSha = TruthDigest.Compute(work);
             var before = Clone(work);
             var ops = ApplyEdit(plan[k - 1], corpus, work, live: true);
-            CommitStep(corpus, basem, o, k, prevSha, before, work, ops, plan[k - 1]);
+            string journal = BeginJournal(corpus);
+            try { CommitStep(corpus, basem, o, k, prevSha, before, work, ops, plan[k - 1]); }
+            finally { File.Delete(journal); }                  // a step commits or fails cleanly (see CommitStep)
         }
         else if (o.Through)
         {
@@ -76,26 +90,40 @@ public static class Mutator
             string prevSha = TruthDigest.Compute(basem.Symbols); // composes onto base
             var before = Clone(basem.Symbols);
             var ops = new FileOps();
+            string journal = BeginJournal(corpus);             // edits land before the one delta: no clean failure
             for (int j = 0; j < plan.Count; j++)
             {
                 Merge(ops, ApplyEdit(plan[j], corpus, work, live: true));
                 ApplyDisk(plan[j]);
             }
             WriteDelta(corpus, basem, o, null, prevSha, before, work, ops);
+            File.Delete(journal);
         }
         else
         {
             // Default: apply the whole chain to disk and emit per-step deltas (convenience / local test).
             var work = Clone(basem.Symbols);
-            for (int j = 0; j < plan.Count; j++)
+            string journal = BeginJournal(corpus);
+            try
             {
-                string prevSha = TruthDigest.Compute(work);
-                var before = Clone(work);
-                var ops = ApplyEdit(plan[j], corpus, work, live: true);
-                CommitStep(corpus, basem, o, j + 1, prevSha, before, work, ops, plan[j]);
+                for (int j = 0; j < plan.Count; j++)
+                {
+                    string prevSha = TruthDigest.Compute(work);
+                    var before = Clone(work);
+                    var ops = ApplyEdit(plan[j], corpus, work, live: true);
+                    CommitStep(corpus, basem, o, j + 1, prevSha, before, work, ops, plan[j]);
+                }
             }
+            finally { File.Delete(journal); }                  // steps before a clean failure are committed with deltas
         }
         return 0;
+    }
+
+    private static string BeginJournal(string dir)
+    {
+        string path = Path.Combine(dir, JournalName);
+        File.WriteAllText(path, $"CodeSpawner {Program.Version}: mutate in progress\n");
+        return path;
     }
 
     /// <summary>
@@ -130,8 +158,13 @@ public static class Mutator
 
         RemoveDeltaArtifacts(TrimDir(corpus));                 // one bulk run ⇒ one coherent delta artifact set
 
-        if (o.ThreeWay) return o.ConflictEdges ? RunThreeWayEdges(o, corpus, basem, chosen)
-                                               : RunThreeWay(o, corpus, basem, chosen);
+        if (o.ThreeWay)
+        {
+            // B itself is never edited; each variant carries a journal from its copy (CopyTree) until the run ends.
+            int rc = o.ConflictEdges ? RunThreeWayEdges(o, corpus, basem, chosen) : RunThreeWay(o, corpus, basem, chosen);
+            foreach (var v in new[] { "_v1", "_v2" }) File.Delete(Path.Combine(TrimDir(corpus) + v, JournalName));
+            return rc;
+        }
 
         Console.WriteLine($"mutate(bulk): target={o.Target} kind={o.Kind} files={chosen.Count}/{pool.Count} " +
                           $"density={o.EditDensity:0.###} seed {o.Seed} base {basem.Sha256[..12]}…");
@@ -139,7 +172,15 @@ public static class Mutator
         long giantFloor = (long)o.GiantMinMb * 1024 * 1024;
         int stride = Math.Max(1, (int)Math.Round(1.0 / Math.Clamp(o.EditDensity, 1e-6, 1.0)));
 
-        if (o.Kind == "rename") return RunRename(o, corpus, basem, chosen);
+        // Files are edited one by one before the single delta is written, so a failure part-way is not clean:
+        // the journal stays unless the delta lands.
+        string journal = BeginJournal(corpus);
+        if (o.Kind == "rename")
+        {
+            RunRename(o, corpus, basem, chosen);
+            File.Delete(journal);
+            return 0;
+        }
 
         bool mixed = o.Kind == "mixed";
         var files = new List<DiffFile>();
@@ -162,6 +203,7 @@ public static class Mutator
         string prevSha = TruthDigest.Compute(basem.Symbols);
         string diffSha = DiffDigest.Compute(files, Array.Empty<Rename>());
         WriteDiffDelta(corpus, basem, o, prevSha, diffSha, files, Array.Empty<Rename>(), Array.Empty<string>());
+        File.Delete(journal);
         Console.WriteLine($"  ~{touched} line(s) changed across {files.Count} file(s); diffTruthSha {diffSha[..12]}…");
         return 0;
     }
@@ -383,6 +425,7 @@ public static class Mutator
         EnsureReplaceable(dst);
         if (Directory.Exists(dst)) Directory.Delete(dst, true);
         Directory.CreateDirectory(dst);
+        BeginJournal(dst);                                     // first: a half-copied variant is already marked
         foreach (var dir in Directory.EnumerateDirectories(src, "*", TreeWalk))
             Directory.CreateDirectory(Path.Combine(dst, RelOf(src, dir).Replace('/', Path.DirectorySeparatorChar)));
         foreach (var f in Directory.EnumerateFiles(src, "*", TreeWalk))
@@ -391,7 +434,8 @@ public static class Mutator
 
     /// <summary>
     /// A 3-way variant tree (<c>&lt;corpus&gt;_v1/_v2</c>) may be replaced only if it is absent, empty, or a previous
-    /// variant (a copy of the corpus, so it carries the <c>.codespawner</c> marker). Anything else at that path
+    /// variant (a copy of the corpus, so it carries the <c>.codespawner</c> marker, or the journal if the copy was cut
+    /// short). Anything else at that path
     /// is a directory we did not create — refuse rather than recursively delete it.
     /// </summary>
     private static void EnsureReplaceable(string dst)
@@ -399,7 +443,7 @@ public static class Mutator
         if (File.Exists(dst))
             throw new ArgException($"3-way variant path '{dst}' is a file; move it aside and re-run.");
         if (!Directory.Exists(dst) || !Directory.EnumerateFileSystemEntries(dst).Any()) return;
-        if (!File.Exists(Path.Combine(dst, MarkerName)))
+        if (!File.Exists(Path.Combine(dst, MarkerName)) && !File.Exists(Path.Combine(dst, JournalName)))   // journal: a copy cut short
             throw new ArgException($"3-way variant directory '{dst}' already exists, is not empty, and was not created " +
                                    "by CodeSpawner. Refusing to delete it; move it aside and re-run.");
     }
@@ -793,44 +837,43 @@ public static class Mutator
     {
         if (SniffEncoding(path) is not { } enc) return null;   // not editable text ⇒ untouched
         bool nulIsBinary = enc.GetPreamble().Length == 0;      // BOM-less UTF-8 with a NUL ⇒ binary (TryReadText's rule)
-        string tmp = path + ".mut.tmp";
         long lineNo = 0;
         var sb = new StringBuilder();                          // holds the current line's content (sans terminator)
         bool pendingCr = false;                                // a lone '\r' seen, waiting to see if it's CRLF
         try
         {
-            using var reader = new StreamReader(path, enc, detectEncodingFromByteOrderMarks: false);   // skips enc's BOM
-            using var writer = new StreamWriter(tmp, false, enc);                                       // re-emits it
-            var buf = new char[1 << 16];
-            int read;
-            while ((read = reader.Read(buf, 0, buf.Length)) > 0)
+            return ReplaceViaTemp(path, tmp =>
             {
-                for (int k = 0; k < read; k++)
+                using var reader = new StreamReader(path, enc, detectEncodingFromByteOrderMarks: false);   // skips enc's BOM
+                using var writer = new StreamWriter(tmp, false, enc);                                       // re-emits it
+                var buf = new char[1 << 16];
+                int read;
+                while ((read = reader.Read(buf, 0, buf.Length)) > 0)
                 {
-                    char c = buf[k];
-                    if (c == '\0' && nulIsBinary) throw new NotTextException();
-                    if (pendingCr)                             // resolve the pending '\r': CRLF or a lone CR?
+                    for (int k = 0; k < read; k++)
                     {
-                        pendingCr = false;
-                        if (c == '\n') { EmitGiantLine(writer, sb, "\r\n", stride, fileIndex, ref lineNo); continue; }
-                        EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);   // lone CR; c starts next line
+                        char c = buf[k];
+                        if (c == '\0' && nulIsBinary) throw new NotTextException();
+                        if (pendingCr)                             // resolve the pending '\r': CRLF or a lone CR?
+                        {
+                            pendingCr = false;
+                            if (c == '\n') { EmitGiantLine(writer, sb, "\r\n", stride, fileIndex, ref lineNo); continue; }
+                            EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);   // lone CR; c starts next line
+                        }
+                        if (c == '\r') { pendingCr = true; continue; }
+                        if (c == '\n') { EmitGiantLine(writer, sb, "\n", stride, fileIndex, ref lineNo); continue; }
+                        sb.Append(c);
                     }
-                    if (c == '\r') { pendingCr = true; continue; }
-                    if (c == '\n') { EmitGiantLine(writer, sb, "\n", stride, fileIndex, ref lineNo); continue; }
-                    sb.Append(c);
                 }
-            }
-            if (pendingCr) EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);  // trailing lone CR
-            if (sb.Length > 0) EmitGiantLine(writer, sb, "", stride, fileIndex, ref lineNo); // final line, no terminator
+                if (pendingCr) EmitGiantLine(writer, sb, "\r", stride, fileIndex, ref lineNo);  // trailing lone CR
+                if (sb.Length > 0) EmitGiantLine(writer, sb, "", stride, fileIndex, ref lineNo); // final line, no terminator
+                return true;
+            }) ? lineNo : null;
         }
         catch (Exception ex) when (ex is DecoderFallbackException or NotTextException)
         {
-            File.Delete(tmp);                                  // not editable text: original untouched
-            return null;
+            return null;                                       // not editable text: original untouched, temp removed
         }
-        File.Delete(path);
-        File.Move(tmp, path);
-        return lineNo;
     }
 
     /// <summary>Write one giant-file line: its preserved content, the stride marker (only on stride-th lines, 0-based),
@@ -932,13 +975,13 @@ public static class Mutator
         long anchor = Math.Max(1, total / 2);                  // insert AFTER this 1-based line (unified insert anchor)
         string inserted = $"// mutate single-locality insert {idx}";
 
-        string tmp = abs + ".mut.tmp";
         var sb = new StringBuilder();
         bool pendingCr = false;
         long lineNo = 0;
-        using (var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false))   // skips enc's BOM
-        using (var writer = new StreamWriter(tmp, false, enc))                                      // re-emits it
+        ReplaceViaTemp(abs, tmp =>
         {
+            using var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false);   // skips enc's BOM
+            using var writer = new StreamWriter(tmp, false, enc);                                      // re-emits it
             void Flush(string term)
             {
                 writer.Write(sb); writer.Write(term); sb.Clear(); lineNo++;
@@ -957,9 +1000,8 @@ public static class Mutator
                 }
             if (pendingCr) Flush("\r");
             if (sb.Length > 0) Flush("");                       // final unterminated line
-        }
-        File.Delete(abs);
-        File.Move(tmp, abs);
+            return true;
+        });
 
         // one explicit insert hunk: after old line `anchor` (oldLines=0), the new line sits at `anchor+1`.
         int a = (int)Math.Min(anchor, int.MaxValue);
@@ -1088,7 +1130,7 @@ public static class Mutator
             return StreamText(abs, new UnicodeEncoding(bigEndian: false, byteOrderMark: true), (buf, n, w) => w.Write(buf, 0, n))
                 ? NoHunks() : null;
         if (!TryReadText(abs, out string text, out _)) return null;
-        File.WriteAllText(abs, text, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
+        WriteText(abs, text, new UnicodeEncoding(bigEndian: false, byteOrderMark: true));
         return NoHunks();
     }
 
@@ -1101,10 +1143,10 @@ public static class Mutator
         // Streamed in chunks (any size, giants included); the RNG is consumed one draw per byte in file order.
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + idx);
-        string tmp = abs + ".mut.tmp";
-        using (var src = new FileStream(abs, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16))
-        using (var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16))
+        ReplaceViaTemp(abs, tmp =>
         {
+            using var src = new FileStream(abs, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+            using var dst = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
             var buf = new byte[1 << 20];
             bool first = true;
             int n;
@@ -1122,8 +1164,8 @@ public static class Mutator
                 }
                 dst.Write(buf, 0, n);
             }
-        }
-        File.Move(tmp, abs, overwrite: true);
+            return true;
+        });
         return NoHunks();
     }
 
@@ -1179,12 +1221,12 @@ public static class Mutator
     {
         if (SniffEncoding(abs) is not { } enc) return false;
         bool nulIsBinary = enc.GetPreamble().Length == 0;
-        string tmp = abs + ".mut.tmp";
         try
         {
-            using (var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false))   // skips enc's BOM
-            using (var writer = new StreamWriter(tmp, false, outEnc ?? enc))                           // emits the out BOM
+            return ReplaceViaTemp(abs, tmp =>
             {
+                using var reader = new StreamReader(abs, enc, detectEncodingFromByteOrderMarks: false);   // skips enc's BOM
+                using var writer = new StreamWriter(tmp, false, outEnc ?? enc);                           // emits the out BOM
                 var buf = new char[1 << 16];
                 int read;
                 while ((read = reader.Read(buf, 0, buf.Length)) > 0)
@@ -1193,19 +1235,41 @@ public static class Mutator
                     chunk(buf, read, writer);
                 }
                 end?.Invoke(writer);
-            }
+                return true;
+            });
         }
         catch (Exception e) when (e is NotTextException or DecoderFallbackException)
         {
-            File.Delete(tmp);
-            return false;
+            return false;                                      // untouched, temp removed
         }
-        File.Move(tmp, abs, overwrite: true);
-        return true;
     }
 
     /// <summary>Write edited text back in the file's own encoding (its BOM re-emitted iff it had one).</summary>
-    private static void WriteText(string abs, string text, Encoding encoding) => File.WriteAllText(abs, text, encoding);
+    private static void WriteText(string abs, string text, Encoding encoding) =>
+        ReplaceViaTemp(abs, tmp => { File.WriteAllText(tmp, text, encoding); return true; });
+
+    /// <summary>
+    /// Every in-place edit goes through here: <paramref name="write"/> fills a sibling <c>.mut.tmp</c>, which is then
+    /// renamed over <paramref name="abs"/>, so the file holds either its old bytes or its new ones, never a truncated
+    /// mix, whatever fails part-way. <paramref name="write"/> returns false (or throws) to leave the file untouched.
+    /// The temp file is removed on every way out short of the process dying, and that case leaves the journal
+    /// behind (<see cref="JournalName"/>).
+    /// </summary>
+    private static bool ReplaceViaTemp(string abs, Func<string, bool> write)
+    {
+        string tmp = abs + ".mut.tmp";
+        try
+        {
+            if (!write(tmp)) return false;
+            File.Move(tmp, abs, overwrite: true);
+            return true;
+        }
+        finally
+        {
+            try { File.Delete(tmp); }                          // already gone after the move
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* the original error matters */ }
+        }
+    }
 
     /// <summary>The strict encoding for streaming a GIANT file, sniffed from its first bytes (null = not text).</summary>
     private static Encoding? SniffEncoding(string abs)
@@ -1387,11 +1451,11 @@ public static class Mutator
                 int at = Math.Clamp(e.DefLine - 1, 0, lines.Count);
                 var pad = Enumerable.Range(0, LineShiftLines).Select(i => $"// mutate line-shift filler {i}");
                 lines.InsertRange(at, pad);
-                File.WriteAllText(e.Path, string.Join('\n', lines), Encodings.Utf8NoBom);
+                WriteText(e.Path, string.Join('\n', lines), Encodings.Utf8NoBom);
                 break;
             }
             case EditType.Add:                                 // def on line 2
-                File.WriteAllText(e.Path, $"#include <stddef.h>\nint {e.Symbol}(int x) {{ return x + 1; }}\n",
+                WriteText(e.Path, $"#include <stddef.h>\nint {e.Symbol}(int x) {{ return x + 1; }}\n",
                     Encodings.Utf8NoBom);
                 break;
             case EditType.Grow: GrowTo(e.Path, GrowTargetBytes); break;
@@ -1666,7 +1730,7 @@ public static class Mutator
     /// (<c>-delta-v1/v2.json</c>, <c>-conflict.json</c>). Called ONCE at the bulk entry point so a mutate run leaves
     /// a single coherent artifact set (never a stale monolithic↔paged, or 2-way↔3-way, mix a consumer could misread).
     /// </summary>
-    private static void RemoveDeltaArtifacts(string corpusBase)
+    internal static void RemoveDeltaArtifacts(string corpusBase)
     {
         string baseName = $"{corpusBase}-delta";
         foreach (var p in new[] { $"{baseName}.json", $"{baseName}.index.json",
@@ -1679,11 +1743,23 @@ public static class Mutator
                 if (IsShardFileName(Path.GetFileName(f), leaf)) File.Delete(f);   // ours only: shard-<digits>.json
     }
 
+    /// <summary>Clear the symbol-mode step deltas (<c>-delta-&lt;k&gt;.json</c>) too. A regen calls this (with
+    /// <see cref="RemoveDeltaArtifacts"/>): every artifact of the old corpus goes with it.</summary>
+    internal static void RemoveStepDeltas(string corpusBase)
+    {
+        string dir = Path.GetDirectoryName(corpusBase) is { Length: > 0 } d ? d : ".";
+        string leaf = Path.GetFileName(corpusBase) + "-delta";
+        if (Directory.Exists(dir))
+            foreach (var f in Directory.GetFiles(dir, $"{leaf}-*.json"))
+                if (IsNumberedFileName(Path.GetFileName(f), leaf + "-")) File.Delete(f);
+    }
+
     /// <summary>True only for the exact names this tool writes (<c>&lt;leaf&gt;.shard-&lt;digits&gt;.json</c>) — the glob
     /// alone would also match a user's <c>&lt;leaf&gt;.shard-notes.json</c>, which is not ours to delete.</summary>
-    private static bool IsShardFileName(string name, string leaf)
+    private static bool IsShardFileName(string name, string leaf) => IsNumberedFileName(name, leaf + ".shard-");
+
+    private static bool IsNumberedFileName(string name, string prefix)
     {
-        string prefix = leaf + ".shard-";
         if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
             !name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)) return false;
         var digits = name.AsSpan(prefix.Length, name.Length - prefix.Length - ".json".Length);
@@ -1755,19 +1831,22 @@ public static class Mutator
         foreach (var ext in new[] { ".o", ".lst", ".bak" }) yield return stem + ext;
     }
 
-    private static void GrowTo(string path, long target)
+    private static void GrowTo(string path, long target) => ReplaceViaTemp(path, tmp =>
     {
-        using var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.None, 1 << 20);
+        File.Copy(path, tmp, overwrite: true);
+        using var fs = new FileStream(tmp, FileMode.Append, FileAccess.Write, FileShare.None, 1 << 20);
         var block = Encoding.ASCII.GetBytes(new string('/', 4094) + "\n"); // benign comment line
         while (fs.Length < target) fs.Write(block, 0, block.Length);
-    }
+        return true;
+    });
 
-    private static void OverwriteTo(string path, long target)
+    private static void OverwriteTo(string path, long target) => ReplaceViaTemp(path, tmp =>
     {
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
+        using var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 20);
         var block = Encoding.ASCII.GetBytes(new string('/', 4094) + "\n");
         while (fs.Length < target) fs.Write(block, 0, block.Length);
-    }
+        return true;
+    });
 
     private static void WriteArray(Utf8JsonWriter w, string name, List<string> items)
     {
