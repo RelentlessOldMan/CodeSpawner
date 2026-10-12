@@ -11,6 +11,15 @@ reads it.
 
 ## [Unreleased]
 
+### Changed
+- `baseManifestSha` no longer depends on the `--out` folder name of a
+  `--linked-roots` corpus. Its manifest paths into sibling roots are written
+  `../<leaf>_rootN/...`; the leaf is now dropped before hashing, so the same
+  corpus generated under another folder name binds the same deltas. Agreed
+  with CodeCompass and CodeDiffer (neither reads the sha). Manifests without
+  linked roots hash exactly as before; record paths and every truth digest
+  are unchanged.
+
 ## [1.1.6] - 2026-10-12
 
 ### Fixed (reproducibility)
