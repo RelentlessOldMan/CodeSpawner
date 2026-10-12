@@ -118,6 +118,7 @@ public class GenerationEmitterTests
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(db));
         Assert.Equal(expected, doc.RootElement.GetArrayLength());
         Assert.Contains("clang", doc.RootElement[0].GetProperty("command").GetString());
+        Assert.DoesNotContain((byte)'\r', File.ReadAllBytes(db));   // LF on every OS, like the manifest
     }
 
     [Fact]

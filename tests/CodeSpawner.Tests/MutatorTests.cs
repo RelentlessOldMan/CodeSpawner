@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CodeSpawner.Cli;
+using CodeSpawner.Generation;
 using CodeSpawner.Manifest;
 using CodeSpawner.Mutation;
 using Xunit;
@@ -264,14 +265,40 @@ public class MutatorTests
     }
 
     [Fact]
+    public void Plan_PicksSourceFilesInTheSameOrderOnEveryOs()
+    {
+        // Sibling dirs d1..d12: '\' sorts after digits and '/' before them, so sorting OS paths put d10\ ahead of
+        // d1\ on Windows only, and the seeded shuffle then gave Windows a different plan from Linux (1.1.7 and
+        // earlier). The pinned order below is the '/' order, i.e. what Linux always produced.
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "corpus");
+        Directory.CreateDirectory(corpus);
+        File.WriteAllText(Path.Combine(corpus, ".codespawner"), "CodeSpawner test\n");
+        var m = new ManifestModel { Seed = 1, CorpusRoot = corpus, GeneratorVersion = "test" };
+        for (int i = 1; i <= 12; i++)
+        {
+            Directory.CreateDirectory(Path.Combine(corpus, $"d{i}"));
+            File.WriteAllText(Path.Combine(corpus, $"d{i}", "src.c"), $"int func_{i}(int x) {{ return x; }}\n");
+            m.Symbols[$"func_{i}"] = new SymbolEntry { Def = $"d{i}/src.c:1" };
+        }
+        string manifest = Path.Combine(tmp.Path, "corpus-manifest.json");
+        ManifestWriter.Write(m, manifest);
+
+        // types cycle [Remove, LineShift, Add]: 18 edits draw all 12 source files, in pool order.
+        var plan = Mutator.BuildPlan(new MutateOptions { Corpus = corpus, Edits = 18, Seed = 7 }, corpus, ManifestReader.Load(manifest));
+        var picked = plan.Where(e => e.Type is EditType.Remove or EditType.LineShift)
+                         .Select(e => PathUtil.Rel(corpus, e.Path).Split('/')[0]).ToList();
+        Assert.Equal("d7,d1,d8,d5,d6,d10,d2,d4,d3,d9,d11,d12", string.Join(",", picked));
+    }
+
+    [Fact]
     public void SizeEdits_Grow_Shrink_Restream_ChangeFileSizes()
     {
-        long grow0 = Mutator.GrowTargetBytes, shrink0 = Mutator.ShrinkTargetBytes, restream0 = Mutator.RestreamTargetBytes;
         try
         {
-            Mutator.GrowTargetBytes = 8 * 1024;        // tiny targets so the test writes KB, not 110 MB
-            Mutator.ShrinkTargetBytes = 4 * 1024;
-            Mutator.RestreamTargetBytes = 4 * 1024;
+            Mutator.GrowTargetOverride = 8 * 1024;        // tiny targets so the test writes KB, not 110 MB
+            Mutator.ShrinkTargetOverride = 4 * 1024;
+            Mutator.RestreamTargetOverride = 4 * 1024;
 
             using var tmp = new TempDir();
             var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6, extra: c =>
@@ -301,7 +328,7 @@ public class MutatorTests
         }
         finally
         {
-            Mutator.GrowTargetBytes = grow0; Mutator.ShrinkTargetBytes = shrink0; Mutator.RestreamTargetBytes = restream0;
+            Mutator.GrowTargetOverride = Mutator.ShrinkTargetOverride = Mutator.RestreamTargetOverride = null;
         }
     }
 

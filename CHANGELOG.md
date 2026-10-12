@@ -11,6 +11,28 @@ reads it.
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-10-12
+
+### Changed (cross-OS determinism)
+- Symbol-mode `mutate` (default, `--step`, `--through`) now plans the same
+  edits on Windows as on Linux. Its source-file pool was sorted by OS path
+  before the seeded shuffle, and `\` sorts after digits where `/` sorts before
+  them, so Windows put `block10\` ahead of `block1\`. The pool is now sorted in
+  its `/` form on every OS. **Windows symbol-mutate output changes** for a
+  corpus with 11 or more numbered sibling directories at some level (any
+  death-scale or carve corpus): different files are removed and line-shifted
+  for the same seed. Linux output, and corpora with 10 or fewer siblings, are
+  unchanged. Bulk/diff mode (`--target`) already sorted `/` paths and is
+  unaffected. Agreed with CodeCompass (no frozen symbol-mutate outputs).
+- `scan --sample` picks the same files per cluster on Windows as on Linux, for
+  the same reason.
+
+### Fixed
+- `compile_commands.json` is written with LF line endings on every OS, like
+  the manifest and deltas (it was CRLF on Windows).
+- Tests that shrink mutate's grow/shrink/restream size targets no longer
+  change them for test classes running in parallel.
+
 ## [1.1.7] - 2026-10-12
 
 ### Changed

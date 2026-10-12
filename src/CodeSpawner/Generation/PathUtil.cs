@@ -13,6 +13,12 @@ public static class PathUtil
         return rel.Replace('\\', '/');
     }
 
+    /// <summary>Ordinal order over the '/' form of OS paths, so a sorted list comes out the same on Windows and
+    /// Linux. Plain ordinal differs: '\' sorts after digits and uppercase, '/' before them, so Windows put
+    /// <c>block10\</c> ahead of <c>block1\</c>. A no-op on Linux, where the separator already is '/'.</summary>
+    public static readonly IComparer<string> SlashOrdinal = Comparer<string>.Create((a, b) =>
+        string.CompareOrdinal(a.Replace(Path.DirectorySeparatorChar, '/'), b.Replace(Path.DirectorySeparatorChar, '/')));
+
     /// <summary>One-off <see cref="Containment.Resolve"/>; a caller resolving many paths keeps one
     /// <see cref="Containment"/> so the marker is read once and each directory is checked once.</summary>
     public static string? ResolveInCorpus(string corpusRoot, string rel) => new Containment(corpusRoot).Resolve(rel);

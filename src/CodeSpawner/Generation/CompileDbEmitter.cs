@@ -18,7 +18,13 @@ public static class CompileDbEmitter
         int take = o.CompileDb == CompileDbMode.Full ? files.Count : files.Count / 2;
         string path = Path.Combine(outFull, "compile_commands.json");
 
-        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        // Through AtomicFile for its LF-only line endings, so the bytes match on every OS.
+        Manifest.AtomicFile.Write(path, fs => WriteEntries(fs, outFull, files, take));
+        Console.WriteLine($"  compile_commands.json: {take}/{files.Count} TUs ({o.CompileDb.ToString().ToLowerInvariant()})");
+    }
+
+    private static void WriteEntries(Stream fs, string outFull, IReadOnlyList<CFileInfo> files, int take)
+    {
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
 
         w.WriteStartArray();
@@ -34,7 +40,5 @@ public static class CompileDbEmitter
         }
         w.WriteEndArray();
         w.Flush();
-
-        Console.WriteLine($"  compile_commands.json: {take}/{files.Count} TUs ({o.CompileDb.ToString().ToLowerInvariant()})");
     }
 }
