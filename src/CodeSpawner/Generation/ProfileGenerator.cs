@@ -24,6 +24,7 @@ public sealed class ProfileGenerator
 
         PrepareOutputDir();
         string outFull = new DirectoryInfo(_o.Out).FullName;
+        if (_o.WithOracle) CorpusGenerator.ProbeManifestWritable(CorpusGenerator.ManifestPath(outFull), "drop --with-oracle");
         Console.WriteLine($"Regenerating from {_o.FromProfile} (posture={profile.Posture.Label()}, " +
                           $"{profile.Archetypes.Count} archetypes, seed {_o.Seed}) ...");
 

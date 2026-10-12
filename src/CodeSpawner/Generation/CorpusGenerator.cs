@@ -30,18 +30,7 @@ public sealed class CorpusGenerator
 
         // Fail FAST if the sibling manifest location isn't writable — do not discover it after emitting GBs.
         string mpath = ManifestPath(outFull);
-        if (_o.Manifest)
-        {
-            // Probe with the writer's own temp name (not the manifest itself), so the probe never truncates a
-            // manifest and the real file only ever appears complete (ManifestWriter writes then renames).
-            try { using (File.Create(mpath + ".tmp", 1, FileOptions.DeleteOnClose)) { } }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw new ArgException(
-                    $"cannot write the manifest at '{mpath}': {ex.Message}. The manifest is a sibling of " +
-                    "--out, so choose an --out nested at least one level below a drive root, or pass --manifest=false.");
-            }
-        }
+        if (_o.Manifest) ProbeManifestWritable(mpath);
 
         Console.WriteLine(
             $"Fabricating corpus at {outFull} (scale {_o.Scale}, seed {_o.Seed}, compileDb={_o.CompileDb}) ...");
@@ -177,7 +166,7 @@ public sealed class CorpusGenerator
     /// Clear and recreate the output directory (the guards against a mistyped <c>--out</c> wiping real data
     /// live in <see cref="OutputDir"/>, shared with the profile generator).
     /// </summary>
-    private void PrepareOutputDir() => OutputDir.Prepare(_o.Out, _o.Force);
+    private void PrepareOutputDir() => OutputDir.Prepare(_o.Out, _o.Force, _o.LinkedRoots);
 
     private List<string> EmitHeaders(DirTree tree, int nGiant, int nBig, int nMed, int nDense, PopulationStats stats)
     {
@@ -409,6 +398,20 @@ public sealed class CorpusGenerator
                         ?? Directory.GetCurrentDirectory();
         string leaf = Path.GetFileName(outFull.TrimEnd(Path.DirectorySeparatorChar));
         return Path.Combine(parent, $"{leaf}-manifest.json");
+    }
+
+    /// <summary>Fail fast when the sibling manifest can't be written, before any generation work. Probes with the
+    /// writer's own temp name (not the manifest itself), so the probe never truncates a manifest and the real file
+    /// only ever appears complete (ManifestWriter writes then renames).</summary>
+    internal static void ProbeManifestWritable(string mpath, string optOut = "pass --manifest=false")
+    {
+        try { using (File.Create(mpath + ".tmp", 1, FileOptions.DeleteOnClose)) { } }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ArgException(
+                $"cannot write the manifest at '{mpath}': {ex.Message}. The manifest is a sibling of " +
+                "--out, so choose an --out nested at least one level below a drive root, or " + optOut + ".");
+        }
     }
 
     private static void Report(DirTree tree, string outFull, TimeSpan elapsed)

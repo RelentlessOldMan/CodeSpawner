@@ -37,6 +37,15 @@ public static class ManifestVerifier
 
         int fail = 0;
 
+        // A mutate that died part-way leaves its journal: the tree then matches neither the base manifest nor any
+        // delta, so whatever the sites below say, the corpus is not one the manifest describes.
+        if (File.Exists(Path.Combine(corpus, Mutation.Mutator.JournalName)))
+        {
+            Console.Error.WriteLine($"FAIL: {Mutation.Mutator.JournalName} present: a mutate of this corpus was interrupted " +
+                                    "(or is still running); regenerate the corpus");
+            fail++;
+        }
+
         // --- _meta ---
         if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("FAIL: no _meta block"); return 1; }
         int ver = meta.TryGetProperty("manifestVersion", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi : -1;
@@ -63,11 +72,12 @@ public static class ManifestVerifier
         }
 
         var lineCache = new Dictionary<string, string[]>();
+        var paths = new Generation.Containment(corpus);
         int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0;
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree (the unresolved-include premise).
         bool anyVendorHeaderPresent =
-            Directory.EnumerateFiles(corpus, "VENDOR_missing_*.h", SearchOption.AllDirectories).Any();
+            Directory.EnumerateFiles(corpus, "VENDOR_missing_*.h", NoLinks).Any();
 
         foreach (var sym in symbols.EnumerateObject())
         {
@@ -80,7 +90,7 @@ public static class ManifestVerifier
             {
                 if (!entry.TryGetProperty("def", out var emDef) || emDef.GetString() is not { } site)
                 { Console.Error.WriteLine($"FAIL expectedMiss {name}: no def site"); fail++; continue; }
-                if (HonestMissOk(corpus, lineCache, site, name, out string mw)) missOk++;
+                if (HonestMissOk(paths, lineCache, site, name, out string mw)) missOk++;
                 else { Console.Error.WriteLine($"FAIL expectedMiss {name}: {mw}"); fail++; }
                 continue;
             }
@@ -89,14 +99,14 @@ public static class ManifestVerifier
             // or hand-edited manifest must not pass by dropping its def sites.
             if (!entry.TryGetProperty("def", out var defEl) || defEl.ValueKind != JsonValueKind.String)
             { Console.Error.WriteLine($"FAIL def {name}: no def site"); fail++; }
-            else if (SiteHasToken(corpus, lineCache, defEl.GetString()!, name, out string why)) defsOk++;
+            else if (SiteHasToken(paths, lineCache, defEl.GetString()!, name, out string why)) defsOk++;
             else { Console.Error.WriteLine($"FAIL def {name}: {why}"); fail++; }
 
             // each ref site contains the symbol token.
             if (entry.TryGetProperty("refs", out var refsEl))
                 foreach (var r in refsEl.EnumerateArray())
                 {
-                    if (SiteHasToken(corpus, lineCache, ManifestReader.Str(r), name, out string why)) refsOk++;
+                    if (SiteHasToken(paths, lineCache, ManifestReader.Str(r), name, out string why)) refsOk++;
                     else { Console.Error.WriteLine($"FAIL ref {name} @ {r.GetString()}: {why}"); fail++; }
                 }
 
@@ -129,10 +139,10 @@ public static class ManifestVerifier
                 foreach (var u in unrefsEl.EnumerateArray())
                 {
                     string site = ManifestReader.Str(u);
-                    if (!SiteHasToken(corpus, lineCache, site, name, out string why))
+                    if (!SiteHasToken(paths, lineCache, site, name, out string why))
                     { Console.Error.WriteLine($"FAIL gated {name} @ {site}: {why}"); fail++; continue; }
 
-                    string file = ResolveFile(corpus, site);
+                    string file = paths.Resolve(site[..site.LastIndexOf(':')])!;   // SiteHasToken resolved it
                     string text = File.ReadAllText(file);
                     if (!text.Contains("#ifdef VENDOR_OK"))
                     { Console.Error.WriteLine($"FAIL gated {name} @ {site}: not behind #ifdef VENDOR_OK"); fail++; continue; }
@@ -153,13 +163,13 @@ public static class ManifestVerifier
                 { Console.Error.WriteLine($"FAIL dup {gname}: malformed group (need sha256 + paths[])"); fail++; continue; }
                 foreach (var p in pathsEl.EnumerateArray())
                 {
-                    if (FileSha(corpus, ManifestReader.Str(p), out string got, out string why) && got == sha) dupOk++;
+                    if (FileSha(paths, ManifestReader.Str(p), out string got, out string why) && got == sha) dupOk++;
                     else { Console.Error.WriteLine($"FAIL dup {gname} @ {p.GetString()}: {(why.Length > 0 ? why : $"hash {got} != {sha}")}"); fail++; }
                 }
                 if (grp.Value.TryGetProperty("nearVariants", out var nvs))
                     foreach (var nv in nvs.EnumerateArray())
                     {
-                        if (!FileSha(corpus, ManifestReader.Str(nv), out string got, out string why))
+                        if (!FileSha(paths, ManifestReader.Str(nv), out string got, out string why))
                         { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: {why}"); fail++; }
                         else if (got == sha)
                         { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: identical to group (should differ)"); fail++; }
@@ -184,12 +194,12 @@ public static class ManifestVerifier
 
     /// <summary>Honest-miss check: the symbol name must NOT appear at the def line and the token-paste
     /// generator macro must — proving the symbol is macro-synthesized, not lexically present.</summary>
-    private static bool HonestMissOk(string corpus, Dictionary<string, string[]> cache, string site, string symbol, out string why)
+    private static bool HonestMissOk(Generation.Containment paths, Dictionary<string, string[]> cache, string site, string symbol, out string why)
     {
         int c = site.LastIndexOf(':');
         if (c < 0 || !int.TryParse(site[(c + 1)..], out int line)) { why = "malformed def site"; return false; }
         string rel = site[..c];
-        if (Generation.PathUtil.ResolveInCorpus(corpus, rel) is not { } full) { why = $"path escapes corpus root: {rel}"; return false; }
+        if (paths.Resolve(rel) is not { } full) { why = $"path escapes corpus root: {rel}"; return false; }
         if (!cache.TryGetValue(full, out var lines))
         {
             if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
@@ -209,17 +219,17 @@ public static class ManifestVerifier
     }
 
     /// <summary>Hex SHA-256 of a corpus-relative file (with containment check).</summary>
-    private static bool FileSha(string corpus, string rel, out string sha, out string why)
+    private static bool FileSha(Generation.Containment paths, string rel, out string sha, out string why)
     {
         sha = ""; why = "";
-        if (Generation.PathUtil.ResolveInCorpus(corpus, rel) is not { } full) { why = $"path escapes corpus root: {rel}"; return false; }
+        if (paths.Resolve(rel) is not { } full) { why = $"path escapes corpus root: {rel}"; return false; }
         if (!File.Exists(full)) { why = $"file missing: {rel}"; return false; }
         sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(full))).ToLowerInvariant();
         return true;
     }
 
     /// <summary>Assert the line named by "<rel>:<line>" exists and contains "<symbol>(".</summary>
-    private static bool SiteHasToken(string corpus, Dictionary<string, string[]> cache, string site,
+    private static bool SiteHasToken(Generation.Containment paths, Dictionary<string, string[]> cache, string site,
         string symbol, out string why)
     {
         int c = site.LastIndexOf(':');
@@ -229,7 +239,7 @@ public static class ManifestVerifier
 
         // Refuse paths that escape the corpus root (a malformed/hostile manifest with '..'); --linked-roots
         // siblings (../<corpus>_rootN/...) are part of the corpus.
-        if (Generation.PathUtil.ResolveInCorpus(corpus, rel) is not { } full)
+        if (paths.Resolve(rel) is not { } full)
         { why = $"path escapes corpus root: {rel}"; return false; }
 
         if (!cache.TryGetValue(full, out var lines))
@@ -248,11 +258,15 @@ public static class ManifestVerifier
         return true;
     }
 
-    private static string ResolveFile(string corpus, string site)
+    /// <summary>Recursive walk that never follows a junction/symlink (the walk mutate uses), so a link inside the
+    /// corpus can't pull an outside VENDOR_missing_*.h into the check.</summary>
+    private static readonly EnumerationOptions NoLinks = new()
     {
-        string rel = site[..site.LastIndexOf(':')];
-        return Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
-    }
+        RecurseSubdirectories = true,
+        AttributesToSkip = FileAttributes.ReparsePoint,
+        MatchType = MatchType.Win32,
+        IgnoreInaccessible = false,
+    };
 
     private static string DefaultManifestPath(string corpus)
     {

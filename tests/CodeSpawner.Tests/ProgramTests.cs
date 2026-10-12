@@ -7,6 +7,7 @@ namespace CodeSpawner.Tests;
 /// from-profile → mutate round-trip. The round-trip is the unit-level smoke of CorpusGenerator / Scanner /
 /// ProfileGenerator / ManifestVerifier / Mutator wired together through Program.Main.
 /// </summary>
+[Collection("CapturesConsole")]   // swaps the process-wide Console: never alongside another class that does
 public class ProgramTests
 {
     // Run the CLI with stdout muted + stderr captured (gen/scan are chatty); return the exit code.
