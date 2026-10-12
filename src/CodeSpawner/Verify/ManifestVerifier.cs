@@ -39,7 +39,7 @@ public static class ManifestVerifier
 
         // --- _meta ---
         if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("FAIL: no _meta block"); return 1; }
-        int ver = meta.TryGetProperty("manifestVersion", out var v) ? v.GetInt32() : -1;
+        int ver = meta.TryGetProperty("manifestVersion", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi : -1;
         if (ver != 1) { Console.Error.WriteLine($"FAIL: manifestVersion {ver} != 1"); fail++; }
         else Console.WriteLine("  OK  _meta.manifestVersion == 1");
 
@@ -85,18 +85,18 @@ public static class ManifestVerifier
                 continue;
             }
 
-            // def site contains the symbol token.
-            if (entry.TryGetProperty("def", out var defEl))
-            {
-                if (SiteHasToken(corpus, lineCache, defEl.GetString()!, name, out string why)) defsOk++;
-                else { Console.Error.WriteLine($"FAIL def {name}: {why}"); fail++; }
-            }
+            // def site contains the symbol token. A symbol without a string def is a FAIL, not a skip: a truncated
+            // or hand-edited manifest must not pass by dropping its def sites.
+            if (!entry.TryGetProperty("def", out var defEl) || defEl.ValueKind != JsonValueKind.String)
+            { Console.Error.WriteLine($"FAIL def {name}: no def site"); fail++; }
+            else if (SiteHasToken(corpus, lineCache, defEl.GetString()!, name, out string why)) defsOk++;
+            else { Console.Error.WriteLine($"FAIL def {name}: {why}"); fail++; }
 
             // each ref site contains the symbol token.
             if (entry.TryGetProperty("refs", out var refsEl))
                 foreach (var r in refsEl.EnumerateArray())
                 {
-                    if (SiteHasToken(corpus, lineCache, r.GetString()!, name, out string why)) refsOk++;
+                    if (SiteHasToken(corpus, lineCache, ManifestReader.Str(r), name, out string why)) refsOk++;
                     else { Console.Error.WriteLine($"FAIL ref {name} @ {r.GetString()}: {why}"); fail++; }
                 }
 
@@ -104,7 +104,7 @@ public static class ManifestVerifier
             if (entry.TryGetProperty("edges", out var edgesEl))
                 foreach (var e in edgesEl.EnumerateArray())
                 {
-                    string target = e.GetString()!;
+                    string target = ManifestReader.Str(e);
                     if (names.Contains(target)) edgesOk++;
                     else { Console.Error.WriteLine($"FAIL edge {name} -> {target}: target symbol missing"); fail++; }
                 }
@@ -128,7 +128,7 @@ public static class ManifestVerifier
             if (entry.TryGetProperty("unreachableRefs", out var unrefsEl))
                 foreach (var u in unrefsEl.EnumerateArray())
                 {
-                    string site = u.GetString()!;
+                    string site = ManifestReader.Str(u);
                     if (!SiteHasToken(corpus, lineCache, site, name, out string why))
                     { Console.Error.WriteLine($"FAIL gated {name} @ {site}: {why}"); fail++; continue; }
 
@@ -153,13 +153,13 @@ public static class ManifestVerifier
                 { Console.Error.WriteLine($"FAIL dup {gname}: malformed group (need sha256 + paths[])"); fail++; continue; }
                 foreach (var p in pathsEl.EnumerateArray())
                 {
-                    if (FileSha(corpus, p.GetString()!, out string got, out string why) && got == sha) dupOk++;
+                    if (FileSha(corpus, ManifestReader.Str(p), out string got, out string why) && got == sha) dupOk++;
                     else { Console.Error.WriteLine($"FAIL dup {gname} @ {p.GetString()}: {(why.Length > 0 ? why : $"hash {got} != {sha}")}"); fail++; }
                 }
                 if (grp.Value.TryGetProperty("nearVariants", out var nvs))
                     foreach (var nv in nvs.EnumerateArray())
                     {
-                        if (!FileSha(corpus, nv.GetString()!, out string got, out string why))
+                        if (!FileSha(corpus, ManifestReader.Str(nv), out string got, out string why))
                         { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: {why}"); fail++; }
                         else if (got == sha)
                         { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: identical to group (should differ)"); fail++; }

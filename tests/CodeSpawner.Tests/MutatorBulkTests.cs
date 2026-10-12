@@ -577,6 +577,8 @@ public class MutatorBulkTests
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, OverlapFraction = 0.5, EditDensity = 0.9, Seed = 3 });
 
         var root = ConflictRoot(corpus);
+        Assert.NotEqual(0, root.GetProperty("conflicts").GetArrayLength());
+        Assert.NotEqual(0, root.GetProperty("mergedClean").GetArrayLength());
         foreach (var c in root.GetProperty("conflicts").EnumerateArray())
             Assert.True(c.GetProperty("baseStart").GetInt32() % 2 == 1);   // edits only on odd base lines
         foreach (var m in root.GetProperty("mergedClean").EnumerateArray())
@@ -594,6 +596,8 @@ public class MutatorBulkTests
         string[] V1(string p) => File.ReadAllLines(Path.Combine(v1, p.Replace('/', Path.DirectorySeparatorChar)));
         string[] V2(string p) => File.ReadAllLines(Path.Combine(v2, p.Replace('/', Path.DirectorySeparatorChar)));
         var root = ConflictRoot(corpus);
+        Assert.NotEqual(0, root.GetProperty("conflicts").GetArrayLength());
+        Assert.NotEqual(0, root.GetProperty("mergedClean").GetArrayLength());
 
         foreach (var c in root.GetProperty("conflicts").EnumerateArray())
         {
@@ -1115,4 +1119,158 @@ public class MutatorBulkTests
         Assert.False(File.Exists(corpus + "-delta-v2.json"));
         Assert.False(File.Exists(corpus + "-conflict.json"));
     }
+
+    // --- the emitted digests, recomputed the consumer's way from the JSON alone ---
+    // The golden vectors pin DiffDigest/ConflictDigest themselves; these pin how mutate wires them: the _meta sha
+    // must be the digest of exactly the records the artifact carries (a dropped file, a field written from the
+    // wrong value, or a section left out of the digest all fail here). The per-record shas/sizes are also checked
+    // against the real base and variant bytes.
+
+    [Theory]
+    [InlineData("content")]
+    [InlineData("eol")]
+    [InlineData("whitespace")]
+    [InlineData("line-insert")]
+    [InlineData("line-delete")]
+    [InlineData("encoding")]
+    [InlineData("binary")]
+    [InlineData("metadata")]
+    [InlineData("mixed")]
+    [InlineData("rename")]
+    public void Emitted_DiffTruthSha_RecomputesFromRecords_AndShasMatchDisk(string kind)
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 8, lines: 40);
+        var baseBytes = Directory.GetFiles(corpus, "src_*.c").ToDictionary(f => Path.GetFileName(f), File.ReadAllBytes);
+
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = kind, EditDensity = 0.5, Seed = 13 }));
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(delta));
+        var fileOps = doc.RootElement.GetProperty("fileOps");
+        var files = ParseDiffFiles(fileOps.GetProperty("modified"));
+        var renames = ParseRenames(fileOps);
+        Assert.True(files.Count + renames.Count > 0, "nothing recorded");
+        Assert.Equal(DiffDigest.Compute(files, renames), doc.RootElement.GetProperty("_meta").GetProperty("diffTruthSha").GetString());
+
+        foreach (var f in files)
+        {
+            byte[] now = File.ReadAllBytes(Path.Combine(corpus, f.Path.Replace('/', Path.DirectorySeparatorChar)));
+            Assert.Equal(LowerSha(now), f.NewSha);
+            Assert.Equal(now.LongLength, f.NewSize);
+            if (kind == "rename") continue;                       // a rename's old side is its `from` file
+            byte[] old = baseBytes[f.Path];
+            Assert.Equal(LowerSha(old), f.OldSha);
+            Assert.Equal(old.LongLength, f.OldSize);
+        }
+    }
+
+    [Fact]
+    public void Emitted_DiffTruthSha_RecomputesForGiantRunRule()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+            File.WriteAllText(Path.Combine(c, "big.h"),
+                string.Join("\n", Enumerable.Range(0, 100_000).Select(i => $"#define MACRO_{i} {i}"))));
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, EditDensity = 0.1, Seed = 1 }));
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(delta));
+        var files = ParseDiffFiles(doc.RootElement.GetProperty("fileOps").GetProperty("modified"));
+        Assert.Contains(files, f => f.Run is not null);
+        Assert.Equal(DiffDigest.Compute(files, ParseRenames(doc.RootElement.GetProperty("fileOps"))),
+            doc.RootElement.GetProperty("_meta").GetProperty("diffTruthSha").GetString());
+    }
+
+    [Fact]
+    public void Emitted_DiffTruthSha_RecomputesFromReassembledShards()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 10, lines: 20);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 7, ShardSize = 3 }));
+
+        var (index, shards) = ShardPaths(delta);
+        Assert.True(shards.Length > 1);
+        var files = new List<DiffFile>();
+        foreach (var sh in shards)
+        {
+            using var sd = JsonDocument.Parse(File.ReadAllText(sh));
+            files.AddRange(ParseDiffFiles(sd.RootElement.GetProperty("modified")));
+        }
+        using var idx = JsonDocument.Parse(File.ReadAllText(index));
+        Assert.Equal(DiffDigest.Compute(files, ParseRenames(idx.RootElement.GetProperty("fileOps"))),
+            idx.RootElement.GetProperty("_meta").GetProperty("diffTruthSha").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Emitted_ConflictAndVariantShas_RecomputeFromRecords(bool edges)
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: edges ? 1 : 5, lines: edges ? 20 : 50);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, ConflictEdges = edges,
+            OverlapFraction = 0.5, EditDensity = 0.9, Seed = 11 }));
+
+        var root = ConflictRoot(corpus);
+        var conflicts = root.GetProperty("conflicts").EnumerateArray().Select(c => new Conflict(
+            c.GetProperty("path").GetString()!, c.GetProperty("baseStart").GetInt32(), c.GetProperty("baseLines").GetInt32(),
+            Op(c.GetProperty("v1")), c.GetProperty("v1").GetProperty("newStart").GetInt32(), c.GetProperty("v1").GetProperty("newLines").GetInt32(),
+            Op(c.GetProperty("v2")), c.GetProperty("v2").GetProperty("newStart").GetInt32(), c.GetProperty("v2").GetProperty("newLines").GetInt32())).ToList();
+        var clean = root.GetProperty("mergedClean").EnumerateArray().Select(m => new CleanMerge(
+            m.GetProperty("path").GetString()!, m.GetProperty("side").GetString()!, Op(m),
+            m.GetProperty("oldStart").GetInt32(), m.GetProperty("oldLines").GetInt32(),
+            m.GetProperty("newStart").GetInt32(), m.GetProperty("newLines").GetInt32())).ToList();
+        Assert.NotEmpty(conflicts);
+        Assert.NotEmpty(clean);
+        Assert.Equal(ConflictDigest.Compute(conflicts, clean), root.GetProperty("_meta").GetProperty("conflictTruthSha").GetString());
+
+        foreach (var v in new[] { "v1", "v2" })
+        {
+            using var d = JsonDocument.Parse(File.ReadAllText($"{corpus}-delta-{v}.json"));
+            var fileOps = d.RootElement.GetProperty("fileOps");
+            var files = ParseDiffFiles(fileOps.GetProperty("modified"));
+            Assert.NotEmpty(files);
+            Assert.Equal(DiffDigest.Compute(files, ParseRenames(fileOps)), d.RootElement.GetProperty("_meta").GetProperty("diffTruthSha").GetString());
+            foreach (var f in files)                              // new side = the variant tree, old side = the pristine base
+            {
+                Assert.Equal(LowerSha(File.ReadAllBytes(Path.Combine(corpus + "_" + v, f.Path))), f.NewSha);
+                Assert.Equal(LowerSha(File.ReadAllBytes(Path.Combine(corpus, f.Path))), f.OldSha);
+            }
+        }
+    }
+
+    private static HunkOp Op(JsonElement e) => Enum.Parse<HunkOp>(e.GetProperty("op").GetString()!, ignoreCase: true);
+    private static string LowerSha(byte[] b) => Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
+
+    // modified[] records → DiffFile, read field by field as a consumer would.
+    private static List<DiffFile> ParseDiffFiles(JsonElement modified)
+    {
+        var list = new List<DiffFile>();
+        foreach (var r in modified.EnumerateArray())
+        {
+            RunHunk? run = null;
+            var hunks = new List<Hunk>();
+            foreach (var h in r.GetProperty("hunks").EnumerateArray())
+                if (h.TryGetProperty("kind", out var k) && k.GetString() == "run")
+                    run = new RunHunk(Op(h), h.GetProperty("stride").GetInt32(), h.GetProperty("rangeStart").GetInt32(),
+                        h.GetProperty("rangeEnd").GetInt32(), h.GetProperty("perHunk").GetInt32());
+                else
+                    hunks.Add(new Hunk(Op(h), h.GetProperty("oldStart").GetInt32(), h.GetProperty("oldLines").GetInt32(),
+                        h.GetProperty("newStart").GetInt32(), h.GetProperty("newLines").GetInt32()));
+            var f = new DiffFile
+            {
+                Path = r.GetProperty("path").GetString()!, Reason = r.GetProperty("reason").GetString()!,
+                OldSha = r.GetProperty("oldSha").GetString()!, NewSha = r.GetProperty("newSha").GetString()!,
+                OldSize = r.GetProperty("oldSize").GetInt64(), NewSize = r.GetProperty("newSize").GetInt64(), Run = run,
+            };
+            f.Hunks.AddRange(hunks);
+            list.Add(f);
+        }
+        return list;
+    }
+
+    private static List<Rename> ParseRenames(JsonElement fileOps) =>
+        fileOps.TryGetProperty("renamed", out var arr)
+            ? arr.EnumerateArray().Select(r => new Rename(r.GetProperty("from").GetString()!, r.GetProperty("to").GetString()!,
+                r.GetProperty("similarityMilli").GetInt32())).ToList()
+            : new List<Rename>();
 }

@@ -297,7 +297,9 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("unresolvedIncludes", (long)_o.UnresolvedIncludes));
         // per-file sizes / scalars (never scaled)
         g.Add(GenKnob.Of("maxHeaderMB", (long)_o.MaxHeaderMB));
-        g.Add(GenKnob.Of("macroDensity", (long)_o.MacroDensity));
+        // Only when set: an explicit --macro-density caps giants at that many defines, while the default leaves them
+        // uncapped (filled to maxHeaderMB). Recording the default would cap a replay at 1M defines.
+        if (_o.WasSet("MacroDensity")) g.Add(GenKnob.Of("macroDensity", (long)_o.MacroDensity));
         g.Add(GenKnob.Of("denseUnderMb", (long)_o.DenseUnderMb));
         g.Add(GenKnob.Of("maxLineBytes", (long)_o.MaxLineBytes));
         g.Add(GenKnob.Of("dupCopies", (long)_o.DupCopies));

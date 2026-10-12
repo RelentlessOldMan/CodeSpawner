@@ -53,6 +53,11 @@ public static class ManifestReader
         return (-1, -1);
     }
 
+    /// <summary>A string-valued element, or <see cref="FormatException"/> (bad input, exit 2) for anything else,
+    /// null included, so a malformed manifest can't plant a null that crashes later.</summary>
+    internal static string Str(JsonElement e) =>
+        e.ValueKind == JsonValueKind.String ? e.GetString()! : throw new FormatException($"expected a string, got {e.GetRawText()}");
+
     public static BaseManifest Load(string path)
     {
         byte[] bytes = File.ReadAllBytes(path);
@@ -60,7 +65,7 @@ public static class ManifestReader
         using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
 
-        var meta = root.GetProperty("_meta");
+        if (!root.TryGetProperty("_meta", out var meta)) throw new FormatException($"{path}: no _meta block");
         int ver = meta.TryGetProperty("manifestVersion", out var v) ? v.GetInt32() : -1;
         if (ver != 1) throw new InvalidOperationException($"manifest version {ver} != 1");
 
@@ -68,18 +73,19 @@ public static class ManifestReader
         if (root.TryGetProperty("symbols", out var syms) && syms.ValueKind == JsonValueKind.Object)
             foreach (var p in syms.EnumerateObject())
             {
-                var e = new SymbolEntry { Def = p.Value.GetProperty("def").GetString()! };
+                if (!p.Value.TryGetProperty("def", out var def)) throw new FormatException($"{path}: symbol '{p.Name}' has no def");
+                var e = new SymbolEntry { Def = Str(def) };
                 if (p.Value.TryGetProperty("refs", out var r) && r.ValueKind == JsonValueKind.Array)
-                    foreach (var x in r.EnumerateArray()) e.Refs.Add(x.GetString()!);
+                    foreach (var x in r.EnumerateArray()) e.Refs.Add(Str(x));
                 if (p.Value.TryGetProperty("edges", out var g) && g.ValueKind == JsonValueKind.Array)
-                    foreach (var x in g.EnumerateArray()) e.Edges.Add(x.GetString()!);
+                    foreach (var x in g.EnumerateArray()) e.Edges.Add(Str(x));
                 if (p.Value.TryGetProperty("indirectEdges", out var ie) && ie.ValueKind == JsonValueKind.Array)
                     foreach (var x in ie.EnumerateArray())
                     {
                         IndirectViaExtensions.TryParse(x.TryGetProperty("via", out var vv) ? vv.GetString() ?? "" : "", out var via);
                         e.IndirectEdges.Add(new IndirectEdge
                         {
-                            Target = x.GetProperty("target").GetString()!,
+                            Target = Str(x.GetProperty("target")),
                             Via = via,
                             Dispatched = x.TryGetProperty("dispatched", out var d) && d.ValueKind == JsonValueKind.True,
                             Resolved = !x.TryGetProperty("resolved", out var rv) || rv.ValueKind != JsonValueKind.False,
@@ -88,7 +94,7 @@ public static class ManifestReader
                 if (p.Value.TryGetProperty("unreachableRefs", out var u) && u.ValueKind == JsonValueKind.Array)
                 {
                     e.UnreachableRefs = new List<string>();
-                    foreach (var x in u.EnumerateArray()) e.UnreachableRefs.Add(x.GetString()!);
+                    foreach (var x in u.EnumerateArray()) e.UnreachableRefs.Add(Str(x));
                 }
                 if (p.Value.TryGetProperty("expectedMiss", out var em) && em.ValueKind == JsonValueKind.True)
                     e.ExpectedMiss = true;
@@ -99,7 +105,7 @@ public static class ManifestReader
 
         var roots = new List<string>();
         if (meta.TryGetProperty("roots", out var rootsEl) && rootsEl.ValueKind == JsonValueKind.Array)
-            foreach (var x in rootsEl.EnumerateArray()) roots.Add(x.GetString()!);
+            foreach (var x in rootsEl.EnumerateArray()) roots.Add(Str(x));
 
         return new BaseManifest
         {

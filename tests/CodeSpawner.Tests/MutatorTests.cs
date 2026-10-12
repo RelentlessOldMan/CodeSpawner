@@ -95,6 +95,98 @@ public class MutatorTests
             d2.RootElement.GetProperty("_meta").GetProperty("prevTruthSha").GetString());
     }
 
+    // The chain contract a consumer checks (mutate-design.md §Chain integrity), re-derived the consumer's way from
+    // the delta JSON alone: truth_0 = base symbols; delta_k.prevTruthSha = TruthDigest(truth_{k-1}); truth_k =
+    // truth_{k-1} overlaid with delta_k.symbols (entry replaces, "TOMBSTONE" removes). --through composes onto base
+    // and lands on the same final truth.
+    [Fact]
+    public void PrevTruthSha_Chain_RederivesFromBasePlusOverlays()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 8);
+        var truth = ManifestReader.Load(Path.Combine(tmp.Path, "corpus-manifest.json")).Symbols;
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 6, Seed = 3 }));
+
+        for (int k = 1; k <= 6; k++)
+        {
+            using var d = Doc(StepDelta(corpus, k));
+            Assert.Equal(TruthDigest.Compute(truth), d.RootElement.GetProperty("_meta").GetProperty("prevTruthSha").GetString());
+            truth = Overlay(truth, d.RootElement.GetProperty("symbols"));
+        }
+        string chainEnd = TruthDigest.Compute(truth);
+
+        using var tmp2 = new TempDir();
+        var (corpus2, delta2) = BuildSymbolCorpus(tmp2, nFuncs: 8);
+        var baseTruth = ManifestReader.Load(Path.Combine(tmp2.Path, "corpus-manifest.json")).Symbols;
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus2, Edits = 6, Seed = 3, Through = true }));
+        using var t = Doc(delta2);
+        Assert.Equal(TruthDigest.Compute(baseTruth), t.RootElement.GetProperty("_meta").GetProperty("prevTruthSha").GetString());
+        Assert.Equal(chainEnd, TruthDigest.Compute(Overlay(baseTruth, t.RootElement.GetProperty("symbols"))));
+    }
+
+    // Applying --step 1..n one call at a time is the same chain as the default all-at-once run: byte-identical
+    // deltas and an identical final tree.
+    [Fact]
+    public void Step_OneAtATime_MatchesDefaultRun_ByteForByte()
+    {
+        using var a = new TempDir();
+        using var b = new TempDir();
+        var (ca, _) = BuildSymbolCorpus(a, nFuncs: 8);
+        var (cb, _) = BuildSymbolCorpus(b, nFuncs: 8);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = ca, Edits = 6, Seed = 4 }));
+        for (int k = 1; k <= 6; k++)
+            Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = cb, Edits = 6, Seed = 4, Step = k }));
+
+        for (int k = 1; k <= 6; k++)
+            Assert.Equal(File.ReadAllBytes(StepDelta(ca, k)), File.ReadAllBytes(StepDelta(cb, k)));
+        Assert.Equal(Snapshot(ca), Snapshot(cb));
+    }
+
+    // The delta is written before the disk edit. If it can't be written (here: a directory squats on its path), the
+    // step fails with the file untouched and no delta, and the retry applies the edit exactly once. (Editing first
+    // left the 12 filler lines on disk unrecorded, and the retry inserted them again: 24.)
+    [Fact]
+    public void Step_DeltaWriteFails_FileUntouched_RetryAppliesOnce()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5, Step = 1 }));
+        var before = Snapshot(corpus);
+
+        Directory.CreateDirectory(StepDelta(corpus, 2));       // step 2 = LineShift; its delta path is blocked
+        Assert.ThrowsAny<Exception>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5, Step = 2 }));
+        Assert.Equal(before, Snapshot(corpus));
+
+        Directory.Delete(StepDelta(corpus, 2));
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5, Step = 2 }));
+        using var d = Doc(StepDelta(corpus, 2));
+        string shifted = Arr(d.RootElement.GetProperty("fileOps"), "modified").Single();
+        int fillers = File.ReadAllLines(Path.Combine(corpus, shifted)).Count(l => l.Contains("line-shift filler"));
+        Assert.Equal(12, fillers);
+    }
+
+    // truth overlaid with a delta's symbols block, read the way a consumer reads it.
+    private static Dictionary<string, SymbolEntry> Overlay(Dictionary<string, SymbolEntry> truth, JsonElement symbols)
+    {
+        var next = truth.ToDictionary(kv => kv.Key, kv => kv.Value);
+        foreach (var s in symbols.EnumerateObject())
+        {
+            if (s.Value.ValueKind == JsonValueKind.String) { Assert.Equal("TOMBSTONE", s.Value.GetString()); next.Remove(s.Name); continue; }
+            var e = new SymbolEntry { Def = s.Value.GetProperty("def").GetString()! };
+            e.Refs.AddRange(s.Value.GetProperty("refs").EnumerateArray().Select(x => x.GetString()!));
+            e.Edges.AddRange(s.Value.GetProperty("edges").EnumerateArray().Select(x => x.GetString()!));
+            e.ExpectedMiss = s.Value.TryGetProperty("expectedMiss", out var m) && m.GetBoolean();
+            next[s.Name] = e;
+        }
+        return next;
+    }
+
+    // relative path -> file bytes (hex), every file under root.
+    private static SortedDictionary<string, string> Snapshot(string root) =>
+        new(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToDictionary(
+            f => Path.GetRelativePath(root, f).Replace('\\', '/'), f => Convert.ToHexString(File.ReadAllBytes(f))),
+            StringComparer.Ordinal);
+
     [Fact]
     public void Through_EmitsOneCumulativeDelta_NoStepFiles()
     {

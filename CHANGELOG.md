@@ -11,6 +11,47 @@ reads it.
 
 ## [Unreleased]
 
+### Fixed (reproducibility)
+- Replaying `_meta.gen` no longer shrinks giant headers. `macroDensity` was
+  recorded even when `--macro-density` was not passed, and passing it back
+  turns on a define cap the original run never had, so a death-scale giant
+  replayed at ~56 MB instead of ~1.2 GB. It is now recorded only when set. For
+  a pre-1.1.6 manifest, drop a recorded `1000000` when replaying unless the
+  original run set it (e.g. `--preset memory`).
+
+### Fixed (mutate)
+- `mutate --step k` writes the step's delta before editing the file, and
+  removes the delta if the edit fails. Before, a failed delta write left the
+  edit on disk unrecorded, and retrying the step applied it twice (24 line-shift
+  filler lines with a delta saying 12). The default per-step mode commits each
+  step the same way.
+- Malformed manifests of the right JSON syntax but the wrong shape (no `_meta`,
+  a symbol without `def`, `null` where a string belongs, `1.5` or `1e40` where
+  an integer belongs) now give a clean `error: malformed input` and exit 2 from
+  `mutate`, instead of a stack trace.
+- `--edits` below 1 is an argument error (exit 2); a huge `--edits` reports
+  "not enough source files" instead of running out of memory.
+
+### Fixed (verify)
+- A symbol with no `def` (or a non-string one) is a FAIL. Before, it was
+  skipped, so a truncated manifest could drop def sites and still pass.
+- Malformed manifest values no longer crash verify.
+
+### Tests
+- The emitted `diffTruthSha` and `conflictTruthSha` are recomputed from the
+  delta/conflict JSON alone (every edit kind, giant run rule, reassembled
+  shards, both 3-way modes), and each record's old/new sha and size is checked
+  against the real files.
+- The `prevTruthSha` chain is re-derived from base truth plus each delta's
+  overlay, `--step 1..n` is checked byte-identical to the default run, and a
+  failed step's retry is checked to apply once.
+- The scanner privacy contract is tested in all three postures: no file,
+  directory, identifier, string or comment text reaches the profile; small
+  clusters fold into `other`; posture decides which blocks exist; a re-scan is
+  byte-identical.
+- `gen --from-profile` is checked against its archetype counts and sizes, and
+  for byte-identical output from the same profile and seed.
+
 ## [1.1.5] - 2026-10-12
 
 ### Fixed (CLI)

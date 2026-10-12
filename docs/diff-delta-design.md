@@ -278,6 +278,11 @@ A corpus genned pre-1.1.1 simply lacks the block. To replay it, pass every key b
 all counts are then explicit, so scaling is bypassed. The tree regenerates byte-identically, except
 `compile_commands.json`, which embeds the absolute `--out` path. Before 1.1.5, `dirs` was recorded unscaled,
 so a replay of a corpus that used the default (scaled) `--dirs` placed files in different directories.
+`macroDensity` is present only when `--macro-density` was set: it caps giants at that many defines, while the
+default leaves them uncapped (filled to `maxHeaderMB`). Before 1.1.6 it was always recorded, so a replay capped
+every giant at 1M defines (a death-scale giant came back ~56 MB instead of ~1.2 GB) — in a pre-1.1.6
+manifest a recorded `1000000` is ambiguous, so drop it when replaying unless the original run set it (e.g.
+`--preset memory`).
 
 ### Paged / sharded delta (`--shard-size N`)
 A death-scale 2-way delta can exceed what a consumer streams through `JsonDocument.Parse` whole. `--shard-size
