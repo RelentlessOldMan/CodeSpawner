@@ -221,6 +221,78 @@ public class MutatorEncodingTests
         Assert.Equal(Sha(after), rec.GetProperty("newSha").GetString());
     }
 
+    // Files above Mutator.InMemoryTextMax (512 MiB) take the streamed path for eol/encoding; it must write exactly
+    // the bytes the in-memory path writes. Lower the ceiling on this thread to drive small files through it.
+    public static TheoryData<string, byte[]> StreamCases => new()
+    {
+        { "eol", Encoding.ASCII.GetBytes("a\nb\r\nc\rd\r\n\r\re") },          // LF, CRLF, lone CR, no final newline
+        { "eol", Encoding.ASCII.GetBytes("x\r") },                             // trailing lone CR
+        { "eol", Encode(new UnicodeEncoding(false, true), Text) },
+        { "eol", Encode(new UnicodeEncoding(true, true), "a\r\nb\n") },
+        { "eol", Encode(new UTF8Encoding(true), Text.Replace("\n", "\r\n")) },
+        { "encoding", Encoding.UTF8.GetBytes(Text) },
+        { "encoding", Encode(new UTF8Encoding(true), Text) },
+        { "encoding", Encode(new UnicodeEncoding(true, true), Text) },
+    };
+
+    private static (byte[] bytes, string sha) RunOn(string kind, byte[] original, long? ceiling)
+    {
+        using var tmp = new TempDir();
+        string corpus = BuildCorpus(tmp, ("a.c", original));
+        Mutator.InMemoryTextMaxOverride = ceiling;
+        try { Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = kind, Seed = 1 })); }
+        finally { Mutator.InMemoryTextMaxOverride = null; }
+        var recs = Records(Path.Combine(tmp.Path, "corpus-delta.json"));
+        return (File.ReadAllBytes(Path.Combine(corpus, "a.c")), recs.TryGetValue("a.c", out var r) ? r.GetProperty("newSha").GetString()! : "");
+    }
+
+    [Theory]
+    [MemberData(nameof(StreamCases))]
+    public void StreamedEolAndEncoding_MatchTheInMemoryBytes(string kind, byte[] original)
+    {
+        var inMemory = RunOn(kind, original, null);
+        var streamed = RunOn(kind, original, 1);
+        Assert.NotEqual(original, inMemory.bytes);
+        Assert.Equal(inMemory.bytes, streamed.bytes);
+        Assert.Equal(inMemory.sha, streamed.sha);
+    }
+
+    [Fact]
+    public void AboveTheCeiling_HunkKindsSkip_AndNonTextStaysUntouched()
+    {
+        byte[] text = Encoding.ASCII.GetBytes(Text);
+        foreach (var kind in new[] { "content", "whitespace", "line-insert", "line-delete" })
+            AssertUntouched(text, RunOn(kind, text, 1));
+        byte[] nul = Encoding.ASCII.GetBytes("int a;\0\nint b;\n");
+        byte[] invalid = Enumerable.Range(0, 300).Select(i => (byte)(0x80 + i % 128)).ToArray();
+        foreach (var kind in new[] { "eol", "encoding" })
+            foreach (var bad in new[] { nul, invalid })
+                AssertUntouched(bad, RunOn(kind, bad, 1));
+    }
+
+    private static void AssertUntouched(byte[] original, (byte[] bytes, string sha) after)
+    {
+        Assert.Equal(original, after.bytes);
+        Assert.Equal("", after.sha);                           // no record
+    }
+
+    [Fact]
+    public void BinaryEdit_StreamedOutputMatchesTheReferenceAlgorithm()
+    {
+        // 3 MB spans several 1 MiB chunks; the reference is the original whole-array algorithm.
+        byte[] original = Enumerable.Range(0, 3 * 1024 * 1024 + 17).Select(i => (byte)(i * 31 % 251)).ToArray();
+        using var tmp = new TempDir();
+        string corpus = BuildCorpus(tmp, ("a.bin", original));
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "all", EditKind = "binary", EditDensity = 0.1, Seed = 9 }));
+
+        byte[] expected = (byte[])original.Clone();
+        var rng = CodeSpawner.Generation.Rng.For(9, CodeSpawner.Generation.Category.Mutate, 100_000 + 0);
+        for (int k = 0; k < expected.Length; k++) if (rng.Next(10000) < 1000) expected[k] ^= 0x5A;
+        expected[4] = 0;
+        Assert.Equal(expected, File.ReadAllBytes(Path.Combine(corpus, "a.bin")));
+        Assert.Empty(Directory.GetFiles(corpus, "*.mut.tmp"));
+    }
+
     [Theory]
     [InlineData("strided")]
     [InlineData("single")]

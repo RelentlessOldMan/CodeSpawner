@@ -25,6 +25,23 @@ reads it.
   `--depth`, `--manifest`, and scan's `--tree`. A test fails if an option is
   added without help.
 
+### Fixed (scale)
+- `--edit-kind eol`, `encoding` and `binary` no longer crash on giant files.
+  Before, they read the whole file into one string or array, so a >1 GB
+  header (for example under `--edit-kind mixed` at death scale) ran out of
+  memory. `binary` now always streams. `eol`/`encoding` stream files over
+  512 MiB and keep the in-memory path below that; the bytes written are the
+  same either way.
+- `whitespace`, `line-insert` and `line-delete` skip files over 512 MiB,
+  leaving them untouched and unrecorded, the same as non-text files. They
+  need explicit hunks, which have no compact form for giants; before, these
+  files crashed. `content` on giants is unchanged (run-rule or `--giant-edit
+  single`).
+- JSON artifacts are written out every ~1 MiB instead of being buffered whole
+  in memory, which capped them near 2 GiB. The truth digests hash
+  incrementally instead of building one string (capped near 1G chars). Bytes
+  and shas are unchanged; the golden vectors still pass.
+
 ### Changed (build)
 - The exe's FileVersion/ProductVersion now come from `Program.Version`
   instead of reading 1.0.0.0.

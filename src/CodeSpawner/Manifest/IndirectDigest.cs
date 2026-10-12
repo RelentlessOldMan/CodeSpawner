@@ -45,12 +45,11 @@ public static class IndirectDigest
 
         var rootRecords = new List<string>(roots);
 
-        var sb = new StringBuilder();
-        foreach (var r in DedupSort(edgeRecords)) sb.Append(r).Append(RS);
-        sb.Append(GS);
-        foreach (var r in DedupSort(rootRecords)) sb.Append(r).Append(RS);
-
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()))).ToLowerInvariant();
+        using var sink = new DigestSink();
+        foreach (var r in DedupSort(edgeRecords)) sink.Append(r).Append(RS);
+        sink.Append(GS);
+        foreach (var r in DedupSort(rootRecords)) sink.Append(r).Append(RS);
+        return sink.Finish();
     }
 
     private static List<string> DedupSort(List<string> records)
