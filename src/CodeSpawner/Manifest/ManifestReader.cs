@@ -22,17 +22,49 @@ public sealed class BaseManifest
 public static class ManifestReader
 {
     /// <summary>
-    /// baseManifestSha: sha256 of the manifest bytes with every CR byte dropped and the <c>_meta.corpusRoot</c>
-    /// string value replaced by <c>""</c>. So the same corpus regenerated at another path, or on another OS, binds
-    /// the same deltas; any other change to the manifest still changes it. (CR can only be whitespace in valid
-    /// JSON — strings escape it.)
+    /// baseManifestSha: sha256 of the manifest bytes with every CR byte dropped, the <c>_meta.corpusRoot</c>
+    /// string value replaced by <c>""</c>, and (since 1.1.7) the corpus folder name dropped from every
+    /// <c>--linked-roots</c> path: a string value starting <c>../&lt;leaf&gt;_root&lt;digit&gt;</c>, where &lt;leaf&gt; is
+    /// corpusRoot's last component, is hashed as <c>../_root&lt;digit&gt;</c>. So the same corpus regenerated at
+    /// another path, under another folder name, or on another OS, binds the same deltas; any other change to the
+    /// manifest still changes it. (CR can only be whitespace in valid JSON — strings escape it.)
     /// </summary>
     public static string IdentitySha(byte[] bytes)
     {
         byte[] lf = Array.FindAll(bytes, b => b != (byte)'\r');
         var (start, end) = CorpusRootValueRange(lf);
-        byte[] id = start < 0 ? lf : [.. lf.AsSpan(0, start), (byte)'"', (byte)'"', .. lf.AsSpan(end)];
-        return Convert.ToHexString(SHA256.HashData(id)).ToLowerInvariant();
+        if (start < 0) return Sha(lf);
+        var tok = new Utf8JsonReader(lf.AsSpan(start, end - start));
+        tok.Read();
+        string root = tok.GetString() ?? "";
+        byte[] id = [.. lf.AsSpan(0, start), (byte)'"', (byte)'"', .. lf.AsSpan(end)];
+        string leaf = Path.GetFileName(root.Replace('\\', '/').TrimEnd('/'));
+        return Sha(leaf.Length == 0 ? id : DropLeaf(id, leaf));
+    }
+
+    private static string Sha(byte[] b) => Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
+
+    /// <summary>Rewrite each string token starting <c>../&lt;leaf&gt;_root&lt;digit&gt;</c> to start <c>../_root&lt;digit&gt;</c>.
+    /// The leaf is matched in its JSON-escaped form (the manifest writer's default encoder).</summary>
+    private static byte[] DropLeaf(byte[] json, string leaf)
+    {
+        byte[] needle = [(byte)'"', .. JsonEncodedText.Encode("../" + leaf + "_root").EncodedUtf8Bytes];
+        byte[] repl = "\"../_root"u8.ToArray();
+        var outp = new List<byte>(json.Length);
+        int i = 0;
+        while (true)
+        {
+            int k = json.AsSpan(i).IndexOf(needle);
+            if (k < 0) break;
+            int at = i + k, after = at + needle.Length;
+            outp.AddRange(json.AsSpan(i, at - i));
+            bool opensString = at == 0 || json[at - 1] != (byte)'\\';       // not an escaped quote inside a string
+            if (opensString && after < json.Length && json[after] is >= (byte)'0' and <= (byte)'9') outp.AddRange(repl);
+            else outp.AddRange(needle);
+            i = after;
+        }
+        outp.AddRange(json.AsSpan(i));
+        return outp.ToArray();
     }
 
     /// <summary>Byte range [start, end) of the _meta.corpusRoot string token, quotes included; (-1, -1) if absent.</summary>

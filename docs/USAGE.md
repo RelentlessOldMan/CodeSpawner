@@ -219,7 +219,9 @@ reports actual size.
 ```
 
 `--linked-roots N` adds sibling trees `<out>_root1 … _root{N-1}`; their files appear in the manifest with
-`../`-prefixed relative paths (consumers key on the symbol/basename, which is unaffected).
+`../<out-leaf>_rootN/`-prefixed relative paths (consumers key on the symbol/basename, which is unaffected).
+The folder name in those paths is left out of `baseManifestSha` (since 1.1.7), so deltas bind the same base
+whatever `--out` folder name the corpus was generated under. Truth digests still hash the paths as written.
 
 ---
 

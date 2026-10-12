@@ -63,6 +63,37 @@ public class ArtifactPortabilityTests
         Assert.Equal(ManifestReader.IdentitySha(here), ManifestReader.Load(tmp.File("here-manifest.json")).Sha256);
     }
 
+    // --linked-roots paths are written "../<leaf>_rootN/...", so the folder name used to leak into baseManifestSha.
+    // It is dropped now: the same linked-root corpus under two folder names binds the same deltas, while a
+    // different root index still changes the sha, and a manifest without linked roots hashes exactly as before.
+    [Fact]
+    public void BaseManifestSha_IgnoresTheFolderNameInLinkedRootPaths()
+    {
+        using var tmp = new TempDir();
+        string[] gen = { "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0",
+                         "--ordinary-headers", "0", "--tiny-files", "0", "--blob-files", "0", "--cfiles", "8",
+                         "--linked-roots", "2" };
+        foreach (var name in new[] { "a", "a_much_longer_name" })
+            Assert.Equal(0, CodeSpawner.Program.Main(new[] { "gen", "--out", tmp.File(name) }.Concat(gen).ToArray()));
+        byte[] a = File.ReadAllBytes(tmp.File("a-manifest.json"));
+        byte[] b = File.ReadAllBytes(tmp.File("a_much_longer_name-manifest.json"));
+        Assert.Contains("\"../a_root1/", Encoding.UTF8.GetString(a));                    // the corpus reaches into root 1
+        Assert.Equal(ManifestReader.IdentitySha(a), ManifestReader.IdentitySha(b));
+
+        string text = Encoding.UTF8.GetString(a);
+        int at = text.IndexOf("\"../a_root1/", StringComparison.Ordinal);
+        byte[] moved = Encoding.UTF8.GetBytes(text[..at] + "\"../a_root7/" + text[(at + "\"../a_root1/".Length)..]);
+        Assert.NotEqual(ManifestReader.IdentitySha(a), ManifestReader.IdentitySha(moved));
+
+        BuildCorpus(tmp, "plain");                                                        // no linked roots
+        byte[] plain = File.ReadAllBytes(tmp.File("plain-manifest.json"));
+        string pt = Encoding.UTF8.GetString(plain);
+        string rootTok = System.Text.Json.JsonSerializer.Serialize(Path.Combine(tmp.Path, "plain"));
+        string blanked = pt.Replace(rootTok, "\"\"");
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(blanked))).ToLowerInvariant(),
+                     ManifestReader.IdentitySha(plain));                                  // the pre-1.1.7 rule, unchanged
+    }
+
     [Fact]
     public void DeltaFiles_AreIdentical_AcrossCorpusLocations()
     {

@@ -150,7 +150,10 @@ Sibling file, same convention as `<corpus>-manifest.json`:
   3-way conflict files `"conflict-3way"`). `baseManifestSha` binds a delta to the exact base it composes
   against, so it can't be misapplied. It is SHA-256 of the manifest bytes with every CR byte dropped and the
   `_meta.corpusRoot` string value replaced by `""` (since 1.1.4; before, the raw file bytes), so the same corpus
-  regenerated at another path or on another OS binds the same deltas. All JSON artifacts are written with LF
+  regenerated at another path or on another OS binds the same deltas. Since 1.1.7 the corpus folder name is
+  also dropped from `--linked-roots` paths: any string value starting `../<leaf>_root<digit>` (`<leaf>` = the
+  last component of corpusRoot) is hashed as `../_root<digit>`, so the folder name `--out` used doesn't matter
+  either. A manifest without linked roots hashes exactly as in 1.1.4–1.1.6. All JSON artifacts are written with LF
   line endings on every OS (since 1.1.4).
 - **`fileOps`** — the FS-effect checklist. Composition never needs it; it drives CodeCompass's orphan-cleanup
   / old-path-gone asserts AND doubles as the changed-paths to replay as synthetic FS events into the watcher.
