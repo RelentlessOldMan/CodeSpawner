@@ -26,7 +26,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 if (-not $Exe) {
     $Exe = Join-Path $root "dist\codespawner.exe"
-    if (-not (Test-Path $Exe)) { $Exe = Join-Path $root "src\CodeSpawner\bin\Release\net10.0\win-x64\publish\codespawner.exe" }
+    if (-not (Test-Path $Exe)) { $Exe = Join-Path $root "src\CodeSpawner\bin\Release\net8.0\win-x64\publish\codespawner.exe" }
 }
 if (-not (Test-Path $Exe)) { throw "codespawner.exe not found - run scripts\build.ps1 (got: $Exe)" }
 
@@ -41,6 +41,12 @@ function Check($name, [bool]$ok, $detail = "") {
     if ($ok) { Write-Host "  PASS  $name $detail" -ForegroundColor Green }
     else { Write-Host "  FAIL  $name $detail" -ForegroundColor Red; $script:fails++ }
 }
+# Every gen must succeed: a failed gen would otherwise surface only as a confusing downstream check (or, for
+# determinism/variance, compare two empty trees and PASS).
+function Gen {
+    & $Exe gen @args | Out-Null
+    if ($LASTEXITCODE -ne 0) { Check "gen $($args -join ' ')" $false "(exit $LASTEXITCODE)" }
+}
 function HashTree($dir) {
     Get-ChildItem $dir -Recurse -File | Where-Object { $_.Name -ne '.codespawner' } | Sort-Object FullName |
         ForEach-Object { $rel = $_.FullName.Substring($dir.Length); "$rel=" + (Get-FileHash $_.FullName -Algorithm SHA256).Hash } |
@@ -51,14 +57,14 @@ Write-Host "== CodeSpawner bench ($Exe) ==" -ForegroundColor Cyan
 
 # 1. CORRECTNESS
 $c1 = Join-Path $Work "c1"
-& $Exe gen --out $c1 --scale 0.01 --unresolved-includes 3 --compile-db full | Out-Null
+Gen --out $c1 --scale 0.01 --unresolved-includes 3 --compile-db full
 & $Exe verify --corpus $c1 | Out-Null
 Check "correctness (verify)" ($LASTEXITCODE -eq 0)
 
 # 2. DETERMINISM (same seed -> identical)
 $d1 = Join-Path $Work "d1"; $d2 = Join-Path $Work "d2"
-& $Exe gen --out $d1 --scale 0.015 --giant-headers 1 --unresolved-includes 2 | Out-Null
-& $Exe gen --out $d2 --scale 0.015 --giant-headers 1 --unresolved-includes 2 | Out-Null
+Gen --out $d1 --scale 0.015 --giant-headers 1 --unresolved-includes 2
+Gen --out $d2 --scale 0.015 --giant-headers 1 --unresolved-includes 2
 # Manifests are identical except _meta.corpusRoot (the absolute out path); strip it before comparing.
 function StripRoot($p) { (Get-Content $p -Raw) -replace '"corpusRoot":\s*".*?"', '"corpusRoot":"X"' }
 Check "determinism (manifest)" ((StripRoot "$d1-manifest.json") -eq (StripRoot "$d2-manifest.json"))
@@ -66,13 +72,13 @@ Check "determinism (file hashes)" ((HashTree $d1).Replace('\d1\', '\dX\') -eq (H
 
 # 3. SEED VARIANCE (different seed -> different)
 $s1 = Join-Path $Work "s1"; $s2 = Join-Path $Work "s2"
-& $Exe gen --out $s1 --scale 0.01 --seed 1 --giant-headers 0 | Out-Null
-& $Exe gen --out $s2 --scale 0.01 --seed 2 --giant-headers 0 | Out-Null
+Gen --out $s1 --scale 0.01 --seed 1 --giant-headers 0
+Gen --out $s2 --scale 0.01 --seed 2 --giant-headers 0
 Check "seed variance" (((HashTree $s1).Replace('\s1\', '\sX\')) -ne ((HashTree $s2).Replace('\s2\', '\sX\')))
 
 # 4. NEGATIVE (tampered manifest must fail)
 $t = Join-Path $Work "t"
-& $Exe gen --out $t --scale 0.01 --giant-headers 0 | Out-Null
+Gen --out $t --scale 0.01 --giant-headers 0
 $mf = "$t-manifest.json"
 (Get-Content $mf -Raw) -replace 'src_1\.c:(\d+)', 'src_1.c:99999' | Set-Content $mf
 & $Exe verify --corpus $t 2>&1 | Out-Null
@@ -80,10 +86,10 @@ Check "negative oracle (tamper detected)" ($LASTEXITCODE -ne 0)
 
 # 4b. PATHOLOGY PRESET (broad-token): verifies + deterministic + records _meta.populations.
 $g1 = Join-Path $Work "bt1"; $g2 = Join-Path $Work "bt2"
-& $Exe gen --out $g1 --preset broad-token --broad-token-files 8 | Out-Null
+Gen --out $g1 --preset broad-token --broad-token-files 8
 & $Exe verify --corpus $g1 | Out-Null
 $btVerify = ($LASTEXITCODE -eq 0)
-& $Exe gen --out $g2 --preset broad-token --broad-token-files 8 | Out-Null
+Gen --out $g2 --preset broad-token --broad-token-files 8
 function StripRoot2($p) { (Get-Content $p -Raw) -replace '"corpusRoot":\s*".*?"', '"corpusRoot":"X"' }
 $btDet = ((StripRoot2 "$g1-manifest.json") -eq (StripRoot2 "$g2-manifest.json"))
 $hasPops = ((Get-Content "$g1-manifest.json" -Raw) -match '"populations"') -and ((Get-Content "$g1-manifest.json" -Raw) -match '"broad-token"')
@@ -93,14 +99,14 @@ Check "_meta.populations present" $hasPops
 
 # 4c. PATHOLOGICAL SYMBOLS: verifies + manifest carries expectedMiss.
 $ps = Join-Path $Work "ps"
-& $Exe gen --out $ps --preset pathological-symbols --pathological-symbols 6 | Out-Null
+Gen --out $ps --preset pathological-symbols --pathological-symbols 6
 & $Exe verify --corpus $ps | Out-Null
 Check "pathological-symbols verify" ($LASTEXITCODE -eq 0)
 Check "expectedMiss present" ((Get-Content "$ps-manifest.json" -Raw) -match '"expectedMiss"\s*:\s*true')
 
 # 4d. DUP-CONTENT: verifies + manifest carries dupGroups with sha256.
 $dc = Join-Path $Work "dc"
-& $Exe gen --out $dc --preset dup-content --dup-groups 6 | Out-Null
+Gen --out $dc --preset dup-content --dup-groups 6
 & $Exe verify --corpus $dc | Out-Null
 Check "dup-content verify" ($LASTEXITCODE -eq 0)
 Check "dupGroups present" ((Get-Content "$dc-manifest.json" -Raw) -match '"dupGroups"' -and (Get-Content "$dc-manifest.json" -Raw) -match '"sha256"')
@@ -109,7 +115,7 @@ Check "dupGroups present" ((Get-Content "$dc-manifest.json" -Raw) -match '"dupGr
 & $Exe digest-selftest | Out-Null
 Check "digest golden vector" ($LASTEXITCODE -eq 0)
 $mc = Join-Path $Work "mc"
-& $Exe gen --out $mc --scale 0.01 --giant-headers 0 --big-headers 0 --med-headers 0 --cfiles 30 --shrink-seeds 1 | Out-Null
+Gen --out $mc --scale 0.01 --giant-headers 0 --big-headers 0 --med-headers 0 --cfiles 30 --shrink-seeds 1
 & $Exe mutate --corpus $mc --seed 42 --edits 5 --through | Out-Null
 $mutOk = ($LASTEXITCODE -eq 0) -and (Test-Path "$mc-delta.json")
 $dj = if (Test-Path "$mc-delta.json") { Get-Content "$mc-delta.json" -Raw } else { "" }
@@ -118,7 +124,7 @@ Check "delta has prevTruthSha + fileOps" (($dj -match '"prevTruthSha"') -and ($d
 
 # 4f. SCAN round-trip + privacy: characterize a corpus, regenerate a look-alike, verify the oracle.
 $scSrc = Join-Path $Work "sc-src"
-& $Exe gen --out $scSrc --scale 0.01 --giant-headers 0 --cfiles 20 --tiny-files 60 --long-line-files 1 --blob-files 3 | Out-Null
+Gen --out $scSrc --scale 0.01 --giant-headers 0 --cfiles 20 --tiny-files 60 --long-line-files 1 --blob-files 3
 & $Exe scan $scSrc --out "$Work\prof.json" | Out-Null
 $scanOk = ($LASTEXITCODE -eq 0) -and (Test-Path "$Work\prof.json")
 & $Exe scan $scSrc --out "$Work\prof2.json" | Out-Null
@@ -128,7 +134,7 @@ $scanDet = ((StripScannedAt "$Work\prof.json") -eq (StripScannedAt "$Work\prof2.
 $prof = Get-Content "$Work\prof.json" -Raw
 $leak = ($prof -match [regex]::Escape($scSrc)) -or ($prof -match 'HWIO|hot_shared|regmap|vendor_gated|CS_MK_HANDLER|func_\d')
 $scRegen = Join-Path $Work "sc-regen"
-& $Exe gen --from-profile "$Work\prof.json" --out $scRegen --with-oracle | Out-Null
+Gen --from-profile "$Work\prof.json" --out $scRegen --with-oracle
 & $Exe verify --corpus $scRegen | Out-Null
 $scVerify = ($LASTEXITCODE -eq 0)
 # Dir-count fidelity: regen must reproduce ~the source dir count (guards the depth-fold inflation bug).
@@ -146,13 +152,13 @@ Check "regen dir-count fidelity" $dirFidelityOk "(src=$srcDirs regen=$regenDirs)
 $ov1 = Join-Path $Work "ov1"; $ov2 = Join-Path $Work "ov2"
 $oArgs = @("--with-oracle","--oracle-chain","16","--oracle-fanout","3","--oracle-shared-leaves","3",
            "--oracle-reachable-frac","0.5","--oracle-indirect","8","--oracle-bytes")
-& $Exe gen --from-profile "$Work\prof.json" --out $ov1 @oArgs | Out-Null
+Gen --from-profile "$Work\prof.json" --out $ov1 @oArgs
 & $Exe verify --corpus $ov1 | Out-Null
 $ov1Verify = ($LASTEXITCODE -eq 0)
 $ov1mf = Get-Content "$ov1-manifest.json" -Raw
 $ov1Fields = ($ov1mf -match '"roots"') -and ($ov1mf -match '"indirectEdges"') -and `
              ($ov1mf -match '"indirectTruthSha"') -and ($ov1mf -match '"totalOracleBytes"')
-& $Exe gen --from-profile "$Work\prof.json" --out $ov2 @oArgs | Out-Null
+Gen --from-profile "$Work\prof.json" --out $ov2 @oArgs
 $ov1Det = ((StripRoot2 "$ov1-manifest.json") -eq (StripRoot2 "$ov2-manifest.json"))
 Check "oracle-v1 DAG+indirect+bytes verify" $ov1Verify
 Check "oracle-v1 new _meta fields present" $ov1Fields
@@ -161,7 +167,7 @@ Check "oracle-v1 deterministic" $ov1Det
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-& $Exe gen --out $p --giant-headers 6 --big-headers 0 --med-headers 0 --ordinary-headers 0 --tiny-files 0 --blob-files 0 --cfiles 2 | Out-Null
+Gen --out $p --giant-headers 6 --big-headers 0 --med-headers 0 --ordinary-headers 0 --tiny-files 0 --blob-files 0 --cfiles 2
 $sw.Stop()
 $bytes = (Get-ChildItem $p -Recurse -File | Measure-Object Length -Sum).Sum
 $mbps = [math]::Round(($bytes / 1MB) / $sw.Elapsed.TotalSeconds, 0)

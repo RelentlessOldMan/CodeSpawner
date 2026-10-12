@@ -26,6 +26,8 @@ public class ProgramTests
     {
         Assert.Equal(0, Cli("version"));
         Assert.Equal(0, Cli("--help"));
+        Assert.Equal(0, Cli("gen", "--help"));            // <command> --help prints usage, not "unknown knob"
+        Assert.Equal(0, Cli("mutate", "--corpus", "x", "-h"));
         Assert.Equal(1, Cli());                       // no args ⇒ usage + error exit
         Assert.Equal(2, Cli("bogus-command"));        // unknown command
         Assert.Equal(0, Cli("digest-selftest"));      // the four golden vectors reproduce

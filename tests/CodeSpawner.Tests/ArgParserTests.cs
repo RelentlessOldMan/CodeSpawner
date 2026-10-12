@@ -471,4 +471,49 @@ public class ArgParserTests
     [Fact]
     public void Mutate_UnknownOption_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c", "--bogus", "x" }));
+
+    // --- one arg grammar for every command: --k v, --k=v, --flag [true|false] ---
+
+    [Fact]
+    public void BoolFlag_SpaceForm_ConsumesOnlyABooleanWord()
+    {
+        Assert.False(ArgParser.ParseGen(new[] { "--out", "c", "--manifest", "false" }).Manifest);
+        Assert.True(ArgParser.ParseGen(new[] { "--out", "c", "--manifest", "--seed", "3" }).Manifest);   // next knob not eaten
+        Assert.False(ArgParser.ParseGen(new[] { "--build-output", "off", "--out", "c" }).BuildOutput);
+        Assert.False(ArgParser.ParseMutate(new[] { "--corpus", "c", "--through", "no" }).Through);
+        Assert.True(ArgParser.ParseMutate(new[] { "--corpus", "c", "--through" }).Through);
+    }
+
+    [Fact]
+    public void InlineValues_WorkForMutateScanVerify()
+    {
+        var m = ArgParser.ParseMutate(new[] { "--corpus=c", "--target=source", "--edit-density=0.5", "--three-way=false" });
+        Assert.Equal(("c", "source", 0.5, false), (m.Corpus, m.Target, m.EditDensity, m.ThreeWay));
+        Assert.Equal("m.json", ArgParser.ParseVerify(new[] { "--corpus=c", "--manifest=m.json" }).Manifest);
+        Assert.Equal(9, ArgParser.ParseScan(new[] { "t", "--out=p.json", "--min-cluster=9" }).MinCluster);
+    }
+
+    [Fact]
+    public void Scan_PostureSwitch_DoesNotEatThePositionalTree()
+    {
+        var o = ArgParser.ParseScan(new[] { "--structure-only", "true", "--out", "p.json" });
+        Assert.Equal("true", o.Tree);                  // a tree literally named "true" is still the tree
+        Assert.Equal(PrivacyPosture.StructureOnly, o.Posture);
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "t", "--out", "p", "--content-stats=yes" }));
+    }
+
+    // Every option the parser accepts must be in --help: scrape the switch cases from the source.
+    [Fact]
+    public void Help_ListsEveryParsedOption()
+    {
+        string dir = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(dir, "src", "CodeSpawner", "Cli", "ArgParser.cs"))) dir = Path.GetDirectoryName(dir)!;
+        string src = File.ReadAllText(Path.Combine(dir, "src", "CodeSpawner", "Cli", "ArgParser.cs"));
+        var keys = System.Text.RegularExpressions.Regex.Matches(src, @"case ""([a-z][a-z0-9-]*)"":").Select(m => m.Groups[1].Value)
+            .Where(k => k is not ("none" or "partial" or "full" or "true" or "false" or "yes" or "no" or "on" or "off" or "0" or "1"))
+            .Distinct().ToList();
+        Assert.True(keys.Count > 50, $"scrape found only {keys.Count} options");
+        var missing = keys.Where(k => !System.Text.RegularExpressions.Regex.IsMatch(Program.UsageText, $@"--{k}(?![a-z0-9-])")).ToList();
+        Assert.True(missing.Count == 0, "missing from --help: " + string.Join(", ", missing));
+    }
 }
