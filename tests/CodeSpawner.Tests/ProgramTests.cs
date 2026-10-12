@@ -120,6 +120,38 @@ public class ProgramTests
         Assert.False(gen.TryGetProperty("fromProfile", out _));       // absent when --from-profile not set
     }
 
+    // The recipe must actually replay: feed _meta.gen back to gen (camelCase key → --kebab-case knob) and the tree
+    // is byte-identical. Default (scaled) --dirs is the case that used to break: it was recorded unscaled.
+    [Fact]
+    public void Gen_MetaGen_ReplaysToAByteIdenticalTree()
+    {
+        using var tmp = new TempDir();
+        string a = Path.Combine(tmp.Path, "a"), b = Path.Combine(tmp.Path, "b");
+        int rc = Cli(RichGenArgs(a).Concat(new[] { "--linked-roots", "2" }).ToArray());
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+
+        var replay = new List<string> { "gen", "--out", b };
+        using (var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(tmp.Path, "a-manifest.json"))))
+            foreach (var k in doc.RootElement.GetProperty("_meta").GetProperty("gen").EnumerateObject())
+            {
+                string knob = k.Name == "maxHeaderMB" ? "max-header-mb"
+                    : System.Text.RegularExpressions.Regex.Replace(k.Name, "[A-Z]", m => "-" + char.ToLowerInvariant(m.Value[0]));
+                string val = k.Value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.True => "true",
+                    System.Text.Json.JsonValueKind.False => "false",
+                    System.Text.Json.JsonValueKind.String => k.Value.GetString()!,
+                    _ => k.Value.GetRawText(),
+                };
+                replay.Add($"--{knob}={val}");
+            }
+        rc = Cli(replay.ToArray());
+        Assert.True(rc == 0, $"replay exit {rc}: {_lastErr}");
+
+        foreach (var (root, other) in new[] { ("a", "b"), ("a_root1", "b_root1") })
+            Assert.Equal(TreeSnapshot(Path.Combine(tmp.Path, root)), TreeSnapshot(Path.Combine(tmp.Path, other)));
+    }
+
     [Fact]
     public void Gen_MetaGenBlock_IsDeterministic_SameArgs()
     {

@@ -25,6 +25,13 @@ reads it.
   `--depth`, `--manifest`, and scan's `--tree`. A test fails if an option is
   added without help.
 
+### Fixed (reproducibility)
+- `_meta.gen` now replays to a byte-identical tree. `dirs` was recorded as
+  the unscaled default (5700) instead of the effective scaled count, so
+  feeding the recipe back to `gen` placed every file in a different
+  directory. A test now regenerates a corpus from its own `_meta.gen` and
+  compares every file. `docs/diff-delta-design.md` shows how to replay.
+
 ### Fixed (scale)
 - `--edit-kind eol`, `encoding` and `binary` no longer crash on giant files.
   Before, they read the whole file into one string or array, so a >1 GB
