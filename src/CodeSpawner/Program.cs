@@ -21,6 +21,11 @@ public static class Program
 
         string cmd = args[0].ToLowerInvariant();
         string[] rest = args[1..];
+        if (Array.Exists(rest, a => a is "-h" or "--help"))     // `codespawner gen --help` etc.
+        {
+            PrintUsage();
+            return 0;
+        }
 
         try
         {
@@ -171,12 +176,13 @@ public static class Program
               codespawner gen --out <dir> [knobs...]     generate a corpus + ground-truth manifest
               codespawner scan <tree> --out <profile>    measure a real tree -> numbers-only shape profile
               codespawner gen --from-profile <p> --out <dir>   regenerate a look-alike from a profile
-              codespawner verify --corpus <dir>          self-check a corpus against its manifest
+              codespawner verify --corpus <dir> [--manifest <path>]   self-check a corpus against its manifest
               codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest
               codespawner version
 
             SCAN (privacy-preserving characterize -> regenerate; see docs/scan-design.md):
               scan <tree> --out <profile.json>   read-only; emits a numbers-only shape/cost profile
+              --tree <dir>       the tree to scan, as an option instead of the positional <tree>
               --structure-only   never opens a byte (size/type/dir only) — max paranoia
               --content-stats    add numeric content histograms (opt-in; default is class-labeled)
               --min-cluster <n>  k-anonymity floor (default 5; small clusters fold into "other")
@@ -197,6 +203,7 @@ public static class Program
 
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)
+              --manifest <p>   base manifest to compose against (default <corpus>-manifest.json)
               --seed <n>       edit-selection seed (default 7)
               --edits <n>      number of edits (default 5)
               --step <k>       apply ONLY edit k (the chain driver; emits corpus-delta-k.json)
@@ -256,7 +263,7 @@ public static class Program
               --preset pathological-symbols  token-paste (expected-miss)/long idents/deep nesting
               --preset dup-content   byte-identical groups (content-hash dedup / posting collapse)
 
-            COMMON KNOBS (all optional; counts scale by --scale unless set explicitly):
+            COMMON KNOBS (all optional; counts scale by --scale unless set explicitly; full table: docs/knobs.md):
               --out <dir>            output directory (required; cleared if it exists)
               --force                overwrite --out even if it wasn't created by CodeSpawner (never a drive
                                      root, the cwd/home or a parent of them, or a git checkout)
@@ -265,12 +272,39 @@ public static class Program
               --giant-headers <n>    count of >MaxHeaderMB register headers (the byte pathology)
               --max-header-mb <n>    size of each giant header (default 110; never scaled)
               --macro-density <n>    #defines per giant header (preprocessor-memory axis)
+              --big-headers <n>      10-100 MB headers
+              --med-headers <n>      1-10 MB headers
+              --ordinary-headers <n> ~6.6 KB headers (ordinary parse volume)
               --cfiles <n>           .c files with cross-dir call edges
+              --giant-includers <n>  .c files that #include a giant header + call hot_shared() (default 3)
               --tiny-files <n>       tiny .csv files (per-file / stat pressure)
+              --blob-files <n>       high-byte, zero-symbol data blobs
               --unresolved-includes <n>   TUs referencing a missing vendor header (negative oracle)
               --compile-db none|partial|full
+              --build-output [true|false]  .o/.lst/.bak beside sources (default true)
+              --dirs <n>             approximate directory count
+              --depth <n>            approximate max path depth (default 8)
               --linked-roots <n>     split output across N sibling trees
+              --manifest [true|false]  emit the ground-truth manifest (default true)
               --io-parallelism <n>   max concurrent large-header writes
+
+            PATHOLOGY KNOBS (default 0/off; the presets above bundle them):
+              --dense-headers <n>        dense sub-threshold headers (posting/trigram memory)
+              --dense-under-mb <m>       byte ceiling each dense header sits just under (default 127)
+              --broad-token-files <n>    2-8 MB carrier files for the hot token
+              --hot-token-share <f>      fraction of carriers that contain the hot token (default 0.5)
+              --long-line-files <n>      single-long-line files (minified-JS shaped)
+              --max-line-bytes <m>       bytes in each long line (default 8388608)
+              --no-newline [true|false]  no newline at all in long-line files (default alternates)
+              --encoding-mix <n>         UTF-16/BOM/invalid-byte/non-ASCII encoding-stress files
+              --pathological-symbols <n> token-paste (expectedMiss) / long-ident / deep-nesting files
+              --dup-groups <n>           byte-identical duplicate groups (+ a near-identical control each)
+              --dup-copies <n>           copies per dup group (default 4)
+              --shrink-seeds <n>         ~9 MB headers that enable mutate 4-shrink
+              --restream-seeds <n>       ~129 MB headers that enable mutate 4-restream
+
+            Flags take --flag, --flag=false or --flag false; values take --knob v or --knob=v.
+            '<command> --help' prints this help.
 
             Run 'codespawner gen --out .\\_fw --scale 0.01 --giant-headers 0' for a fast smoke.
             """;

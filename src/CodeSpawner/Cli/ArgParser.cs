@@ -11,32 +11,17 @@ public static class ArgParser
     public static GenOptions ParseGen(string[] args)
     {
         var o = new GenOptions { Out = "" };
-        var ci = CultureInfo.InvariantCulture;
-
-        for (int i = 0; i < args.Length; i++)
+        var c = new Cursor(args);
+        while (c.Next())
         {
-            string a = args[i];
-            if (!a.StartsWith("--", StringComparison.Ordinal))
-                throw new ArgException($"unexpected argument '{a}' (expected --knob)");
+            if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}' (expected --knob)");
+            string key = c.Key;
+            string Val() => c.Val();
+            int I() { o.Explicit.Add(Canon(key)); return c.Int(); }
+            double D() { o.Explicit.Add(Canon(key)); return c.Dbl(); }
+            bool B() { o.Explicit.Add(Canon(key)); return c.Flag(); }
 
-            string key = a[2..];
-            string? inlineVal = null;
-            int eq = key.IndexOf('=');
-            if (eq >= 0) { inlineVal = key[(eq + 1)..]; key = key[..eq]; }
-
-            // Presets are handled by the caller before this point; ignore if it slips through.
-            string Val()
-            {
-                if (inlineVal != null) return inlineVal;
-                if (i + 1 >= args.Length) throw new ArgException($"--{key} needs a value");
-                return args[++i];
-            }
-
-            int I() { o.Explicit.Add(Canon(key)); return Int(key, Val()); }
-            double D() { o.Explicit.Add(Canon(key)); return Dbl(key, Val()); }
-            bool B() { o.Explicit.Add(Canon(key)); return inlineVal == null || ParseBool(inlineVal); }
-
-            switch (key.ToLowerInvariant())
+            switch (key)
             {
                 case "out": o.Out = Val(); break;
                 case "scale": o.Scale = D(); break;
@@ -96,18 +81,15 @@ public static class ArgParser
     public static VerifyOptions ParseVerify(string[] args)
     {
         var o = new VerifyOptions { Corpus = "" };
-        for (int i = 0; i < args.Length; i++)
+        var c = new Cursor(args);
+        while (c.Next())
         {
-            string a = args[i];
-            if (!a.StartsWith("--", StringComparison.Ordinal))
-                throw new ArgException($"unexpected argument '{a}' (expected --corpus / --manifest)");
-            string key = a[2..].ToLowerInvariant();
-            string Val() { if (i + 1 >= args.Length) throw new ArgException($"--{key} needs a value"); return args[++i]; }
-            switch (key)
+            if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}' (expected --corpus / --manifest)");
+            switch (c.Key)
             {
-                case "corpus": o.Corpus = Val(); break;
-                case "manifest": o.Manifest = Val(); break;
-                default: throw new ArgException($"unknown option --{key}");
+                case "corpus": o.Corpus = c.Val(); break;
+                case "manifest": o.Manifest = c.Val(); break;
+                default: throw new ArgException($"unknown option --{c.Key}");
             }
         }
         if (string.IsNullOrWhiteSpace(o.Corpus)) throw new ArgException("--corpus <dir> is required");
@@ -117,28 +99,25 @@ public static class ArgParser
     public static ScanOptions ParseScan(string[] args)
     {
         var o = new ScanOptions { Tree = "" };
-        var ci = CultureInfo.InvariantCulture;
-        for (int i = 0; i < args.Length; i++)
+        var c = new Cursor(args);
+        while (c.Next())
         {
-            string a = args[i];
-            string Val() { if (i + 1 >= args.Length) throw new ArgException($"'{a}' needs a value"); return args[++i]; }
-
-            if (!a.StartsWith("--", StringComparison.Ordinal))
+            if (c.Key is null)
             {
                 // first positional is the tree to scan
-                if (string.IsNullOrEmpty(o.Tree)) { o.Tree = a; continue; }
-                throw new ArgException($"unexpected argument '{a}'");
+                if (string.IsNullOrEmpty(o.Tree)) { o.Tree = c.Raw; continue; }
+                throw new ArgException($"unexpected argument '{c.Raw}'");
             }
-            string key = a[2..].ToLowerInvariant();
-            switch (key)
+            switch (c.Key)
             {
-                case "tree": o.Tree = Val(); break;
-                case "out": o.Out = Val(); break;
-                case "structure-only": o.Posture = Profile.PrivacyPosture.StructureOnly; break;
-                case "content-stats": o.Posture = Profile.PrivacyPosture.ContentStats; break;
-                case "min-cluster": o.MinCluster = Int(key, Val()); break;
-                case "sample": o.Sample = Int(key, Val()); break;
-                default: throw new ArgException($"unknown option --{key}");
+                case "tree": o.Tree = c.Val(); break;
+                case "out": o.Out = c.Val(); break;
+                // posture switches, not booleans: a word after them is the positional tree, never a value
+                case "structure-only": c.NoValue(); o.Posture = Profile.PrivacyPosture.StructureOnly; break;
+                case "content-stats": c.NoValue(); o.Posture = Profile.PrivacyPosture.ContentStats; break;
+                case "min-cluster": o.MinCluster = c.Int(); break;
+                case "sample": o.Sample = c.Int(); break;
+                default: throw new ArgException($"unknown option --{c.Key}");
             }
         }
         if (string.IsNullOrWhiteSpace(o.Tree)) throw new ArgException("scan <tree> is required");
@@ -150,34 +129,31 @@ public static class ArgParser
     public static Mutation.MutateOptions ParseMutate(string[] args)
     {
         var o = new Mutation.MutateOptions { Corpus = "" };
-        for (int i = 0; i < args.Length; i++)
+        var c = new Cursor(args);
+        while (c.Next())
         {
-            string a = args[i];
-            if (!a.StartsWith("--", StringComparison.Ordinal))
-                throw new ArgException($"unexpected argument '{a}'");
-            string key = a[2..].ToLowerInvariant();
-            string Val() { if (i + 1 >= args.Length) throw new ArgException($"--{key} needs a value"); return args[++i]; }
-            switch (key)
+            if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}'");
+            switch (c.Key)
             {
-                case "corpus": o.Corpus = Val(); break;
-                case "manifest": o.Manifest = Val(); break;
-                case "seed": o.Seed = Int(key, Val()); break;
-                case "edits": o.Edits = Int(key, Val()); break;
-                case "step": o.Step = Int(key, Val()); break;
-                case "through": o.Through = true; break;
-                case "restream": o.Restream = true; break;
-                case "target": o.Target = Val().ToLowerInvariant(); break;
-                case "files-changed": o.FilesChanged = Int(key, Val()); break;
-                case "edit-density": o.EditDensity = Dbl(key, Val()); break;
-                case "giant-min-mb": o.GiantMinMb = Int(key, Val()); break;
-                case "edit-kind": o.EditKind = Val().ToLowerInvariant(); break;
-                case "decoy-fraction": o.DecoyFraction = Dbl(key, Val()); break;
-                case "three-way": o.ThreeWay = true; break;
-                case "overlap-fraction": o.OverlapFraction = Dbl(key, Val()); break;
-                case "conflict-edges": o.ConflictEdges = true; break;
-                case "giant-edit": o.GiantEdit = Val().ToLowerInvariant(); break;
-                case "shard-size": o.ShardSize = Int(key, Val()); break;
-                default: throw new ArgException($"unknown option --{key}");
+                case "corpus": o.Corpus = c.Val(); break;
+                case "manifest": o.Manifest = c.Val(); break;
+                case "seed": o.Seed = c.Int(); break;
+                case "edits": o.Edits = c.Int(); break;
+                case "step": o.Step = c.Int(); break;
+                case "through": o.Through = c.Flag(); break;
+                case "restream": o.Restream = c.Flag(); break;
+                case "target": o.Target = c.Val().ToLowerInvariant(); break;
+                case "files-changed": o.FilesChanged = c.Int(); break;
+                case "edit-density": o.EditDensity = c.Dbl(); break;
+                case "giant-min-mb": o.GiantMinMb = c.Int(); break;
+                case "edit-kind": o.EditKind = c.Val().ToLowerInvariant(); break;
+                case "decoy-fraction": o.DecoyFraction = c.Dbl(); break;
+                case "three-way": o.ThreeWay = c.Flag(); break;
+                case "overlap-fraction": o.OverlapFraction = c.Dbl(); break;
+                case "conflict-edges": o.ConflictEdges = c.Flag(); break;
+                case "giant-edit": o.GiantEdit = c.Val().ToLowerInvariant(); break;
+                case "shard-size": o.ShardSize = c.Int(); break;
+                default: throw new ArgException($"unknown option --{c.Key}");
             }
         }
         if (string.IsNullOrWhiteSpace(o.Corpus)) throw new ArgException("--corpus <dir> is required");
@@ -213,6 +189,57 @@ public static class ArgParser
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
         if (o.Step is { } k && (k < 1 || k > o.Edits)) throw new ArgException($"--step must be in 1..{o.Edits}");
         return o;
+    }
+
+    /// <summary>
+    /// Walks the args the same way for every command: <c>--key value</c>, <c>--key=value</c>, and boolean flags as
+    /// <c>--flag</c>, <c>--flag=false</c> or <c>--flag false</c> (the space form only consumes a boolean word, so a
+    /// following positional or knob is never eaten). Keys are lower-cased; a non-<c>--</c> arg has a null Key.
+    /// </summary>
+    private sealed class Cursor(string[] args)
+    {
+        private int _i = -1;
+        private string? _inline;
+        public string Raw { get; private set; } = "";
+        public string? Key { get; private set; }
+
+        public bool Next()
+        {
+            if (++_i >= args.Length) return false;
+            Raw = args[_i];
+            _inline = null;
+            if (!Raw.StartsWith("--", StringComparison.Ordinal)) { Key = null; return true; }
+            string k = Raw[2..];
+            int eq = k.IndexOf('=');
+            if (eq >= 0) { _inline = k[(eq + 1)..]; k = k[..eq]; }
+            Key = k.ToLowerInvariant();
+            return true;
+        }
+
+        public string Val()
+        {
+            if (_inline != null) return _inline;
+            if (_i + 1 >= args.Length) throw new ArgException($"--{Key} needs a value");
+            return args[++_i];
+        }
+
+        public int Int() => ArgParser.Int(Key!, Val());
+        public double Dbl() => ArgParser.Dbl(Key!, Val());
+
+        public bool Flag()
+        {
+            if (_inline != null) return ParseBool(_inline);
+            if (_i + 1 < args.Length && IsBoolWord(args[_i + 1])) return ParseBool(args[++_i]);
+            return true;
+        }
+
+        public void NoValue()
+        {
+            if (_inline != null) throw new ArgException($"--{Key} takes no value");
+        }
+
+        private static bool IsBoolWord(string s) =>
+            s.ToLowerInvariant() is "true" or "false" or "yes" or "no" or "on" or "off";
     }
 
     // Map CLI knob spelling to the GenOptions.Eff knob name (PascalCase used in Eff calls).

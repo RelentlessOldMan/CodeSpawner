@@ -11,6 +11,27 @@ reads it.
 
 ## [Unreleased]
 
+### Fixed (CLI)
+- `codespawner <command> --help` prints the help instead of failing with
+  "unknown knob --help".
+- Every command parses arguments the same way: `--knob v` or `--knob=v`, and
+  boolean flags as `--flag`, `--flag=false` or `--flag false`. Before,
+  `gen --manifest false` was rejected, and mutate/scan/verify did not accept
+  `--knob=v` at all. The space form only takes a boolean word, so it never
+  swallows the next option or scan's positional tree.
+- `--help` now lists every option the parser accepts, including the
+  pathology knobs, `--big-headers`/`--med-headers`/`--ordinary-headers`,
+  `--giant-includers`, `--blob-files`, `--build-output`, `--dirs`,
+  `--depth`, `--manifest`, and scan's `--tree`. A test fails if an option is
+  added without help.
+
+### Changed (build)
+- The exe's FileVersion/ProductVersion now come from `Program.Version`
+  instead of reading 1.0.0.0.
+- `scripts/bench.ps1` fails when any `gen` exits non-zero. Before, a failed
+  gen could let the determinism and seed-variance checks compare two empty
+  trees and pass. Its fallback exe path now points at net8.0.
+
 ## [1.1.4] - 2026-10-12
 
 ### Fixed (safety)
