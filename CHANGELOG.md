@@ -55,6 +55,16 @@ reads it.
 - `mutate --target all` never selects the generator's root
   `compile_commands.json`. Its absolute paths made `diffTruthSha` depend on
   where the corpus lived. Leftover `*.mut.tmp` files are also skipped.
+- `line-insert` hunks now use the pinned insert convention: `oldStart` is the
+  number of old lines before the insertion (git-style), as `--giant-edit
+  single` already did. It was one too high, so a file could not be rebuilt
+  from its hunks. Deletes are unchanged. The convention is now written out in
+  docs/diff-delta-design.md. `line-insert` deltas get a new `diffTruthSha`.
+- `--edit-kind binary` output now looks binary to a diff tool: it always has a
+  NUL byte in the first 8 KB and never starts with a UTF-16/32 BOM. Before,
+  XOR-flipping ASCII left printable text, so diffs classified it as content.
+  `binary` deltas get a new `diffTruthSha`.
+- The shard count for `--shard-size` no longer overflows near `int.MaxValue`.
 
 ### Changed (release tooling)
 - `scripts\release.ps1` runs the test suite and builds + version-checks the

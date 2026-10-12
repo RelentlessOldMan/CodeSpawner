@@ -42,7 +42,7 @@ Each changed file in the delta carries its `reason`. One small carve-style label
 | `eol` | flip LF↔CRLF | differ | **zero** | the "modified-with-empty-diff" honesty case |
 | `whitespace` | reindent / trailing spaces | differ | **yes** (all changes whitespace-only) | feeds the ws-insensitive collapse path |
 | `encoding` | UTF-8↔UTF-16, add/remove BOM | differ | **zero** (decoded text identical) | tests decode-before-diff |
-| `binary` | edit bytes in a blob file | differ | **zero** | metadata-only record (shas+sizes), no byte-range truth in v1 |
+| `binary` | edit bytes in a blob file | differ | **zero** | metadata-only record (shas+sizes), no byte-range truth in v1. The new bytes always carry a NUL in the first 8 KB and never start with a wide BOM (FF FE / FE FF / 00 00 FE FF), so a NUL-sniffing diff classifies them binary |
 | `metadata` | synthetic mode/metadata change | **identical** (`oldSha==newSha`) | **zero** | fixture-sized; NTFS has no real POSIX mode so this is synthetic. Generic field, mode is just the first instance. Proves classify-as-`metadata_only` + the opt-in metadata-diff path |
 | `mixed` | one kind per file, cycling the six reasons above | varies per file | varies per file | NOT a reason value — a `--edit-kind mixed` knob that assigns a deterministic per-file kind (`content,eol,whitespace,encoding,binary,metadata` by index). ≥6 **content-bearing** files ⇒ ONE delta exercises every classifier branch (a kind that no-ops on a degenerate file — e.g. `eol` on a file with no line terminators — is honestly dropped by the no-change guard, so that reason would be absent). Renames stay a separate pass (`--edit-kind rename`). |
 
@@ -65,6 +65,12 @@ Per changed file, in `fileOps.modified` (now objects, not bare paths):
 ```
 
 - **op** ∈ `insert | delete | replace`. insert ⇒ `oldLines==0`; delete ⇒ `newLines==0`; replace ⇒ both ≥1.
+- **Line numbers (pinned):** all 1-based. `oldStart` = the first old line the hunk covers; for an **insert**
+  (`oldLines==0`) it is the number of old lines BEFORE the insertion point (git-style `-N,0`; `0` = top of
+  file). `newStart` = the number of new lines before the hunk **+ 1** for every op — for a **delete**
+  (`newLines==0`) it is the new line the deleted region would have begun at. A file is reconstructable from its
+  old text + hunks: walk them in order, copy old lines up to `oldStart` (insert: up to and including it), emit
+  the `newLines` new lines, skip `oldLines` old lines.
 - **Coalescing:** contiguous touched lines collapse into ONE replace hunk (`oldLines==newLines==run`), proper
   unified semantics — not N 1-line hunks.
 - **oldSha/newSha** = SHA-256 of the raw file bytes, **lowercase hex** (= CodeDiffer's size+hash prefilter
