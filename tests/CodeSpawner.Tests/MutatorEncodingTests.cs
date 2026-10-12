@@ -166,6 +166,61 @@ public class MutatorEncodingTests
         Assert.Equal(new[] { "a.c" }, Records(Path.Combine(tmp.Path, "corpus-delta.json")).Keys);
     }
 
+    // The hunks alone must rebuild the new file from the old one (pinned convention: insert oldStart = old lines
+    // before it; every newStart = new lines before it + 1).
+    [Theory]
+    [InlineData("line-insert", 0.2)]
+    [InlineData("line-insert", 1.0)]
+    [InlineData("line-delete", 0.3)]
+    [InlineData("line-delete", 1.0)]
+    [InlineData("content", 0.3)]
+    public void Hunks_ReconstructNewFileFromOld(string kind, double density)
+    {
+        using var tmp = new TempDir();
+        string corpus = BuildCorpus(tmp, ("a.c", Encoding.ASCII.GetBytes(Text)));
+        string[] oldLines = File.ReadAllLines(Path.Combine(corpus, "a.c"));
+
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = kind, EditDensity = density, Seed = 3 }));
+        string[] newLines = File.ReadAllLines(Path.Combine(corpus, "a.c"));
+
+        var rebuilt = new List<string>();
+        int oldPos = 0;                                          // old lines consumed so far
+        foreach (var h in Records(Path.Combine(tmp.Path, "corpus-delta.json"))["a.c"].GetProperty("hunks").EnumerateArray())
+        {
+            int os = h.GetProperty("oldStart").GetInt32(), ol = h.GetProperty("oldLines").GetInt32();
+            int ns = h.GetProperty("newStart").GetInt32(), nlines = h.GetProperty("newLines").GetInt32();
+            int copyTo = ol == 0 ? os : os - 1;                  // insert: after old line os; else: before it
+            while (oldPos < copyTo) rebuilt.Add(oldLines[oldPos++]);
+            Assert.Equal(rebuilt.Count + 1, ns);                 // newStart = new lines before + 1, every op
+            for (int i = 0; i < nlines; i++) rebuilt.Add(newLines[ns - 1 + i]);
+            oldPos += ol;
+        }
+        while (oldPos < oldLines.Length) rebuilt.Add(oldLines[oldPos++]);
+        Assert.Equal(newLines, rebuilt);
+    }
+
+    [Theory]
+    [InlineData(new byte[] { (byte)'i', (byte)'n', (byte)'t', (byte)' ', (byte)'a', (byte)';', (byte)'\n', (byte)'x' })]
+    [InlineData(new byte[] { 0xFF, 0xFE, (byte)'a', 0, (byte)'b', 0, (byte)'c', 0 })]
+    [InlineData(new byte[] { 0xFE, 0xFF, 0, (byte)'a', 0, (byte)'b', 0, (byte)'c' })]
+    [InlineData(new byte[] { 0x00, 0x00, 0xFE, 0xFF, 0, 0, 0, (byte)'a' })]
+    [InlineData(new byte[] { (byte)'a', (byte)'b' })]
+    public void Binary_ResultHasEarlyNul_AndNoWideBom(byte[] original)
+    {
+        using var tmp = new TempDir();
+        string corpus = BuildCorpus(tmp, ("a.bin", original));
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "all", EditKind = "binary", EditDensity = 0.0, Seed = 1 }));
+
+        byte[] after = File.ReadAllBytes(Path.Combine(corpus, "a.bin"));
+        Assert.Equal(original.Length, after.Length);
+        Assert.Contains((byte)0, after.Take(8192));
+        Assert.False(after.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE }) || after.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF })
+                     || after.AsSpan().StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF }), "wide BOM prefix survived");
+        var rec = Records(Path.Combine(tmp.Path, "corpus-delta.json"))["a.bin"];
+        Assert.Equal("binary", rec.GetProperty("reason").GetString());
+        Assert.Equal(Sha(after), rec.GetProperty("newSha").GetString());
+    }
+
     [Theory]
     [InlineData("strided")]
     [InlineData("single")]

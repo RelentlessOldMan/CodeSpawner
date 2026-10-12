@@ -972,7 +972,9 @@ public static class Mutator
     }
 
     /// <summary>Insert a fixed block of filler lines before ~density of the lines → insert hunks that renumber
-    /// everything after them (delta carries NEW coords). Inserted lines use LF (corpus is LF). Null = not text.</summary>
+    /// everything after them (delta carries NEW coords). Inserted lines use LF (corpus is LF). Null = not text.
+    /// Insert hunks are git-style: oldStart = the number of old lines BEFORE the insert (0 = top of file), the
+    /// same convention as the giant single-locality insert.</summary>
     private static EditResult? LineInsertEdit(string abs, double density, int seed, int idx)
     {
         const int K = 2;
@@ -988,7 +990,7 @@ public static class Mutator
             {
                 int newStart = newLine + 1;
                 for (int j = 0; j < K; j++) { sb.Append($"// mutate inserted {idx}:{k + 1}:{j}").Append('\n'); newLine++; }
-                hunks.Add(new Hunk(HunkOp.Insert, k + 1, 0, newStart, K));
+                hunks.Add(new Hunk(HunkOp.Insert, k, 0, newStart, K));   // k old lines precede it
             }
             sb.Append(lines[k].content).Append(lines[k].term);
             newLine++;
@@ -1048,13 +1050,23 @@ public static class Mutator
         return NoHunks();
     }
 
-    /// <summary>Flip ~density of the raw bytes: a real binary change tracked by shas+sizes only (no text hunks).</summary>
+    /// <summary>Flip ~density of the raw bytes: a real binary change tracked by shas+sizes only (no text hunks).
+    /// The result must also LOOK binary to a diff tool, or it would classify the change as content: XOR 0x5A keeps
+    /// ASCII printable, so a NUL is planted inside the first 8 KB (offset 4, or the last byte of a tiny file), and
+    /// a leading wide BOM (FF FE / FE FF / 00 00 FE FF — which marks NULs as text) is broken by flipping byte 0.</summary>
     private static EditResult BinaryEdit(string abs, double density, int seed, int idx)
     {
         byte[] bytes = File.ReadAllBytes(abs);
         int threshold = (int)Math.Round(Math.Clamp(density, 0, 1) * 10000);
         var rng = Rng.For(seed, Category.Mutate, 100_000 + idx);
         for (int k = 0; k < bytes.Length; k++) if (rng.Next(10000) < threshold) bytes[k] ^= 0x5A;
+        if (bytes.Length > 0)
+        {
+            bytes[Math.Min(4, bytes.Length - 1)] = 0;
+            if (bytes.AsSpan().StartsWith(new byte[] { 0xFF, 0xFE }) || bytes.AsSpan().StartsWith(new byte[] { 0xFE, 0xFF })
+                || bytes.AsSpan().StartsWith(new byte[] { 0x00, 0x00, 0xFE, 0xFF }))
+                bytes[0] ^= 0x01;
+        }
         File.WriteAllBytes(abs, bytes);
         return NoHunks();
     }
@@ -1405,7 +1417,7 @@ public static class Mutator
         string diffSha, List<DiffFile> sorted, IReadOnlyList<Rename> renames, IReadOnlyList<string> added)
     {
         int shardSize = o.ShardSize;
-        int nShards = (sorted.Count + shardSize - 1) / shardSize;    // 0 modified ⇒ 0 shards, still an honest index
+        int nShards = (int)((sorted.Count + (long)shardSize - 1) / shardSize);    // 0 modified ⇒ 0 shards, still an honest index
         var shards = new List<(string file, string first, string last, int count, string sha)>(nShards);
         // Pad the shard index to the width of the LARGEST index (min 3), so a glob + ordinal filename sort stays
         // in shard order even past 999 shards — the death-scale case sharding exists for (D3 alone misorders there).
