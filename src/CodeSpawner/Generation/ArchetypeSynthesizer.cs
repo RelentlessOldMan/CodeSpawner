@@ -30,12 +30,18 @@ public static class ArchetypeSynthesizer
         int len = 0;
         long flushed = 0;
         int n = 0;
+        // the long line's closing '\n' is written after the loop, so its units stop one byte short of the target.
+        // Never smaller than the least that still re-classifies to its class: generic code needs its first function
+        // (66 bytes), inline-function-heavy two functions (119); a lone comment or a single function reads as other.
+        long floor = cls switch { ContentClass.GenericCode => 66, ContentClass.InlineFunctionHeavy => 119, _ => 0 };
+        long limit = Math.Max(floor, cls == ContentClass.MinifiedLongLine ? targetBytes - 1 : targetBytes);
 
         void Flush() { if (len > 0) { fs.Write(buf, 0, len); flushed += len; len = 0; } }
         void Maybe() { if (len >= FlushAt) Flush(); }
 
-        while (flushed + len < targetBytes)
+        while (flushed + len < limit)
         {
+            int unitStart = len;
             switch (cls)
             {
                 case ContentClass.PreprocessorDense:
@@ -100,11 +106,30 @@ public static class ArchetypeSynthesizer
                     break;
             }
             n++;
+            if (flushed + len >= limit) { len = CutToTarget(buf, unitStart, len, (int)(limit - flushed), flushed == 0); break; }
             Maybe();
         }
 
         if (cls == ContentClass.MinifiedLongLine) { len = A(buf, len, "\n"); }
         Flush();
+    }
+
+    /// <summary>
+    /// The last unit crossed the target: end the file at whichever boundary inside it is nearest the target — a
+    /// line end, or the unit's start/end — so the file lands within half a line of the target instead of up to one
+    /// whole unit (~1.2 KB for generic code) over. Ties go to the shorter file. The unit's start counts only when
+    /// something was written before it, so a file is never empty. The cut unit is always still in the buffer: this
+    /// runs before the flush check.
+    /// </summary>
+    private static int CutToTarget(byte[] buf, int unitStart, int len, int room, bool nothingBefore)
+    {
+        if (len <= room) return len;
+        int up = room + 1;
+        while (up < len && buf[up - 1] != (byte)'\n') up++;                  // first boundary past the target
+        int down = room;
+        while (down > unitStart && buf[down - 1] != (byte)'\n') down--;      // last boundary at or under it
+        if (down == 0 && nothingBefore) return up;
+        return room - down <= up - room ? down : up;
     }
 
     private static void WriteBinary(string path, long targetBytes, ref Rng rng)

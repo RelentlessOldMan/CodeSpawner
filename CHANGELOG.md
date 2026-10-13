@@ -11,6 +11,37 @@ reads it.
 
 ## [Unreleased]
 
+### Changed
+- `mutate` refuses a tree it has already mutated, except for the next `--step`
+  of the same chain. What has been applied is recorded in
+  `<corpus>-mutated.txt` beside the corpus (not inside it: the tree and its
+  `.codespawner` marker are unchanged, so base-vs-variant diffs see only the
+  delta's changes). `--step k` needs steps 1..k-1 recorded with the same
+  `--seed` and `--edits`; a repeated, skipped or other-chain step, a second
+  default/`--through` run, and a second bulk run are refused with exit 1 and a
+  message to regenerate. Before, these edited files that no longer matched the
+  base and wrote a delta that could not apply to it. `--three-way` leaves the
+  tree as the base, records nothing, and can repeat; a 2-way run after it is
+  allowed. Regenerating clears the record; a corpus mutated by 1.1.8 or earlier
+  has none and is treated as unmutated. Agreed with CodeCompass (strictly
+  in-order chains, regenerated each run); CodeDiffer (a fresh copy per
+  mutation) asked for the record to stay out of the tree.
+- `gen --from-profile` files now end at the line boundary nearest their drawn
+  size. They were written in whole units, which overshot by up to one unit:
+  ~1.2 KB for generic code, so on a real profile those files came out 1.7%
+  too large in total and 2.5% of them landed in the next size bucket. Tiny
+  targets are kept at the least that still re-classifies to the class (66
+  bytes for generic code, 119 for inline-function-heavy, which used to read
+  as generic code below 60 bytes). **This changes from-profile output**: a
+  corpus regenerated from the same profile and seed with 1.1.9 differs in its
+  synthesized files' bytes and sizes from one made by 1.1.8 or earlier. The
+  oracle files, the manifest and truth, and `--preset` corpora are unchanged.
+
+### Added
+- `scan` prints how many files it could not read (and directories it could
+  not list), which it leaves out of the profile. Nothing is added to the
+  profile itself.
+
 ## [1.1.8] - 2026-10-12
 
 ### Changed (cross-OS determinism)

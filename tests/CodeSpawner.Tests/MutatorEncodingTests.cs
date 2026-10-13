@@ -82,13 +82,13 @@ public class MutatorEncodingTests
     [Fact]
     public void NonText_InvalidUtf8AndNulBinary_AreLeftUntouchedAndUnrecorded()
     {
-        using var tmp = new TempDir();
         byte[] invalid = Enumerable.Range(0, 4096).Select(i => (byte)(0x80 + i % 128)).ToArray();
         byte[] nul = Encoding.ASCII.GetBytes("int a;\0\0\0\nint b;\n");
-        string corpus = BuildCorpus(tmp, ("a_text.c", Encoding.ASCII.GetBytes(Text)), ("b_invalid.c", invalid), ("c_nul.c", nul));
 
         foreach (var kind in new[] { "content", "whitespace", "line-insert", "line-delete", "eol", "encoding" })
         {
+            using var tmp = new TempDir();                      // a fresh corpus per kind: mutate refuses a mutated tree
+            string corpus = BuildCorpus(tmp, ("a_text.c", Encoding.ASCII.GetBytes(Text)), ("b_invalid.c", invalid), ("c_nul.c", nul));
             Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = kind, EditDensity = 1.0, Seed = 1 }));
             var recs = Records(Path.Combine(tmp.Path, "corpus-delta.json"));
             Assert.False(recs.ContainsKey("b_invalid.c"), $"{kind}: invalid UTF-8 recorded");

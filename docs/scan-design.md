@@ -15,7 +15,8 @@ re-describing).
 ## Commands
 
 - `codespawner scan <tree> --out profile.json [--structure-only] [--content-stats] [--min-cluster N] [--sample N]`
-  Read-only, offline. Never writes into `<tree>`. Emits a small JSON shape profile.
+  Read-only, offline. Never writes into `<tree>`. Emits a small JSON shape profile. Files it cannot read
+  (and the contents of directories it cannot list) are left out, and the run prints how many.
 - `codespawner gen --from-profile profile.json --out <dir> [--seed S] [--with-oracle]`
   Synthesizes a generic corpus matching the profile. `--with-oracle` overlays the ground-truth spine.
 
@@ -244,7 +245,9 @@ Built and validated on the JIT path (full AOT bench pending a free machine — g
   `duplicateBasenameAmbiguity`, coarse `symbolDensity` bands (exact under `--content-stats`).
 - **`gen --from-profile <p> --out <dir> [--with-oracle] [--oracle-scale] [--oracle-chain N]`** —
   `Generation/{ProfileGenerator,ArchetypeSynthesizer,OracleOverlay}.cs`. Per-class synthesizers emit content
-  that re-classifies to the same class (round-trip stable). `template-metaprogramming` degrades to
+  that re-classifies to the same class (round-trip stable), each file ending at the line boundary nearest its
+  drawn size (since 1.1.9; before, whole units overshot it by up to ~1.2 KB), never below the least that
+  still re-classifies (66 bytes for generic code, 119 for inline-heavy). `template-metaprogramming` degrades to
   `inline-function-heavy` with a logged note. Oracle spine is compact by default; `--oracle-scale` inflates
   function BODIES only (spine + `expectedMiss` invariant). Deterministic via `--seed`.
 - **Content classes:** the taxonomy above, plus a byte-value-entropy split for `data-blob-*`. Trigram

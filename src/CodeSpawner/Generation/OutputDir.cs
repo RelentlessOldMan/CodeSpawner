@@ -11,7 +11,7 @@ namespace CodeSpawner.Generation;
 /// is refused EVEN WITH <c>--force</c>, because <c>--force</c> means "overwrite this corpus", not "delete
 /// whatever path was typed".
 /// <para>Regenerating over our own corpus also clears what the old corpus left beside it (its manifest, mutate
-/// deltas, 3-way variant trees and <c>--linked-roots</c> siblings), so nothing of the deleted tree survives next to
+/// deltas and mutation state, 3-way variant trees and <c>--linked-roots</c> siblings), so nothing of the deleted tree survives next to
 /// the new one. A corpus directory's marker is deleted LAST, so an interrupted wipe still leaves a directory the
 /// next run recognises as ours.</para>
 /// </summary>
@@ -57,6 +57,8 @@ public static class OutputDir
             if (File.Exists(staleManifest)) File.Delete(staleManifest);
             Mutation.Mutator.RemoveDeltaArtifacts(trimmed);
             Mutation.Mutator.RemoveStepDeltas(trimmed);
+            string state = Mutation.Mutator.MutationStatePath(trimmed);
+            if (File.Exists(state)) File.Delete(state);
             foreach (var variant in new[] { trimmed + "_v1", trimmed + "_v2" })
                 if ((File.Exists(Path.Combine(variant, MarkerName)) || File.Exists(Path.Combine(variant, Mutation.Mutator.JournalName)))
                     && UnsafeToDelete(variant) is null)

@@ -208,6 +208,48 @@ public class MutatorTests
     }
 
     [Fact]
+    public void Step_TakesOnlyTheNextStepOfTheSameChain()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6);
+        MutateOptions Step(int k, int seed = 5) => new() { Corpus = corpus, Edits = 3, Seed = seed, Step = k };
+        string State() => File.ReadAllLines(Mutator.MutationStatePath(corpus))[1];
+
+        var skip = Assert.Throws<InvalidOperationException>(() => Mutator.Run(Step(2)));   // step 1 not done
+        Assert.Contains("Regenerate", skip.Message);
+        Assert.False(File.Exists(StepDelta(corpus, 2)));
+
+        Assert.Equal(0, Mutator.Run(Step(1)));
+        Assert.Equal("step 5 3 1", State());
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(Step(1)));               // re-run of a done step
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(Step(2, seed: 6)));      // another chain
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(Step(3)));               // skips step 2
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5 }));
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5, Through = true }));
+        Assert.Equal("step 5 3 1", State());                                                // refusals record nothing
+
+        Assert.Equal(0, Mutator.Run(Step(2)));
+        Assert.Equal(0, Mutator.Run(Step(3)));
+        Assert.Equal("step 5 3 3", State());
+    }
+
+    [Fact]
+    public void DefaultAndThroughRuns_RecordTheirState_AndRefuseAMutatedTree()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 2, Seed = 5 }));
+        Assert.Equal("step 5 2 2", File.ReadAllLines(Mutator.MutationStatePath(corpus))[1]);   // the whole chain
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 2, Seed = 5 }));
+
+        using var tmp2 = new TempDir();
+        var (c2, _) = BuildSymbolCorpus(tmp2, nFuncs: 6);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = c2, Edits = 2, Seed = 5, Through = true }));
+        Assert.Equal("through 5 2", File.ReadAllLines(Mutator.MutationStatePath(c2))[1]);
+        Assert.Throws<InvalidOperationException>(() => Mutator.Run(new MutateOptions { Corpus = c2, Edits = 2, Seed = 5, Step = 1 }));
+    }
+
+    [Fact]
     public void Step_AppliesOnlyThatEdit_ReplaysEarlierTableOnly()
     {
         using var tmp = new TempDir();
@@ -215,6 +257,8 @@ public class MutatorTests
         var before = Directory.GetFiles(corpus, "src_*.c").Select(Path.GetFileName).OrderBy(x => x).ToList();
 
         // --step 3 is the Add edit: edits 1-2 (Remove/LineShift) replay table-only (NO disk), edit 3 hits disk.
+        // Record steps 1-2 as done without doing them, so only step 3's disk effect is on the tree.
+        File.WriteAllText(Mutator.MutationStatePath(corpus), "CodeSpawner test\nstep 5 3 2\n");
         int rc = Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5, Step = 3 });
         Assert.Equal(0, rc);
 

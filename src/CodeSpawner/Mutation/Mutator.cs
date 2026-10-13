@@ -66,6 +66,7 @@ public static class Mutator
         string manifestPath = o.Manifest ?? DefaultManifestPath(corpus);
         if (!File.Exists(manifestPath)) { Console.Error.WriteLine($"error: base manifest not found: {manifestPath}"); return 2; }
         var basem = ManifestReader.Load(manifestPath);
+        CheckMutationState(o, corpus);
 
         if (o.IsBulk) return RunBulk(o, corpus, basem);
 
@@ -84,7 +85,9 @@ public static class Mutator
             var ops = ApplyEdit(plan[k - 1], corpus, work, live: true);
             string journal = BeginJournal(corpus);
             try { CommitStep(corpus, basem, o, k, prevSha, before, work, ops, plan[k - 1]); }
-            finally { File.Delete(journal); }                  // a step commits or fails cleanly (see CommitStep)
+            catch { File.Delete(journal); throw; }             // a step commits or fails cleanly (see CommitStep)
+            WriteMutationState(corpus, $"{StepState} {o.Seed} {o.Edits} {k}");   // fails ⇒ the journal stays
+            File.Delete(journal);
         }
         else if (o.Through)
         {
@@ -99,6 +102,7 @@ public static class Mutator
                 ApplyDisk(plan[j]);
             }
             WriteDelta(corpus, basem, o, null, prevSha, before, work, ops);
+            WriteMutationState(corpus, $"{ThroughState} {o.Seed} {o.Edits}");
             File.Delete(journal);
         }
         else
@@ -106,19 +110,61 @@ public static class Mutator
             // Default: apply the whole chain to disk and emit per-step deltas (convenience / local test).
             var work = Clone(basem.Symbols);
             string journal = BeginJournal(corpus);
-            try
+            for (int j = 0; j < plan.Count; j++)
             {
-                for (int j = 0; j < plan.Count; j++)
-                {
-                    string prevSha = TruthDigest.Compute(work);
-                    var before = Clone(work);
-                    var ops = ApplyEdit(plan[j], corpus, work, live: true);
-                    CommitStep(corpus, basem, o, j + 1, prevSha, before, work, ops, plan[j]);
-                }
+                string prevSha = TruthDigest.Compute(work);
+                var before = Clone(work);
+                var ops = ApplyEdit(plan[j], corpus, work, live: true);
+                // Steps before a clean failure are committed with deltas and recorded, so --step can carry on.
+                try { CommitStep(corpus, basem, o, j + 1, prevSha, before, work, ops, plan[j]); }
+                catch { File.Delete(journal); throw; }
+                WriteMutationState(corpus, $"{StepState} {o.Seed} {o.Edits} {j + 1}");
             }
-            finally { File.Delete(journal); }                  // steps before a clean failure are committed with deltas
+            File.Delete(journal);
         }
         return 0;
+    }
+
+    // ---- mutation state (re-mutate guard) ----------------------------------------------------------------
+    // What has been applied to the tree, kept in <corpus>-mutated.txt BESIDE the corpus, not in it: the tree
+    // (and its .codespawner marker) stays byte-for-byte what a diff of base vs variant expects. One line:
+    //   step <seed> <edits> <k>   symbol mode, edits 1..k applied (by --step or the default run)
+    //   through <seed> <edits>    symbol mode --through
+    //   bulk                      a 2-way bulk run (3-way leaves the tree alone and records nothing)
+    // No file = unmutated, which is also how a corpus from 1.1.8 or earlier reads. A regen deletes it.
+    private const string StepState = "step", ThroughState = "through", BulkState = "bulk";
+
+    internal static string MutationStatePath(string corpusBase) => $"{corpusBase}-mutated.txt";
+
+    private static void WriteMutationState(string corpus, string state) =>
+        AtomicFile.Write(MutationStatePath(TrimDir(corpus)),
+                         fs => fs.Write(Encoding.UTF8.GetBytes($"CodeSpawner {Program.Version}\n{state}\n")));
+
+    /// <summary>Refuse a mutate the tree's recorded state does not allow, before anything is touched. The only
+    /// mutation of an already-mutated tree is the next <c>--step</c> of the same chain; anything else would edit
+    /// files whose bytes no longer match the base, so its delta could not apply to the base it names.</summary>
+    private static void CheckMutationState(MutateOptions o, string corpus)
+    {
+        string path = MutationStatePath(TrimDir(corpus));
+        string? state = File.Exists(path) ? File.ReadLines(path).Skip(1).FirstOrDefault()?.Trim() : null;
+        string regen = $"Regenerate it first (codespawner gen --out {corpus} with the manifest's _meta.gen knobs --force), " +
+                       "then mutate again.";
+        string? Problem()
+        {
+            if (o.Step is { } k && !o.IsBulk)
+            {
+                string want = $"{StepState} {o.Seed} {o.Edits} {k - 1}";
+                if (k == 1) return state is null ? null : $"it is already mutated ({state})";
+                if (state == want) return null;
+                return state is null
+                    ? $"--step {k} needs steps 1..{k - 1} applied first, and none are recorded"
+                    : $"--step {k} needs '{want}' (steps 1..{k - 1} of this --seed/--edits chain), but the tree records '{state}'";
+            }
+            if (o.ThreeWay && state is not null) return $"it is already mutated ({state}), so the variants would not start from the base";
+            return state is null ? null : $"it is already mutated ({state})";
+        }
+        if (Problem() is { } why)
+            throw new InvalidOperationException($"--corpus '{corpus}': {why}; recorded in {path}. {regen}");
     }
 
     private static string BeginJournal(string dir)
@@ -180,6 +226,7 @@ public static class Mutator
         if (o.Kind == "rename")
         {
             RunRename(o, corpus, basem, chosen);
+            WriteMutationState(corpus, BulkState);
             File.Delete(journal);
             return 0;
         }
@@ -205,6 +252,7 @@ public static class Mutator
         string prevSha = TruthDigest.Compute(basem.Symbols);
         string diffSha = DiffDigest.Compute(files, Array.Empty<Rename>());
         WriteDiffDelta(corpus, basem, o, prevSha, diffSha, files, Array.Empty<Rename>(), Array.Empty<string>());
+        WriteMutationState(corpus, BulkState);
         File.Delete(journal);
         Console.WriteLine($"  ~{touched} line(s) changed across {files.Count} file(s); diffTruthSha {diffSha[..12]}…");
         return 0;

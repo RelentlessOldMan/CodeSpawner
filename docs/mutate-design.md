@@ -25,6 +25,15 @@ codespawner mutate --corpus <dir> --seed <S> --edits <N> [--step <k>] [--through
   tree matches neither the base nor any delta, so the only way on is to regenerate. A `--step` (or a step of
   the default run) that fails cleanly (file untouched, no delta) removes the journal, so the step can be
   retried. Every file edit is written to a temp file and renamed over the original.
+- **One mutation per tree (since 1.1.9).** What has been applied is recorded in `<corpus>-mutated.txt`
+  BESIDE the corpus (the tree and its marker stay byte-for-byte what a base-vs-variant diff expects):
+  `step <S> <N> <k>` (symbol mode, edits 1..k applied, by `--step` or the default run), `through <S> <N>`, or
+  `bulk` (a 2-way bulk run). Mutate refuses a recorded tree, except `--step k` on `step <S> <N> <k-1>` with the
+  same seed and edit count; `--step k>1` with no record is refused too. Without this, a repeated step or a
+  second bulk run edited files that no longer matched the base and wrote a delta that could not apply to it.
+  `--three-way` leaves B as the base, so it records nothing and can repeat. The record is written while the
+  journal still exists, so a failure there leaves the journal (corpus refused) rather than a stale record. A
+  regen deletes it; a corpus mutated by 1.1.8 or earlier has none and is treated as unmutated.
 - Reads the base `<corpus>-manifest.json` to know ground truth, then selects **N distinct target files**
   deterministically from `(S, k)` (distinct so edit order never conflicts).
 - **`--step k`** — apply exactly edit `k` to the current on-disk state; emit `<corpus>-delta-{k}.json`
