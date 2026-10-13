@@ -146,10 +146,15 @@ public class MutatorSafetyTests
         Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ShardSize = 1, Seed = 1 }));
         Assert.True(File.Exists(Path.Combine(tmp.Path, "corpus-delta.shard-000.json")));
 
+        ForgetMutation(corpus);
         Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", Seed = 2 }));   // monolithic now
         Assert.Empty(Directory.GetFiles(tmp.Path, "corpus-delta.shard-0*.json"));                          // ours swept
         Assert.True(File.Exists(notes));                                                                   // user's kept
     }
+
+    /// <summary>Drop the tree's mutation record, as a corpus mutated by 1.1.8 or earlier has none, so a second
+    /// bulk run is allowed and its stale-artifact sweep can be exercised.</summary>
+    internal static void ForgetMutation(string corpus) => File.Delete(Mutator.MutationStatePath(corpus));
 
     [Fact]
     public void AtomicFile_FailedWrite_KeepsTheOriginalAndLeavesNoTemp()

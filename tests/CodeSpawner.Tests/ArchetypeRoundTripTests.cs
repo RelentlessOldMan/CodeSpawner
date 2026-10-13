@@ -50,6 +50,40 @@ public class ArchetypeRoundTripTests
     }
 
     [Fact]
+    public void Synthesized_LandsWithinHalfALineOfTheTarget()
+    {
+        // Whole units used to overshoot by up to one unit (~1.2 KB of generic code, 2.5% of a real profile's
+        // generic files in the wrong size bucket). The cut ends at the line or unit boundary nearest the target.
+        using var tmp = new TempDir();
+        foreach (ContentClass cls in Enum.GetValues<ContentClass>())
+            foreach (long target in new long[] { 2_000, 5_123, 40_007, (1 << 20) + 37, 3 << 20 })
+            {
+                string path = tmp.File($"{cls}_{target}.dat");
+                var rng = Rng.For(7, Category.ProfileGen, (int)cls);
+                ArchetypeSynthesizer.Write(path, cls, target, ref rng);
+                long len = new FileInfo(path).Length;
+                Assert.True(Math.Abs(len - target) <= 64, $"{cls} @ {target}: {len} bytes");
+            }
+    }
+
+    [Theory]
+    [InlineData(ContentClass.GenericCode)]
+    [InlineData(ContentClass.InlineFunctionHeavy)]
+    public void TinyTargets_StillReClassify(ContentClass cls)
+    {
+        // Cut to the target, a tiny generic file was a lone comment (read as text) and a tiny inline-heavy file a
+        // single function (read as generic code); each class has a floor that keeps enough to re-classify.
+        using var tmp = new TempDir();
+        string path = tmp.File("tiny.dat");
+        for (long target = 1; target <= 400; target++)
+        {
+            var rng = Rng.For(7, Category.ProfileGen, (int)cls);
+            ArchetypeSynthesizer.Write(path, cls, target, ref rng);
+            Assert.Equal(cls, ContentClassifier.Classify(File.ReadAllBytes(path)).Class);
+        }
+    }
+
+    [Fact]
     public void DrawSize_StaysWithinDistributionEnvelope()
     {
         var dist = new SizeDistribution { P50 = 1000, P90 = 5000, Max = 20000 };

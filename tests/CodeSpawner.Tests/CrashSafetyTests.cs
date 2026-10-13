@@ -91,14 +91,43 @@ public class CrashSafetyTests
     }
 
     [Fact]
+    public void BulkMutate_RefusesAMutatedTree_KeepsTheMarker_AndRegenClearsTheRecord()
+    {
+        using var tmp = new TempDir();
+        string corpus = Gen(tmp, "c");
+        string marker = Path.Combine(corpus, ".codespawner");
+        byte[] markerBytes = File.ReadAllBytes(marker);
+
+        // 3-way leaves B as the base: it records nothing, so it can repeat and a 2-way can follow.
+        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--three-way"));
+        Assert.False(File.Exists(Mutator.MutationStatePath(corpus)));
+        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--three-way", "--seed", "2"));
+        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source"));
+        Assert.Equal(markerBytes, File.ReadAllBytes(marker));             // the record lives beside the tree, not in it
+
+        string delta = File.ReadAllText(corpus + "-delta.json");
+        Assert.Equal(1, Cli("mutate", "--corpus", corpus, "--target", "source", "--seed", "2"));
+        Assert.Contains("already mutated", _lastErr);
+        Assert.Contains("--force", _lastErr);                             // says how to get going again
+        Assert.Equal(delta, File.ReadAllText(corpus + "-delta.json"));    // refused before the old delta was swept
+        Assert.Equal(1, Cli("mutate", "--corpus", corpus, "--target", "source", "--three-way"));
+        Assert.Equal(1, Cli("mutate", "--corpus", corpus, "--edits", "1", "--step", "1"));
+
+        Gen(tmp, "c");                                                    // regen in place clears the record
+        Assert.False(File.Exists(Mutator.MutationStatePath(corpus)));
+        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--seed", "2"));
+    }
+
+    [Fact]
     public void SuccessfulMutates_LeaveNoJournal()
     {
         using var tmp = new TempDir();
         string corpus = Gen(tmp, "c", "--cfiles", "8");                // symbol mode needs a few sources per edit type
+        string other = Gen(tmp, "d");
         Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--edits", "2"));
-        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--three-way"));
-        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--edit-kind", "rename"));
-        foreach (var dir in new[] { corpus, corpus + "_v1", corpus + "_v2" })
+        Assert.Equal(0, Cli("mutate", "--corpus", other, "--target", "source", "--three-way"));   // leaves `other` as base
+        Assert.Equal(0, Cli("mutate", "--corpus", other, "--target", "source", "--edit-kind", "rename"));
+        foreach (var dir in new[] { corpus, other, other + "_v1", other + "_v2" })
             Assert.False(File.Exists(Path.Combine(dir, Mutator.JournalName)), dir);
     }
 

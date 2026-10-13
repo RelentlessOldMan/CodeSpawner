@@ -112,6 +112,13 @@ tree then matches neither its base manifest nor any delta, so mutate refuses the
 until you regenerate it. Each file is rewritten through a temp file and renamed into place, so a single file
 is never left half-written.
 
+Mutate also records what it has applied in `<corpus>-mutated.txt`, beside the corpus (never inside it, so a
+diff of base against variant sees only the delta's changes). A mutated tree no longer matches its base, so
+mutate refuses it except for the next `--step` of the same chain: `--step k` needs steps 1..k-1 recorded
+with the same `--seed` and `--edits`, and anything else (a repeated or skipped step, another default,
+`--through` or bulk run) is refused until you regenerate. A `--three-way` run leaves the tree as the base and
+records nothing. Regenerating clears the record; a corpus mutated by 1.1.8 or earlier has none.
+
 ### `digest-selftest`
 Recomputes the four golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`,
 `conflictTruthSha`) from their frozen fixtures and prints them; exit 1 if any drifted. Consumers reproduce

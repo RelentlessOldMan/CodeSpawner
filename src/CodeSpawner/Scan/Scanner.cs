@@ -22,6 +22,11 @@ public sealed class Scanner
     private readonly ScanOptions _o;
     public Scanner(ScanOptions o) => _o = o;
 
+    // Files and dirs the scan could not read; they are left out of the profile, so the run reports them.
+    private int _unreadableFiles, _unreadableDirs;
+    internal int UnreadableFiles => _unreadableFiles;
+    internal int UnreadableDirs => _unreadableDirs;
+
     private sealed class FileEntry
     {
         public required string Path;
@@ -136,12 +141,14 @@ public sealed class Scanner
         ProfileWriter.Write(model, _o.Out);
         Console.WriteLine($"  archetypes: {model.Archetypes.Count}, parsedSourceBytes: {model.ParsedSourceBytes:N0}, " +
                           $"totalIndexedBytes: {model.TotalIndexedBytes:N0}");
+        if (_unreadableFiles + _unreadableDirs > 0)
+            Console.WriteLine($"  skipped (unreadable): {_unreadableFiles} file(s), {_unreadableDirs} dir(s)' contents");
         Console.WriteLine($"Wrote {_o.Out} in {sw.Elapsed.TotalSeconds:N1}s (numbers-only, no names/paths/content).");
         return 0;
     }
 
     // --- walk ---
-    private static void WalkFiles(string root, List<FileEntry> files, Dictionary<string, int> basenameCounts)
+    private void WalkFiles(string root, List<FileEntry> files, Dictionary<string, int> basenameCounts)
     {
         var opts = new EnumerationOptions
         {
@@ -152,7 +159,7 @@ public sealed class Scanner
         foreach (var path in Directory.EnumerateFiles(root, "*", opts))
         {
             long size;
-            try { size = new FileInfo(path).Length; } catch { continue; }
+            try { size = new FileInfo(path).Length; } catch { _unreadableFiles++; continue; }
             string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext.Length == 0) ext = "(none)";
             files.Add(new FileEntry { Path = path, Ext = ext, Size = size });
@@ -197,7 +204,7 @@ public sealed class Scanner
         m.Extensions.Sort((x, y) => y.Bytes.CompareTo(x.Bytes));
     }
 
-    private static void BuildDirStats(string root, ProfileModel m)
+    private void BuildDirStats(string root, ProfileModel m)
     {
         var opts = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
         var dirs = new List<string> { root };
@@ -217,7 +224,7 @@ public sealed class Scanner
                 foreach (var _ in Directory.EnumerateDirectories(d)) childDirs++;
                 foreach (var _ in Directory.EnumerateFiles(d)) childFiles++;
             }
-            catch { /* inaccessible dir: count it but skip children */ }
+            catch { _unreadableDirs++; /* inaccessible dir: count it but skip children */ }
             Bump(depthHist, depth);
             Bump(fanoutHist, BucketCount(childDirs));
             Bump(filesHist, BucketCount(childFiles));
@@ -278,7 +285,7 @@ public sealed class Scanner
         {
             var f = cluster[i];
             int n = ReadPrefix(f.Path, buf);
-            if (n < 0) continue;
+            if (n < 0) { _unreadableFiles++; continue; }
             var span = buf.AsSpan(0, n);
             var st = ContentClassifier.Classify(span);
             arch.Add(span, global);

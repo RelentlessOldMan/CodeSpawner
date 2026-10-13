@@ -1084,12 +1084,14 @@ public class MutatorBulkTests
         Assert.True(File.Exists(index) && shards.Length > 0 && !File.Exists(delta));
 
         // switch to monolithic ⇒ stale index + shards removed, delta present
+        MutatorSafetyTests.ForgetMutation(corpus);
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 8, ShardSize = 0 });
         Assert.True(File.Exists(delta));
         Assert.False(File.Exists(index));
         Assert.Empty(ShardPaths(delta).shards);
 
         // switch back to sharded ⇒ monolithic removed, index back
+        MutatorSafetyTests.ForgetMutation(corpus);
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 9, ShardSize = 2 });
         Assert.False(File.Exists(delta));
         Assert.True(File.Exists(ShardPaths(delta).index));
@@ -1107,13 +1109,14 @@ public class MutatorBulkTests
         Assert.True(File.Exists(index) && ShardPaths(delta).shards.Length > 0);
 
         // a 3-way run must clear the stale 2-way index + shards and write its own v1/v2/conflict set
+        MutatorSafetyTests.ForgetMutation(corpus);
         Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, Seed = 7 });
         Assert.False(File.Exists(index));
         Assert.Empty(ShardPaths(delta).shards);
         Assert.True(File.Exists(corpus + "-delta-v1.json") && File.Exists(corpus + "-delta-v2.json") && File.Exists(corpus + "-conflict.json"));
 
-        // a subsequent 2-way run must clear the stale 3-way artifacts
-        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 8 });
+        // a subsequent 2-way run must clear the stale 3-way artifacts (3-way left the tree alone: nothing recorded)
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditDensity = 0.5, Seed = 8 }));
         Assert.True(File.Exists(delta));
         Assert.False(File.Exists(corpus + "-delta-v1.json"));
         Assert.False(File.Exists(corpus + "-delta-v2.json"));

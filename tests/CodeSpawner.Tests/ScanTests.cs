@@ -37,6 +37,22 @@ public class ScanTests
     }
 
     [Fact]
+    public void Scan_CountsFilesItCannotRead()
+    {
+        using var tmp = new TempDir();
+        string tree = BuildTree(tmp);
+        string prof = Path.Combine(tmp.Path, "prof.json");
+        // Held open with no sharing, the file still lists with its size but can't be opened for sampling.
+        using (new FileStream(Path.Combine(tree, "b.h"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var scan = new Scanner(ArgParser.ParseScan(new[] { tree, "--out", prof }));
+            Assert.Equal(0, scan.Run());
+            Assert.Equal(1, scan.UnreadableFiles);
+            Assert.Equal(0, scan.UnreadableDirs);
+        }
+    }
+
+    [Fact]
     public void Scan_MissingTree_ReturnsError()
     {
         using var tmp = new TempDir();
@@ -136,7 +152,7 @@ public class ScanTests
     }
 
     // gen --from-profile honours the profile: one file per archetype count (named <label>_<i><ext>, "other" → .dat),
-    // every size inside its archetype's drawn range (plus the one-record overshoot of writing whole units), and the same profile + seed is byte-identical.
+    // every size inside its archetype's drawn range (give or take the line the cut lands on), and the same profile + seed is byte-identical.
     [Fact]
     public void GenFromProfile_MatchesArchetypes_AndIsDeterministic()
     {
@@ -157,7 +173,7 @@ public class ScanTests
             string ext = x.Extension == "*" ? ".dat" : x.Extension;
             var mine = files.Where(f => Path.GetFileName(f).StartsWith(x.Label + "_") && f.EndsWith(ext)).ToList();
             Assert.Equal(x.Count, mine.Count);
-            long lo = Math.Max(1, x.SizeDistribution.P50 / 2), hi = Math.Max(x.SizeDistribution.P90, x.SizeDistribution.Max) + 2048;   // + one synth unit (whole records, ~1.2 KB max)
+            long lo = Math.Max(1, x.SizeDistribution.P50 / 2) - 128, hi = Math.Max(x.SizeDistribution.P90, x.SizeDistribution.Max) + 128;   // files end on a line boundary
             Assert.All(mine, f => Assert.InRange(new FileInfo(f).Length, lo, hi));
         }
 
