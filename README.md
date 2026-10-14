@@ -76,7 +76,7 @@ Run `codespawner --help` for the full knob list, or see [`docs/knobs.md`](docs/k
 | Command | Purpose |
 |---|---|
 | `gen --out <dir> [knobs…]` | Generate corpus + manifest. Pure emitter — no shelling to any analyzer. |
-| `verify --corpus <dir> [--manifest <file>]` | Assert the manifest accurately describes the emitted files: def/ref sites exist at `path:line` with the expected token, `unreachableRef`s are genuinely gated, and the `func_i → func_{i-1}` chain is intact. Exit 0 = pass, 1 = fail, 2 = bad input. |
+| `verify --corpus <dir> [--manifest <file>]` | Assert the manifest accurately describes the emitted files: def/ref sites exist at `path:line` with the expected token, `unreachableRef` files carry the `VENDOR_OK` gate with no vendor header present, and every edge target is a declared symbol. Exit 0 = pass, 1 = fail, 2 = bad input. |
 | `scan <tree> --out <profile>` | Measure a real tree into a numbers-only shape profile (no names or content); `gen --from-profile` regenerates a look-alike. |
 | `mutate --corpus <dir> [opts]` | Edit a corpus in place and emit a delta manifest: symbol deltas for incremental indexers, diff/3-way deltas for diff tools. |
 | `digest-selftest` | Recompute the four golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`, `conflictTruthSha`); exit 1 on any drift. |

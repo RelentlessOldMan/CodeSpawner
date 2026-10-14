@@ -170,7 +170,13 @@ public static class ArchetypeSynthesizer
         else if (r < 90) { lo = p50; hi = p90; }
         else { lo = p90; hi = max; }
         if (hi <= lo) return lo;
-        return lo + (long)((ulong)rng.NextULong() % (ulong)(hi - lo));
+        // Log-uniform inside the band, as file sizes are: uniform made the top 10% average (p90+max)/2, so one big
+        // file in a cluster tripled its synthesized bytes. Integer-only (a doubling, then uniform within it), so a
+        // seed draws the same size on every machine.
+        int doublings = 0;
+        while (doublings < 62 && (lo << doublings) < hi && (lo << doublings) <= long.MaxValue / 2) doublings++;
+        long from = lo << rng.Next(doublings), to = Math.Min(hi, from * 2);
+        return from + (long)((ulong)rng.NextULong() % (ulong)Math.Max(1, to - from));
     }
 
     private static int A(byte[] buf, int len, string s)

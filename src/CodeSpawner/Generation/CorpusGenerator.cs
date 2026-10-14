@@ -23,14 +23,14 @@ public sealed class CorpusGenerator
     {
         var sw = Stopwatch.StartNew();
 
-        PrepareOutputDir();
         string outFull = new DirectoryInfo(_o.Out).FullName;
-
-        ResolveIoParallelism(outFull);
-
-        // Fail FAST if the sibling manifest location isn't writable — do not discover it after emitting GBs.
+        // Fail FAST if the sibling manifest location isn't writable — before the old corpus is wiped, not after
+        // emitting GBs.
         string mpath = ManifestPath(outFull);
         if (_o.Manifest) ProbeManifestWritable(mpath);
+
+        PrepareOutputDir();
+        ResolveIoParallelism(outFull);
 
         Console.WriteLine(
             $"Fabricating corpus at {outFull} (scale {_o.Scale}, seed {_o.Seed}, compileDb={_o.CompileDb}) ...");
@@ -405,7 +405,11 @@ public sealed class CorpusGenerator
     /// only ever appears complete (ManifestWriter writes then renames).</summary>
     internal static void ProbeManifestWritable(string mpath, string optOut = "pass --manifest=false")
     {
-        try { using (File.Create(mpath + ".tmp", 1, FileOptions.DeleteOnClose)) { } }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(mpath)!);   // a new --out's parent; preparing --out makes it anyway
+            using (File.Create(mpath + ".tmp", 1, FileOptions.DeleteOnClose)) { }
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ArgException(

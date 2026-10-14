@@ -47,12 +47,14 @@ public static class ManifestVerifier
         }
 
         // --- _meta ---
-        if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("FAIL: no _meta block"); return 1; }
+        // Not a manifest at all (no _meta or no symbols object) is bad input, like invalid JSON: exit 2.
+        if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("error: manifest has no _meta block"); return 2; }
         int ver = meta.TryGetProperty("manifestVersion", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi : -1;
         if (ver != 1) { Console.Error.WriteLine($"FAIL: manifestVersion {ver} != 1"); fail++; }
         else Console.WriteLine("  OK  _meta.manifestVersion == 1");
 
-        if (!root.TryGetProperty("symbols", out var symbols)) { Console.Error.WriteLine("FAIL: no symbols block"); return 1; }
+        if (!root.TryGetProperty("symbols", out var symbols) || symbols.ValueKind != JsonValueKind.Object)
+        { Console.Error.WriteLine("error: manifest has no symbols object"); return 2; }
 
         // Collect symbol names for the edge-chain check.
         var names = new HashSet<string>();
@@ -187,6 +189,9 @@ public static class ManifestVerifier
         }
 
         Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges");
+        // A manifest that declares nothing checkable used to PASS, having proved nothing.
+        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk == 0)
+        { Console.Error.WriteLine("error: the manifest declares nothing to check (no symbol sites, dup groups or indirect edges)"); return 2; }
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
         Console.Error.WriteLine($"verify: FAIL ({fail} problem(s))");
         return 1;

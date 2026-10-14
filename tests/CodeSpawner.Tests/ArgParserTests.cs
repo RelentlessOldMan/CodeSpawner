@@ -90,15 +90,11 @@ public class ArgParserTests
             "--broad-token-files", "8", "--hot-token-share", "0.75",
             "--long-line-files", "2", "--no-newline",
             "--pathological-symbols", "4", "--dup-groups", "5", "--dup-copies", "3",
-            "--from-profile", "p.json", "--with-oracle", "--oracle-chain", "9",
         });
         Assert.Equal(3, o.GiantHeaders);
         Assert.Equal(10, o.CFiles);
         Assert.Equal(0.75, o.HotTokenShare);
         Assert.True(o.NoNewline);
-        Assert.Equal("p.json", o.FromProfile);
-        Assert.True(o.WithOracle);
-        Assert.Equal(9, o.OracleChain);
         // Canon maps the CLI spelling to the Eff knob name, so scaling can skip explicitly-set knobs.
         Assert.True(o.WasSet("GiantHeaders"));
         Assert.True(o.WasSet("BroadTokenFiles"));
@@ -107,16 +103,74 @@ public class ArgParserTests
 
     // Regression: a non-numeric knob value used to escape as an unhandled FormatException (ugly stack dump,
     // bypassing Program.Main's error handling). It must now be a clean ArgException like every other arg error.
+    [Theory]
+    [InlineData("--scale", "0")]
+    [InlineData("--scale", "-1")]
+    [InlineData("--scale", "1e12")]          // used to overflow every scaled count to int.MinValue (= disabled)
+    [InlineData("--cfiles", "-5")]
+    [InlineData("--dup-groups", "-1")]
+    [InlineData("--max-header-mb", "0")]
+    [InlineData("--dirs", "0")]
+    [InlineData("--depth", "0")]
+    [InlineData("--depth", "13")]
+    [InlineData("--linked-roots", "0")]
+    [InlineData("--dup-copies", "1")]
+    [InlineData("--io-parallelism", "0")]
+    [InlineData("--hot-token-share", "1.5")]
+    public void Gen_OutOfRangeKnob_IsRefused(string knob, string value)
+        => Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", knob, value }));
+
+    [Theory]
+    [InlineData("--oracle-chain", "1")]
+    [InlineData("--oracle-fanout", "-1")]
+    [InlineData("--oracle-reachable-frac", "0.001")]
+    [InlineData("--oracle-reachable-frac", "1.5")]
+    public void Gen_OutOfRangeOracleKnob_IsRefused(string knob, string value)
+        => Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--with-oracle", knob, value }));
+
+    // Plain gen never runs the oracle overlay: a non-default oracle knob there would be ignored, so it is refused.
+    // At its default it passes (a _meta.gen replay hands every recorded knob back).
+    [Fact]
+    public void Gen_OracleKnobs_OnPlainGen_RefusedUnlessDefault()
+    {
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--with-oracle" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--oracle-chain", "40" }));
+        ArgParser.ParseGen(new[] { "--out", "c", "--with-oracle=false", "--oracle-chain", "12", "--oracle-reachable-frac", "0" });
+        // and on a profile regen they need --with-oracle
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--oracle-chain", "40" }));
+    }
+
+    // --from-profile takes its shape from the profile; the classic knobs (or a preset's) would be ignored.
+    [Fact]
+    public void Gen_FromProfile_RefusesTheClassicKnobs()
+    {
+        var ex = Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--scale", "0.5", "--cfiles", "3" }));
+        Assert.Contains("--cfiles, --scale", ex.Message);
+        var args = Presets.Expand(new[] { "--preset", "ci", "--out", "c", "--from-profile", "p" }, out int n);
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(args, n));
+        ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--seed", "3", "--force", "--with-oracle", "--oracle-bytes" });
+    }
+
+    [Fact]
+    public void RepeatedOption_IsRefused_OnEveryCommand()
+    {
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "a", "--out", "b" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "a", "--corpus", "b" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseVerify(new[] { "--corpus", "a", "--manifest=m", "--manifest", "n" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "a", "--seed", "1", "--SEED", "2" }));
+    }
+
     [Fact]
     public void Gen_OracleShapeKnobs_Parse()
     {
         var o = ArgParser.ParseGen(new[]
         {
-            "--out", "c", "--with-oracle",
+            "--out", "c", "--from-profile", "p.json", "--with-oracle",
             "--oracle-chain", "20", "--oracle-fanout", "3", "--oracle-depth", "4",
             "--oracle-shared-leaves", "5", "--oracle-reachable-frac", "0.5",
             "--oracle-indirect", "8", "--oracle-bytes", "--oracle-scale",
         });
+        Assert.Equal("p.json", o.FromProfile);
         Assert.True(o.WithOracle);
         Assert.Equal(20, o.OracleChain);
         Assert.Equal(3, o.OracleFanout);

@@ -8,14 +8,19 @@ namespace CodeSpawner.Cli;
 /// </summary>
 public static class ArgParser
 {
-    public static GenOptions ParseGen(string[] args)
+    public static GenOptions ParseGen(string[] args) => ParseGen(args, 0);
+
+    /// <param name="presetTokens">How many leading args a <c>--preset</c> expanded to; the user may override those.</param>
+    public static GenOptions ParseGen(string[] args, int presetTokens)
     {
         var o = new GenOptions { Out = "" };
-        var c = new Cursor(args);
+        var c = new Cursor(args, presetTokens);
+        var given = new HashSet<string>(StringComparer.Ordinal);
         while (c.Next())
         {
             if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}' (expected --knob)");
             string key = c.Key;
+            given.Add(key);
             string Val() => c.Val();
             int I() { o.Explicit.Add(Canon(key)); return c.Int(); }
             double D() { o.Explicit.Add(Canon(key)); return c.Dbl(); }
@@ -75,7 +80,66 @@ public static class ArgParser
         }
 
         if (string.IsNullOrWhiteSpace(o.Out)) throw new ArgException("--out <dir> is required");
+        CheckGen(o, given);
         return o;
+    }
+
+    // Knobs gen --from-profile reads; every other knob would be ignored, so it is refused rather than recorded.
+    private static readonly HashSet<string> ProfileKnobs = new(StringComparer.Ordinal) { "out", "seed", "force", "from-profile", "with-oracle" };
+
+    private static void CheckGen(GenOptions o, HashSet<string> given)
+    {
+        if (o.FromProfile is not null)
+        {
+            var ignored = given.Where(k => !ProfileKnobs.Contains(k) && !k.StartsWith("oracle-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+            if (ignored.Count > 0)
+                throw new ArgException($"--from-profile takes its shape from the profile and ignores {string.Join(", ", ignored.Select(k => "--" + k))}; drop them (a --preset counts too)");
+            var oracle = given.FirstOrDefault(k => k.StartsWith("oracle-", StringComparison.Ordinal));
+            if (oracle is not null && !o.WithOracle) throw new ArgException($"--{oracle} requires --with-oracle");
+        }
+        else
+        {
+            // Plain gen writes its own func_i spine; the oracle overlay only runs on a profile regeneration. A default
+            // value is let through: _meta.gen records these knobs, and replaying it passes them back.
+            var d = new GenOptions { Out = "" };
+            string? oracle = o.WithOracle != d.WithOracle ? "with-oracle"
+                : o.OracleScale != d.OracleScale ? "oracle-scale"
+                : o.OracleBytes != d.OracleBytes ? "oracle-bytes"
+                : o.OracleChain != d.OracleChain ? "oracle-chain"
+                : o.OracleFanout != d.OracleFanout ? "oracle-fanout"
+                : o.OracleDepth != d.OracleDepth ? "oracle-depth"
+                : o.OracleSharedLeaves != d.OracleSharedLeaves ? "oracle-shared-leaves"
+                : o.OracleReachableFrac != d.OracleReachableFrac ? "oracle-reachable-frac"
+                : o.OracleIndirect != d.OracleIndirect ? "oracle-indirect" : null;
+            if (oracle is not null) throw new ArgException($"--{oracle} applies to gen --from-profile only (plain gen ignores it)");
+        }
+
+        // Ranges. Out-of-range values used to be clamped, ignored, or (--scale) overflow into a disabled population.
+        if (!(o.Scale > 0 && o.Scale <= 1000)) throw new ArgException($"--scale must be in (0, 1000], got {o.Scale.ToString(CultureInfo.InvariantCulture)}");
+        foreach (var (k, v) in new (string, int)[]
+        {
+            ("giant-headers", o.GiantHeaders), ("big-headers", o.BigHeaders), ("med-headers", o.MedHeaders),
+            ("ordinary-headers", o.OrdinaryHeaders), ("cfiles", o.CFiles), ("giant-includers", o.GiantIncluders),
+            ("tiny-files", o.TinyFiles), ("blob-files", o.BlobFiles), ("unresolved-includes", o.UnresolvedIncludes),
+            ("macro-density", o.MacroDensity), ("dense-headers", o.DenseHeaders), ("broad-token-files", o.BroadTokenFiles),
+            ("long-line-files", o.LongLineFiles), ("encoding-mix", o.EncodingMix), ("pathological-symbols", o.PathologicalSymbols),
+            ("dup-groups", o.DupGroups), ("shrink-seeds", o.ShrinkSeeds), ("restream-seeds", o.RestreamSeeds),
+            ("oracle-fanout", o.OracleFanout), ("oracle-depth", o.OracleDepth), ("oracle-shared-leaves", o.OracleSharedLeaves),
+            ("oracle-indirect", o.OracleIndirect),
+        })
+            if (v < 0) throw new ArgException($"--{k} must be >= 0, got {v}");
+        foreach (var (k, v, min) in new (string, int, int)[]
+        {
+            ("max-header-mb", o.MaxHeaderMB, 1), ("dense-under-mb", o.DenseUnderMb, 1), ("max-line-bytes", o.MaxLineBytes, 1),
+            ("dirs", o.Dirs, 1), ("linked-roots", o.LinkedRoots, 1), ("dup-copies", o.DupCopies, 2),
+            ("io-parallelism", o.IoParallelism, 1), ("oracle-chain", o.OracleChain, 2),
+        })
+            if (v < min) throw new ArgException($"--{k} must be >= {min}, got {v}");
+        if (o.Depth is < 1 or > 12) throw new ArgException($"--depth must be in 1..12, got {o.Depth}");
+        if (o.HotTokenShare is < 0 or > 1) throw new ArgException("--hot-token-share must be in [0, 1]");
+        // 0 = all reachable; a tiny fraction would size the dead block as live/frac nodes.
+        if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
+            throw new ArgException("--oracle-reachable-frac must be 0 (all reachable) or in [0.01, 1]");
     }
 
     public static VerifyOptions ParseVerify(string[] args)
@@ -207,8 +271,9 @@ public static class ArgParser
     /// <c>--flag</c>, <c>--flag=false</c> or <c>--flag false</c> (the space form only consumes a boolean word, so a
     /// following positional or knob is never eaten). Keys are lower-cased; a non-<c>--</c> arg has a null Key.
     /// </summary>
-    private sealed class Cursor(string[] args)
+    private sealed class Cursor(string[] args, int userFrom = 0)
     {
+        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private int _i = -1;
         private string? _inline;
         public string Raw { get; private set; } = "";
@@ -224,6 +289,9 @@ public static class ArgParser
             int eq = k.IndexOf('=');
             if (eq >= 0) { _inline = k[(eq + 1)..]; k = k[..eq]; }
             Key = k.ToLowerInvariant();
+            // A repeated option used to be last-wins without a word. A preset's own tokens (the first userFrom
+            // args) are exempt: the user overriding them is the point.
+            if (_i >= userFrom && !_seen.Add(Key)) throw new ArgException($"--{Key} is given twice");
             return true;
         }
 

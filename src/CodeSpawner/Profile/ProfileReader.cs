@@ -7,6 +7,7 @@ public static class ProfileReader
 {
     public static ProfileModel Load(string path)
     {
+        if (!File.Exists(path)) throw new Cli.ArgException($"profile not found: {path}");
         byte[] bytes = File.ReadAllBytes(path);
         using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
@@ -14,7 +15,7 @@ public static class ProfileReader
         var meta = root.GetProperty("_meta");
         int ver = meta.TryGetProperty("profileVersion", out var v) ? v.GetInt32() : -1;
         if (ver != ProfileModel.ProfileVersion)
-            throw new InvalidOperationException($"profile version {ver} != {ProfileModel.ProfileVersion}");
+            throw new FormatException($"profile version {ver} != {ProfileModel.ProfileVersion}");
 
         var m = new ProfileModel
         {
@@ -73,6 +74,10 @@ public static class ProfileReader
                 });
             }
 
+        // Two archetypes with one label and extension would write the same "{label}_{i}{ext}" files over each other.
+        var dup = m.Archetypes.GroupBy(a => (a.Label + "\0" + a.Extension).ToLowerInvariant()).FirstOrDefault(g => g.Count() > 1);
+        if (dup is not null)
+            throw new FormatException($"profile lists archetype '{dup.First().Label}' ({dup.First().Extension}) more than once");
         return m;
     }
 
@@ -86,13 +91,13 @@ public static class ProfileReader
     private static string SafeLabel(string label) =>
         label.Length > 0 && label.IndexOfAny(Forbidden) < 0
             ? label
-            : throw new InvalidOperationException($"profile archetype label '{label}' is not a plain file-name fragment");
+            : throw new FormatException($"profile archetype label '{label}' is not a plain file-name fragment");
 
     // "*" is the catch-all archetype (regenerated as .dat) and "(none)" is what scan records for extensionless files.
     private static string SafeExtension(string ext) =>
         ext == "*" || ext.IndexOfAny(Forbidden) < 0
             ? ext
-            : throw new InvalidOperationException($"profile archetype extension '{ext}' is not a plain file-name fragment");
+            : throw new FormatException($"profile archetype extension '{ext}' is not a plain file-name fragment");
 
     private static PrivacyPosture ParsePosture(string? s) => s switch
     {

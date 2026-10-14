@@ -7,6 +7,11 @@ Counts default to full-repo targets and are multiplied by `--scale` — UNLESS y
 explicitly, in which case it is taken literally (a one-off run means what it says). Per-file **sizes are
 never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` keeps at least one giant.
 
+Out-of-range values are refused (exit 2) rather than clamped or ignored (since 1.1.11): `--scale` must be in
+(0, 1000]; counts must be ≥ 0; `--max-header-mb`, `--dense-under-mb`, `--max-line-bytes`, `--dirs`,
+`--linked-roots` and `--io-parallelism` ≥ 1; `--dup-copies` ≥ 2; `--depth` 1..12; `--hot-token-share` in
+[0, 1]. Giving the same knob twice is refused too (a knob after a `--preset` overrides the preset's value).
+
 | Knob | Default | Property it stresses |
 |---|---|---|
 | `--scale <f>` | `0.01` | Count multiplier for every count knob. |
@@ -76,11 +81,17 @@ Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the thresho
 
 | Knob | Default | Property it stresses |
 |---|---|---|
-| `--io-parallelism <n>` | auto | Max concurrent large-header writes. Auto picks all cores on an SSD, 1 on a spinning disk, and min(cores, 4) when the disk type can't be detected (e.g. a network share); the choice is printed. |
+| `--io-parallelism <n>` | auto | Max concurrent header writes (giant, big, medium and dense headers, and the `--shrink-seeds`/`--restream-seeds` headers); ordinary headers, sources and small files always use every core, and `--from-profile` does not take it. Auto picks all cores on an SSD, 1 on a spinning disk, and min(cores, 4) when the disk type can't be detected (e.g. a network share); the choice is printed. |
 
 ## `gen --from-profile` and the oracle overlay
 
 See [scan-design.md](scan-design.md) and [oracle-v1-design.md](oracle-v1-design.md).
+
+`--from-profile` reads only `--out`, `--seed`, `--force` and the knobs below; any other knob (a preset's
+included) would be ignored, so it is refused. The `--oracle-*` knobs need `--with-oracle`, and on a plain
+`gen` (no profile) a non-default oracle knob is refused, since plain gen never runs the overlay. At its
+default value one is accepted, because a `_meta.gen` replay passes every recorded knob back (since 1.1.11).
+`--oracle-chain` must be ≥ 2, the other counts ≥ 0, and `--oracle-reachable-frac` 0 or in [0.01, 1].
 
 | Knob | Default | What it does |
 |---|---|---|

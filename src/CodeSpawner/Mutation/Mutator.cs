@@ -107,7 +107,7 @@ public static class Mutator
             string journal = BeginJournal(corpus);
             try { CommitStep(corpus, basem, o, k, prevSha, before, work, ops, plan[k - 1]); }
             catch { File.Delete(journal); throw; }             // a step commits or fails cleanly (see CommitStep)
-            WriteMutationState(corpus, $"{StepState} {o.Seed} {o.Edits} {k}");   // fails ⇒ the journal stays
+            WriteMutationState(corpus, StepStateOf(o, k));      // fails ⇒ the journal stays
             File.Delete(journal);
         }
         else if (o.Through)
@@ -123,7 +123,7 @@ public static class Mutator
                 ApplyDisk(plan[j]);
             }
             WriteDelta(corpus, basem, o, null, prevSha, before, work, ops);
-            WriteMutationState(corpus, $"{ThroughState} {o.Seed} {o.Edits}");
+            WriteMutationState(corpus, $"{ThroughState} {o.Seed} {o.Edits}{RestreamTag(o)}");
             File.Delete(journal);
         }
         else
@@ -139,7 +139,7 @@ public static class Mutator
                 // Steps before a clean failure are committed with deltas and recorded, so --step can carry on.
                 try { CommitStep(corpus, basem, o, j + 1, prevSha, before, work, ops, plan[j]); }
                 catch { File.Delete(journal); throw; }
-                WriteMutationState(corpus, $"{StepState} {o.Seed} {o.Edits} {j + 1}");
+                WriteMutationState(corpus, StepStateOf(o, j + 1));
             }
             File.Delete(journal);
         }
@@ -149,11 +149,16 @@ public static class Mutator
     // ---- mutation state (re-mutate guard) ----------------------------------------------------------------
     // What has been applied to the tree, kept in <corpus>-mutated.txt BESIDE the corpus, not in it: the tree
     // (and its .codespawner marker) stays byte-for-byte what a diff of base vs variant expects. One line:
-    //   step <seed> <edits> <k>   symbol mode, edits 1..k applied (by --step or the default run)
-    //   through <seed> <edits>    symbol mode --through
-    //   bulk                      a 2-way bulk run (3-way leaves the tree alone and records nothing)
-    // No file = unmutated, which is also how a corpus from 1.1.8 or earlier reads. A regen deletes it.
-    private const string StepState = "step", ThroughState = "through", BulkState = "bulk";
+    //   step <seed> <edits> <k>[ restream]   symbol mode, edits 1..k applied (by --step or the default run)
+    //   through <seed> <edits>[ restream]    symbol mode --through
+    //   bulk                                 a 2-way bulk run
+    //   variant                              a 3-way _v1/_v2 tree (in <corpus>_vN-mutated.txt; B itself is untouched)
+    // " restream" marks a --restream plan, which differs from the plain one. No file = unmutated, which is also how
+    // a corpus from 1.1.8 or earlier reads. A regen deletes it.
+    private const string StepState = "step", ThroughState = "through", BulkState = "bulk", VariantState = "variant";
+
+    private static string RestreamTag(MutateOptions o) => o.Restream ? " restream" : "";
+    private static string StepStateOf(MutateOptions o, int k) => $"{StepState} {o.Seed} {o.Edits} {k}{RestreamTag(o)}";
 
     internal static string MutationStatePath(string corpusBase) => $"{corpusBase}-mutated.txt";
 
@@ -174,12 +179,12 @@ public static class Mutator
         {
             if (o.Step is { } k && !o.IsBulk)
             {
-                string want = $"{StepState} {o.Seed} {o.Edits} {k - 1}";
+                string want = StepStateOf(o, k - 1);
                 if (k == 1) return state is null ? null : $"it is already mutated ({state})";
                 if (state == want) return null;
                 return state is null
                     ? $"--step {k} needs steps 1..{k - 1} applied first, and none are recorded"
-                    : $"--step {k} needs '{want}' (steps 1..{k - 1} of this --seed/--edits chain), but the tree records '{state}'";
+                    : $"--step {k} needs '{want}' (steps 1..{k - 1} of this --seed/--edits/--restream chain), but the tree records '{state}'";
             }
             if (o.ThreeWay && state is not null) return $"it is already mutated ({state}), so the variants would not start from the base";
             return state is null ? null : $"it is already mutated ({state})";
@@ -231,7 +236,13 @@ public static class Mutator
         {
             // B itself is never edited; each variant carries a journal from its copy (CopyTree) until the run ends.
             int rc = o.ConflictEdges ? RunThreeWayEdges(o, corpus, basem, chosen) : RunThreeWay(o, corpus, basem, chosen);
-            foreach (var v in new[] { "_v1", "_v2" }) File.Delete(Path.Combine(TrimDir(corpus) + v, JournalName));
+            foreach (var v in new[] { "_v1", "_v2" })
+            {
+                // A variant carries the base's marker but not its bytes: mutating it against the base manifest would
+                // emit a delta that applies to neither, so it is recorded as mutated like any edited tree.
+                WriteMutationState(TrimDir(corpus) + v, VariantState);
+                File.Delete(Path.Combine(TrimDir(corpus) + v, JournalName));
+            }
             return rc;
         }
 
@@ -681,6 +692,8 @@ public static class Mutator
             else i++;
         }
         if (r.InsLen > 0) hunks.Add(new Hunk(HunkOp.Insert, p.InsAnchor, 0, r.InsOutStart, r.InsLen));
+        // file order, as a line diff emits them: the add/add insert sits between the regions around its anchor
+        hunks.Sort((a, b) => a.OldStart != b.OldStart ? a.OldStart.CompareTo(b.OldStart) : a.NewStart.CompareTo(b.NewStart));
         return hunks;
     }
 
@@ -699,6 +712,7 @@ public static class Mutator
         EdgeRender r1, EdgeRender r2, List<Conflict> conflicts, List<CleanMerge> clean)
     {
         int L = baseLines.Count;
+        int conflictsFrom = conflicts.Count, cleanFrom = clean.Count;
         int i = 1;
         while (i <= L)
         {
@@ -734,6 +748,11 @@ public static class Mutator
             if (c1 == c2) clean.Add(new CleanMerge(rel, "v1", HunkOp.Insert, a, 0, r1.InsOutStart, r1.InsLen));
             else conflicts.Add(new Conflict(rel, a, 0, HunkOp.Insert, r1.InsOutStart, r1.InsLen, HunkOp.Insert, r2.InsOutStart, r2.InsLen));
         }
+        // this file's records in base order, the insert anchor among them (an insert after line a precedes line a+1)
+        conflicts.Sort(conflictsFrom, conflicts.Count - conflictsFrom,
+            Comparer<Conflict>.Create((x, y) => x.BaseStart != y.BaseStart ? x.BaseStart.CompareTo(y.BaseStart) : x.BaseLines.CompareTo(y.BaseLines)));
+        clean.Sort(cleanFrom, clean.Count - cleanFrom,
+            Comparer<CleanMerge>.Create((x, y) => x.OldStart != y.OldStart ? x.OldStart.CompareTo(y.OldStart) : x.OldLines.CompareTo(y.OldLines)));
     }
 
     private static int SumLen(EdgeRender r, int s, int e) { int n = 0; for (int k = s; k <= e; k++) n += r.OutLen[k]; return n; }
@@ -1047,7 +1066,7 @@ public static class Mutator
         string inserted = $"// mutate single-locality insert {idx}";
 
         var sb = new StringBuilder();
-        bool pendingCr = false;
+        bool pendingCr = false, anchorUnterminated = false;
         long lineNo = 0;
         ReplaceViaTemp(abs, tmp =>
         {
@@ -1056,7 +1075,11 @@ public static class Mutator
             void Flush(string term)
             {
                 writer.Write(sb); writer.Write(term); sb.Clear(); lineNo++;
-                if (lineNo == anchor) { writer.Write(inserted); writer.Write('\n'); }   // one inserted line, after the anchor
+                if (lineNo != anchor) return;
+                // An anchor with no terminator (a one-line file without a final newline) gets one first, or the
+                // insert would merge into it.
+                if (term.Length == 0) { writer.Write('\n'); anchorUnterminated = true; }
+                writer.Write(inserted); writer.Write('\n');    // one inserted line, after the anchor
             }
             var buf = new char[1 << 16];
             int read;
@@ -1074,9 +1097,14 @@ public static class Mutator
             return true;
         });
 
-        // one explicit insert hunk: after old line `anchor` (oldLines=0), the new line sits at `anchor+1`.
+        // one explicit insert hunk: after old line `anchor` (oldLines=0), the new line sits at `anchor+1`. When the
+        // anchor gained a terminator it changed too (a line diff tells "x" from "x\n"): ONE replace of it by itself
+        // plus the insert (old a,1 -> new a,2), not a modify and a separate insert.
         int a = (int)Math.Min(anchor, int.MaxValue);
-        return new EditResult(new List<Hunk> { new(HunkOp.Insert, a, 0, a + 1, 1) }, null);
+        return new EditResult(new List<Hunk>
+        {
+            anchorUnterminated ? new(HunkOp.Replace, a, 1, a, 2) : new(HunkOp.Insert, a, 0, a + 1, 1),
+        }, null);
     }
 
     /// <summary>Stream-count the lines of a giant file (terminator-faithful: a missing final newline still
@@ -1477,8 +1505,8 @@ public static class Mutator
                     if (SplitSite(work[name].Def).path == rel) work.Remove(name);
                 foreach (var s in work.Values)
                     s.Refs.RemoveAll(r => SplitSite(r).path == rel);
-                if (live)
-                    foreach (var f in SiblingSet(e.Path)) ops.Removed.Add(RelOf(corpus, f));
+                if (live)                                      // only what is on disk: a sibling never built isn't removed
+                    foreach (var f in SiblingSet(e.Path)) { if (f == e.Path || File.Exists(f)) ops.Removed.Add(RelOf(corpus, f)); }
                 else ops.Removed.Add(rel);
                 break;
             }
@@ -1500,6 +1528,10 @@ public static class Mutator
                 break;
             }
             case EditType.Grow:
+                // The grow pool wraps, so a header can come round again already past the target: ApplyDisk leaves it
+                // as it is, and the truth must not claim a change (a table-only replay records nothing anyway).
+                if (live && new FileInfo(e.Path).Length < GrowTargetBytes) ops.Modified.Add(rel);
+                break;
             case EditType.Shrink:
             case EditType.Restream:
                 ops.Modified.Add(rel);
@@ -1518,11 +1550,22 @@ public static class Mutator
                 break;
             case EditType.LineShift:
             {
-                var lines = new List<string>(File.ReadAllLines(e.Path));
+                // Only the filler lines are new: the file keeps its encoding + BOM, every line its own terminator, and
+                // a missing final newline stays missing. The filler uses the terminator of the line it lands before.
+                if (!TryReadText(e.Path, out string text, out var encoding))
+                    throw new InvalidOperationException($"line-shift target '{e.Path}' is not editable text");
+                var lines = SplitLines(text);
                 int at = Math.Clamp(e.DefLine - 1, 0, lines.Count);
-                var pad = Enumerable.Range(0, LineShiftLines).Select(i => $"// mutate line-shift filler {i}");
-                lines.InsertRange(at, pad);
-                WriteText(e.Path, string.Join('\n', lines), Encodings.Utf8NoBom);
+                string term = at < lines.Count && lines[at].term.Length > 0 ? lines[at].term
+                            : lines.Select(l => l.term).FirstOrDefault(t => t.Length > 0) ?? "\n";
+                var sb = new StringBuilder();
+                for (int k = 0; k <= lines.Count; k++)
+                {
+                    if (k == at)
+                        for (int i = 0; i < LineShiftLines; i++) sb.Append("// mutate line-shift filler ").Append(i).Append(term);
+                    if (k < lines.Count) sb.Append(lines[k].content).Append(lines[k].term);
+                }
+                WriteText(e.Path, sb.ToString(), encoding);
                 break;
             }
             case EditType.Add:                                 // def on line 2
@@ -1590,6 +1633,7 @@ public static class Mutator
                 w.WriteString("def", a!.Def);
                 WriteArray(w, "refs", a.Refs);
                 WriteArray(w, "edges", a.Edges);
+                ManifestWriter.WriteIndirectEdges(w, a.IndirectEdges);   // as in the base; not part of prevTruthSha
                 if (inB) { var removed = b!.Refs.Except(a.Refs).ToList(); if (removed.Count > 0) WriteArray(w, "removedSites", removed); }
                 if (a.ExpectedMiss) w.WriteBoolean("expectedMiss", true);
                 w.WriteEndObject();
@@ -1851,14 +1895,21 @@ public static class Mutator
                 ExpectedMiss = v.ExpectedMiss,
                 UnreachableRefs = v.UnreachableRefs is null ? null : new List<string>(v.UnreachableRefs),
             };
-        foreach (var (k, v) in src) { d[k].Refs.AddRange(v.Refs); d[k].Edges.AddRange(v.Edges); }
+        foreach (var (k, v) in src)
+        {
+            d[k].Refs.AddRange(v.Refs); d[k].Edges.AddRange(v.Edges);
+            d[k].IndirectEdges.AddRange(v.IndirectEdges);      // immutable, so shared
+        }
         return d;
     }
 
     private static bool Equal(SymbolEntry a, SymbolEntry b) =>
         a.Def == b.Def && a.ExpectedMiss == b.ExpectedMiss &&
         a.Refs.Count == b.Refs.Count && !a.Refs.Except(b.Refs).Any() &&
-        a.Edges.Count == b.Edges.Count && !a.Edges.Except(b.Edges).Any();
+        a.Edges.Count == b.Edges.Count && !a.Edges.Except(b.Edges).Any() &&
+        a.IndirectEdges.Select(IndirectKey).SequenceEqual(b.IndirectEdges.Select(IndirectKey));
+
+    private static (string, IndirectVia, bool, bool) IndirectKey(IndirectEdge e) => (e.Target, e.Via, e.Dispatched, e.Resolved);
 
     private static (string path, int line) SplitSite(string site)
     {
@@ -1928,10 +1979,18 @@ public static class Mutator
 
     /// <summary>A manifest-supplied def path, resolved with the same containment rule verify uses: the edit (and the
     /// remove's .o/.lst/.bak sibling deletes) may only land inside the corpus or its --linked-roots siblings.</summary>
-    private static string ManifestAbs(string corpus, string symbol, string rel) =>
-        PathUtil.ResolveInCorpus(corpus, rel)
-        ?? throw new ArgException($"manifest def for '{symbol}' points outside the corpus ('{rel}'); refusing to edit it. " +
-                                  "Is --manifest the manifest for this --corpus?");
+    private static string ManifestAbs(string corpus, string symbol, string rel)
+    {
+        string abs = PathUtil.ResolveInCorpus(corpus, rel)
+            ?? throw new ArgException($"manifest def for '{symbol}' points outside the corpus ('{rel}'); refusing to edit it. " +
+                                      "Is --manifest the manifest for this --corpus?");
+        // The marker and the journal are CodeSpawner's, not corpus files: a remove would delete the marker (and with
+        // it the regen ownership check), an edit would corrupt the journal.
+        string name = Path.GetFileName(abs);
+        if (name.Equals(OutputDir.MarkerName, StringComparison.OrdinalIgnoreCase) || name.Equals(JournalName, StringComparison.OrdinalIgnoreCase))
+            throw new ArgException($"manifest def for '{symbol}' names CodeSpawner's own file '{rel}'; refusing to edit it");
+        return abs;
+    }
 
     private static string AbsOf(string corpus, string rel) => Path.GetFullPath(Path.Combine(corpus, rel.Replace('/', Path.DirectorySeparatorChar)));
     private static string RelOf(string corpus, string abs) => PathUtil.Rel(corpus, abs);

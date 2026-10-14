@@ -42,7 +42,7 @@ public sealed class Scanner
         if (!Directory.Exists(treeFull))
         {
             Console.Error.WriteLine($"error: tree '{_o.Tree}' is not a directory");
-            return 1;
+            return 2;
         }
         Console.WriteLine($"Scanning {treeFull} (posture={_o.Posture.Label()}, minCluster={_o.MinCluster}, sample={_o.Sample}) ...");
 
@@ -227,11 +227,11 @@ public sealed class Scanner
         var depthHist = new SortedDictionary<int, long>();
         var fanoutHist = new SortedDictionary<int, long>();
         var filesHist = new SortedDictionary<int, long>();
-        int rootDepth = root.Count(c => c == Path.DirectorySeparatorChar);
-
         foreach (var d in dirs)
         {
-            int depth = d.Count(c => c == Path.DirectorySeparatorChar) - rootDepth;
+            // Relative to the root, so a trailing separator on the tree argument (or a drive root) doesn't shift it.
+            int depth = ReferenceEquals(d, root) ? 0
+                      : Path.GetRelativePath(root, d).Count(c => c == Path.DirectorySeparatorChar) + 1;
             int childDirs = 0, childFiles = 0;
             try
             {

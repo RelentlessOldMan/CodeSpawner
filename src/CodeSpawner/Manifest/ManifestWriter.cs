@@ -80,20 +80,7 @@ public static class ManifestWriter
             foreach (var e in s.Edges) w.WriteStringValue(e);
             w.WriteEndArray();
 
-            if (s.IndirectEdges.Count > 0)
-            {
-                w.WriteStartArray("indirectEdges");
-                foreach (var ie in s.IndirectEdges)
-                {
-                    w.WriteStartObject();
-                    w.WriteString("target", ie.Target);
-                    w.WriteString("via", ie.Via.Label());
-                    w.WriteBoolean("dispatched", ie.Dispatched);
-                    w.WriteBoolean("resolved", ie.Resolved);
-                    w.WriteEndObject();
-                }
-                w.WriteEndArray();
-            }
+            WriteIndirectEdges(w, s.IndirectEdges);
 
             if (s.UnreachableRefs is { Count: > 0 })
             {
@@ -132,5 +119,23 @@ public static class ManifestWriter
 
         w.WriteEndObject();
         w.Flush();
+    }
+
+    /// <summary>A symbol's <c>indirectEdges</c> array (omitted when it has none), as in the base manifest and in a
+    /// symbol delta's changed entries.</summary>
+    internal static void WriteIndirectEdges(Utf8JsonWriter w, List<IndirectEdge> edges)
+    {
+        if (edges.Count == 0) return;
+        w.WriteStartArray("indirectEdges");
+        foreach (var ie in edges)
+        {
+            w.WriteStartObject();
+            w.WriteString("target", ie.Target);
+            w.WriteString("via", ie.Via.Label());
+            w.WriteBoolean("dispatched", ie.Dispatched);
+            w.WriteBoolean("resolved", ie.Resolved);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
     }
 }

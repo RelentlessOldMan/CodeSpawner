@@ -17,7 +17,8 @@ public class MutatorTests
     // A corpus of nFuncs one-func source files (src_a.c, src_b.c, …), func_i defined at line 2. Every symbol
     // carries a ref into EVERY file (line 4) so removing any one file always drops ref-sites from the survivors
     // (⇒ removedSites is exercised whichever file the shuffle picks).
-    private static (string corpus, string delta) BuildSymbolCorpus(TempDir tmp, int nFuncs, Action<string>? extra = null)
+    private static (string corpus, string delta) BuildSymbolCorpus(TempDir tmp, int nFuncs, Action<string>? extra = null,
+        bool indirect = false)
     {
         string corpus = Path.Combine(tmp.Path, "corpus");
         Directory.CreateDirectory(corpus);
@@ -31,6 +32,7 @@ public class MutatorTests
                 $"#include <stddef.h>\nint func_{i}(int x) {{ return x + {i}; }}\nint pad_{i}(void) {{ return {i}; }}\n// tail\n");
             var e = new SymbolEntry { Def = $"{files[i - 1]}:2" };
             foreach (var f in files) e.Refs.Add($"{f}:4");     // a ref into every file
+            if (indirect) e.IndirectEdges.Add(new IndirectEdge { Target = $"func_{i}", Via = IndirectVia.InitArray, Dispatched = true });
             m.Symbols[$"func_{i}"] = e;
         }
         extra?.Invoke(corpus);
@@ -269,17 +271,128 @@ public class MutatorTests
     }
 
     [Fact]
-    public void Remove_DeletesSiblingSet_IncludingPhantomSidecars()
+    public void Remove_DeletesSiblingSet_RecordsOnlySidecarsThatExisted()
     {
         using var tmp = new TempDir();
         var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 4);
+        foreach (var c in Directory.GetFiles(corpus, "*.c", SearchOption.AllDirectories))
+            File.WriteAllText(Path.ChangeExtension(c, ".o"), "obj");             // a built object beside each source
         Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 1, Seed = 9 });   // edit 1 = Remove
         using var d = Doc(StepDelta(corpus, 1));
         var removed = Arr(d.RootElement.GetProperty("fileOps"), "removed");
-        string stem = Path.GetFileNameWithoutExtension(removed.First(p => p.EndsWith(".c")));
-        // the sibling set (.c + .o/.lst/.bak) is always recorded, even for sidecars that never existed on disk
-        foreach (var ext in new[] { ".c", ".o", ".lst", ".bak" })
-            Assert.Contains(removed, p => p.EndsWith($"{stem}{ext}"));
+        string c0 = removed.Single(p => p.EndsWith(".c"));
+        string stem = c0[..^2];
+        // the source and its .o are gone and recorded; .lst/.bak never existed, so they are not "removed"
+        Assert.Equal(new[] { c0, stem + ".o" }, removed.OrderBy(p => p, StringComparer.Ordinal));
+        Assert.False(File.Exists(Path.Combine(corpus, stem + ".o")));
+    }
+
+    // A symbol delta carries a changed entry's indirectEdges as the base manifest does, and they stay out of
+    // prevTruthSha: the chain digests are the same with or without them.
+    [Fact]
+    public void SymbolDelta_KeepsIndirectEdges_OutOfTheTruthDigest()
+    {
+        string[] Shas(bool indirect)
+        {
+            using var tmp = new TempDir();
+            var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6, indirect: indirect);
+            Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 3, Seed = 5 });   // Remove, LineShift, Add
+            using var d2 = Doc(StepDelta(corpus, 2));                                   // LineShift: survivors change
+            var changed = d2.RootElement.GetProperty("symbols").EnumerateObject().Where(s => s.Value.ValueKind == JsonValueKind.Object).ToList();
+            Assert.NotEmpty(changed);
+            Assert.All(changed, s => Assert.Equal(indirect, s.Value.TryGetProperty("indirectEdges", out _)));
+            if (indirect)
+                Assert.All(changed, s => Assert.Equal(s.Name, s.Value.GetProperty("indirectEdges")[0].GetProperty("target").GetString()));
+            return Enumerable.Range(1, 3).Select(k =>
+            {
+                using var d = Doc(StepDelta(corpus, k));
+                return d.RootElement.GetProperty("_meta").GetProperty("prevTruthSha").GetString()!;
+            }).ToArray();
+        }
+        Assert.Equal(Shas(false), Shas(true));
+    }
+
+    // Line-shift inserts its filler and nothing else: the file keeps its BOM, its CRLF terminators and its missing
+    // final newline (it used to come back LF, BOM-less, without the unterminated last line's state).
+    [Fact]
+    public void LineShift_KeepsBomLineEndingsAndMissingFinalNewline()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6, extra: c =>
+        {
+            foreach (var f in Directory.GetFiles(c, "*.c"))
+                File.WriteAllText(f, File.ReadAllText(f).TrimEnd('\n').Replace("\n", "\r\n"), new System.Text.UTF8Encoding(true));
+        });
+        Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 2, Seed = 5 });      // Remove, LineShift
+        using var d2 = Doc(StepDelta(corpus, 2));
+        string rel = Arr(d2.RootElement.GetProperty("fileOps"), "modified").Single();
+        byte[] b = File.ReadAllBytes(Path.Combine(corpus, rel));
+        Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, b[..3]);
+        string s = System.Text.Encoding.UTF8.GetString(b, 3, b.Length - 3);
+        Assert.Contains("// mutate line-shift filler 0\r\n", s);
+        Assert.Equal(s.Split('\n').Length - 1, s.Split("\r\n").Length - 1);          // every LF is a CRLF
+        Assert.EndsWith("// tail", s);                                               // still no final newline
+    }
+
+    // The grow pool wraps; a header that comes round again is already at the target, so the second Grow changes
+    // nothing and must not be recorded as a modification (in a step delta or a cumulative one).
+    [Fact]
+    public void RepeatedGrow_OnAnAlreadyGrownHeader_IsNotRecorded()
+    {
+        try
+        {
+            Mutator.GrowTargetOverride = 8 * 1024;
+            foreach (bool through in new[] { false, true })
+            {
+                using var tmp = new TempDir();
+                var (corpus, delta) = BuildSymbolCorpus(tmp, nFuncs: 6, extra: c =>
+                    File.WriteAllText(Path.Combine(c, "hdr_0.h"), "#pragma once\n"));
+                // types = [Remove, LineShift, Add, Grow]: edits 4 and 8 both grow hdr_0.h
+                Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 8, Seed = 3, Through = through });
+                if (through)
+                {
+                    using var d = Doc(delta);
+                    Assert.Single(Arr(d.RootElement.GetProperty("fileOps"), "modified"), p => p == "hdr_0.h");
+                    continue;
+                }
+                using (var d4 = Doc(StepDelta(corpus, 4))) Assert.Equal(new[] { "hdr_0.h" }, Arr(d4.RootElement.GetProperty("fileOps"), "modified"));
+                using (var d8 = Doc(StepDelta(corpus, 8))) Assert.Empty(Arr(d8.RootElement.GetProperty("fileOps"), "modified"));
+            }
+        }
+        finally { Mutator.GrowTargetOverride = null; }
+    }
+
+    // --restream changes the plan, so the next --step must use the same setting as the steps already applied.
+    [Fact]
+    public void Step_RefusesAChainContinuedWithADifferentRestream()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 6, extra: c =>
+            File.WriteAllText(Path.Combine(c, "mut_restream_0.h"), "x"));
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 4, Seed = 3, Step = 1, Restream = true }));
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 4, Seed = 3, Step = 2 }));
+        Assert.Contains("restream", ex.Message);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 4, Seed = 3, Step = 2, Restream = true }));
+    }
+
+    // A hostile or corrupt manifest: a def naming the corpus marker would have a Remove delete it (and with it the
+    // regen ownership check), and a NUL in a def path crashed the process instead of being refused.
+    [Theory]
+    [InlineData(".codespawner")]
+    [InlineData("src_a\u0000.c")]
+    public void ManifestDef_OnTheMarker_OrWithANul_IsRefused(string def)
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildSymbolCorpus(tmp, nFuncs: 4);
+        string manifest = Path.Combine(tmp.Path, "corpus-manifest.json");
+        string esc = System.Text.Json.JsonEncodedText.Encode(def).ToString();
+        File.WriteAllText(manifest, System.Text.RegularExpressions.Regex.Replace(File.ReadAllText(manifest),
+            "\"def\":\\s*\"[^\"]*\"", _ => $"\"def\": \"{esc}:1\""));
+
+        Assert.Throws<ArgException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 1, Seed = 9 }));
+        Assert.True(File.Exists(Path.Combine(corpus, ".codespawner")));
+        Assert.False(File.Exists(StepDelta(corpus, 1)));
     }
 
     [Fact]

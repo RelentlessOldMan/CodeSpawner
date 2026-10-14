@@ -32,7 +32,7 @@ public static class Program
             switch (cmd)
             {
                 case "gen":
-                    var genOpts = ArgParser.ParseGen(Presets.Expand(rest));
+                    var genOpts = ArgParser.ParseGen(Presets.Expand(rest, out int presetTokens), presetTokens);
                     if (genOpts.FromProfile is not null) new ProfileGenerator(genOpts).Run();
                     else new CorpusGenerator(genOpts).Run();
                     return 0;

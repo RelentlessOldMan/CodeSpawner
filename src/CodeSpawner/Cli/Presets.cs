@@ -81,30 +81,37 @@ public static class Presets
     }
 
     /// <summary>Pull a leading/embedded <c>--preset NAME</c> out of args and prepend its tokens.</summary>
-    public static string[] Expand(string[] args)
+    public static string[] Expand(string[] args) => Expand(args, out _);
+
+    /// <summary>The preset's tokens followed by the user's own args; <paramref name="presetTokens"/> is how many
+    /// leading tokens came from the preset, so the parser can let the user override them without calling that a
+    /// repeated option.</summary>
+    public static string[] Expand(string[] args, out int presetTokens)
     {
         string? name = null;
         var rest = new List<string>(args.Length);
         for (int i = 0; i < args.Length; i++)
         {
             string a = args[i];
+            string? n = null;
             if (a == "--preset")
             {
                 if (i + 1 >= args.Length) throw new ArgException($"--preset needs a name ({string.Join("|", Names)})");
-                name = args[++i];
+                n = args[++i];
             }
-            else if (a.StartsWith("--preset=", StringComparison.Ordinal))
-            {
-                name = a["--preset=".Length..];
-            }
-            else rest.Add(a);
+            else if (a.StartsWith("--preset=", StringComparison.Ordinal)) n = a["--preset=".Length..];
+            else { rest.Add(a); continue; }
+            if (name is not null) throw new ArgException("--preset is given twice; pick one");
+            name = n;
         }
 
+        presetTokens = 0;
         if (name is null) return args;
         if (!TryGet(name, out var tokens))
             throw new ArgException($"unknown preset '{name}' ({string.Join("|", Names)})");
 
         // preset first, user args after -> user overrides.
+        presetTokens = tokens.Length;
         return [.. tokens, .. rest];
     }
 }

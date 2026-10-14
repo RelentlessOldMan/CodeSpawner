@@ -125,6 +125,7 @@ public static class ContentClassifier
 
             // tokens + calls + commas
             int commas = 0;
+            bool callShape = false;
             int t = 0;
             while (t < line.Length)
             {
@@ -140,10 +141,13 @@ public static class ContentClassifier
                     identLenSum += ilen;
                     if (distinctIdents.Count < 100_000)
                         distinctIdents.Add(System.Text.Encoding.ASCII.GetString(line[s..t]));
-                    if (t < line.Length && line[t] == (byte)'(') callSites++;
+                    if (t < line.Length && line[t] == (byte)'(') { callSites++; callShape = true; }
                 }
                 else t++;
             }
+            // A call's or prototype's argument commas are not columns: a header of `int f(int a, int b);` lines
+            // shares one comma count but is code, not a table.
+            if (callShape) commas = 0;
             commaCounts.TryGetValue(commas, out int cc);
             commaCounts[commas] = cc + 1;
         }
@@ -173,7 +177,7 @@ public static class ContentClassifier
 
         st.Class = Decide(digitFrac, entropy, identTotal, total, lineCount, maxLineLen,
             st.DefineFrac, xMacroLines / nonBlank, templateLines / nonBlank, st.FunctionsPerKB,
-            (enumStructLines + tableRows) / nonBlank, tabularShare);
+            (enumStructLines + tableRows) / nonBlank, tabularShare, callSites);
 
         return st;
     }
@@ -181,7 +185,7 @@ public static class ContentClassifier
     /// <summary>Map the tallies onto a class, in priority order (most-specific first).</summary>
     private static ContentClass Decide(double digitFrac, double entropy,
         long identTotal, long total, long lineCount, long maxLineLen, double defineFrac, double xMacroFrac,
-        double templateFrac, double fnPerKb, double enumStructFrac, double tabularShare)
+        double templateFrac, double fnPerKb, double enumStructFrac, double tabularShare, long callSites)
     {
         // data-heavy: mostly digits/hex/separators and few identifiers relative to size.
         double identDensity = total > 0 ? identTotal / (total / 1024.0) : 0;
@@ -199,7 +203,7 @@ public static class ContentClassifier
         if (tabularShare >= TabularFrac) return ContentClass.TabularData;
 
         // Any real code markers -> generic code; otherwise prose/text.
-        if (identTotal > 0 && (fnPerKb > 0 || defineFrac > 0)) return ContentClass.GenericCode;
+        if (identTotal > 0 && (fnPerKb > 0 || defineFrac > 0 || callSites > 0)) return ContentClass.GenericCode;
         return ContentClass.Text;
     }
 
