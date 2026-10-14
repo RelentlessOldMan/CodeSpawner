@@ -9,7 +9,7 @@ namespace CodeSpawner;
 
 public static class Program
 {
-    public const string Version = "1.1.12";
+    public const string Version = "1.1.13";
 
     public static int Main(string[] args)
     {
