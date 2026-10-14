@@ -92,12 +92,16 @@ Done: 51,203 files, 89.74 GB, 5,721 dirs, 1 root(s) in 71.3s.
 
 ### `verify --corpus <dir> [--manifest <file>]`
 Tool-independent self-check: asserts the manifest accurately describes the emitted files — every
-`def`/`ref` site exists at `path:line` and contains the expected token, every `unreachableRef` is
-genuinely gated (behind `#ifdef VENDOR_OK` with its vendor header absent), and the `func_i → func_{i-1}`
-edge chain is intact. Resolves relative paths against `--corpus` (so a **copied** corpus validates against
+`def`/`ref` site exists at `path:line` and contains the expected token; every `unreachableRef` site holds
+the call, its file contains an `#ifdef VENDOR_OK` and no `VENDOR_missing_*.h` exists in the tree (it does
+not prove the call sits inside that `#ifdef` block); and every `edges` target is a symbol the manifest
+declares (it does not re-read the call from the source, so an edge whose call was edited away still
+passes). Resolves relative paths against `--corpus` (so a **copied** corpus validates against
 the same manifest). Exit 0 = pass, 1 = fail, 2 = bad input. Manifest defaults to the `<corpus>-manifest.json`
 sibling. A manifest path that goes through a junction or symlink inside the corpus fails as escaping it, and
-a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright.
+a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright. A manifest
+with no `_meta` or `symbols` object, or one that declares nothing to check (no symbol sites, dup groups or
+indirect edges), is bad input (exit 2); before 1.1.11 the latter passed.
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
@@ -122,9 +126,10 @@ dies, and the file is deleted when the run ends.
 Mutate also records what it has applied in `<corpus>-mutated.txt`, beside the corpus (never inside it, so a
 diff of base against variant sees only the delta's changes). A mutated tree no longer matches its base, so
 mutate refuses it except for the next `--step` of the same chain: `--step k` needs steps 1..k-1 recorded
-with the same `--seed` and `--edits`, and anything else (a repeated or skipped step, another default,
-`--through` or bulk run) is refused until you regenerate. A `--three-way` run leaves the tree as the base and
-records nothing. Regenerating clears the record; a corpus mutated by 1.1.8 or earlier has none.
+with the same `--seed`, `--edits` and `--restream`, and anything else (a repeated or skipped step, another
+default, `--through` or bulk run) is refused until you regenerate. A `--three-way` run leaves the tree as the
+base and records nothing for it, but records each `_v1`/`_v2` variant, so a variant is not mutated again.
+Regenerating clears the record, the variants' included; a corpus mutated by 1.1.8 or earlier has none.
 
 ### `digest-selftest`
 Recomputes the four golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`,
@@ -158,7 +163,9 @@ Full table with defaults in [`knobs.md`](knobs.md). The essentials:
 | `--force` | Overwrite an `--out` CodeSpawner didn't create. |
 
 A knob passed **explicitly** is taken literally (not multiplied by `--scale`) — a one-off run means what
-it says. Setting a count to `0` disables that population. **Principle:** adding a knob for one consumer
+it says. Setting a count to `0` disables that population. An out-of-range value (a negative count, a
+`--scale` outside (0, 1000], …; see [`knobs.md`](knobs.md)) or an option given twice is refused with exit 2,
+on every command. **Principle:** adding a knob for one consumer
 must never force another to change; tool-specific knobs stay optional and defaulted.
 
 ### Presets
@@ -172,7 +179,8 @@ invalid bytes / non-ASCII idents), `--preset many-tiny` (walker / stat pressure)
 `--preset pathological-symbols` (symbol-extractor cost + `expectedMiss` honest-miss),
 `--preset dup-content` (content-hash dedup / posting collapse).
 
-Your own knobs after a preset override it (e.g. `--preset dense-band --dense-headers 80`). Pathology
+Your own knobs after a preset override it (e.g. `--preset dense-band --dense-headers 80`); one preset per
+run. Pathology
 corpora record their shape under `_meta.populations` so a consumer can assert the corpus before trusting
 pass/fail.
 
@@ -307,5 +315,7 @@ robocopy D:\death \\SERVER\share\death /E /MT:16 /R:1 /W:1
 
 | Command | 0 | 1 | 2 |
 |---|---|---|---|
-| `gen` | success | IO/emit failure | bad arguments / protected `--out` |
-| `verify` | manifest matches corpus | mismatch found | bad input (missing corpus/manifest, invalid JSON) |
+| `gen` | success | IO/emit failure | bad arguments / protected `--out` / missing or malformed `--from-profile` |
+| `verify` | manifest matches corpus | mismatch found | bad input (missing corpus/manifest, invalid JSON, not a manifest, nothing to check) |
+| `mutate` | success | refused tree (mutated, locked, interrupted) / IO failure | bad arguments / missing corpus or manifest / malformed or hostile manifest |
+| `scan` | success | IO failure | bad arguments / tree not a directory |

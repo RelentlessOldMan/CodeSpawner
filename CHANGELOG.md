@@ -11,6 +11,77 @@ reads it.
 
 ## [Unreleased]
 
+## [1.1.11] - 2026-10-14
+
+### Fixed
+- `mutate --giant-edit single` on a giant whose last line has no newline no
+  longer glues the inserted line onto it: the line gains a `\n` and the delta
+  records ONE replace hunk (old `mid,1` → new `mid,2`), as a line diff would.
+- `--three-way --conflict-edges`: each variant's hunks and each file's
+  conflict and clean-merge records are listed in file order; an add/add insert
+  could come after a later hunk. `conflictTruthSha` is unchanged.
+- Symbol deltas now carry each changed symbol's `indirectEdges`, as the base
+  manifest does. They stay out of `prevTruthSha`.
+- A Remove records only the files it deleted: the source plus whichever of its
+  `.o`/`.lst`/`.bak` siblings existed, not all four every time.
+- A Grow that comes round to a header already at the target size changes
+  nothing, and is no longer listed in `modified`.
+- Line-shift keeps the file's encoding, BOM, each line's terminator and a
+  missing final newline (it rewrote the file as LF, without a BOM, with a final
+  newline).
+- The `--step` chain record includes `--restream`, so continuing a chain with
+  a different `--restream` (a different plan) is refused.
+- The `_v1`/`_v2` trees of a `--three-way` run are recorded as mutated, so one
+  cannot be mutated again against the base manifest; a regen clears that record.
+- `scan` measures directory depth from the tree root, so a trailing separator on
+  the tree argument no longer shifts the depth histogram.
+- `--oracle-scale` pads bodies to the `.c` size band with the most files, not
+  whichever `.c` archetype the profile lists first.
+- `verify` docs describe what the gating and edge checks actually prove.
+- A manifest def with a NUL or other invalid path character is refused (mutate
+  exit 2, a verify FAIL) instead of crashing the process.
+- mutate refuses a manifest def naming the `.codespawner` marker or the mutate
+  journal; a Remove would have deleted the marker.
+- `verify` no longer PASSes a manifest that declares nothing to check; that, and
+  a manifest with no `_meta` or `symbols` object, is bad input (exit 2).
+- Bad input exits 2 everywhere: a missing `--from-profile` file, a missing
+  `scan` tree, and an invalid profile (wrong version, unsafe or duplicate
+  archetype) used to exit 1.
+- `--scale 1e12` no longer overflows every scaled count to a disabled
+  population.
+- gen checks that the sibling manifest can be written before it wipes the old
+  corpus, not after, so a regen that cannot write its manifest leaves the old
+  corpus in place.
+- After a corpus folder is deleted by hand, the next gen at that path drops the
+  manifest, deltas and mutate record it left behind, when they name that path.
+  Before, a stale mutate record made mutate refuse the new tree as already
+  mutated.
+- `scan` no longer classifies a header of prototypes (`int f(int a, int b);`
+  lines) as tabular data: commas inside a call or prototype don't count as
+  columns, and such a header is generic code.
+- Docs: the diff delta's `_meta` fields, which writes `--io-parallelism`
+  governs, and exit codes for `mutate` and `scan`.
+
+### Changed
+- `gen --from-profile` draws sizes log-uniformly within each percentile band.
+  A uniform draw put the top 10% at (p90+max)/2 on average, so one big file
+  inflated a cluster's bytes several-fold. Sizes for a given seed differ from
+  1.1.10.
+- gen refuses out-of-range knobs instead of clamping or ignoring them: `--scale`
+  must be in (0, 1000], counts >= 0, `--depth` 1..12, `--dup-copies` >= 2, and
+  so on (see `docs/knobs.md`).
+- An option given twice is refused on every command, as is a second `--preset`.
+  A knob after a `--preset` still overrides the preset's value.
+- `gen --from-profile` refuses the knobs it would ignore (the classic count and
+  size knobs, `--io-parallelism`, `--manifest`, a preset's tokens). The
+  `--oracle-*` knobs need `--with-oracle`, and plain gen refuses a non-default
+  oracle knob (it never runs the overlay). Defaults are still accepted, so a
+  `_meta.gen` replay works.
+- `gen --from-profile` places files per the profile's `filesPerDirHistogram`
+  (which it used to ignore) instead of uniformly over the directories, so empty
+  and crowded directories come back in the measured proportions. File placement
+  for a given seed differs from 1.1.10.
+
 ## [1.1.10] - 2026-10-13
 
 ### Fixed
@@ -502,7 +573,8 @@ reads it.
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.10...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.11...HEAD
+[1.1.11]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.10...v1.1.11
 [1.1.10]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.9...v1.1.10
 [1.1.9]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.7...v1.1.8

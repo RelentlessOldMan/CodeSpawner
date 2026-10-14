@@ -98,6 +98,24 @@ public class ArchetypeRoundTripTests
         }
     }
 
+    // One big file in a cluster used to drag the top 10% to (p90+max)/2 on average; the tail is log-uniform now,
+    // so its mean is far below the midpoint (and every draw still in range).
+    [Fact]
+    public void DrawSize_HeavyTail_IsLogUniform_NotLinear()
+    {
+        var dist = new SizeDistribution { P50 = 1000, P90 = 5000, Max = 50_000_000 };
+        var rng = Rng.For(3, Category.ProfileGen, 0);
+        long tailSum = 0; int tail = 0;
+        for (int i = 0; i < 20_000; i++)
+        {
+            long s = ArchetypeSynthesizer.DrawSize(ref rng, dist);
+            Assert.InRange(s, 500, dist.Max);
+            if (s > dist.P90) { tailSum += s; tail++; }
+        }
+        Assert.InRange(tail, 1700, 2300);                                           // ~10% land in the tail
+        Assert.True(tailSum / tail < (dist.P90 + dist.Max) / 4, $"tail mean {tailSum / tail}");
+    }
+
     [Fact]
     public void DrawSize_IsDeterministic()
     {

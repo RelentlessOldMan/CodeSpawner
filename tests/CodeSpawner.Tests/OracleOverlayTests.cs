@@ -170,6 +170,29 @@ public class OracleOverlayTests
         Assert.Equal(m.Symbols.Values.Sum(s => s.Bytes), m.TotalOracleBytes); // total is the exact denominator
     }
 
+    // --oracle-scale pads bodies to the .c band most files fall in, not whichever .c archetype is listed first.
+    [Fact]
+    public void OracleScale_PadsToTheDominantCBand_NotTheFirstListed()
+    {
+        long FuncBytes(bool bigFirst)
+        {
+            var p = new ProfileModel();
+            var small = new Archetype { Label = "a1", Extension = ".c", Count = 2, Class = ContentClass.GenericCode,
+                SizeDistribution = new SizeDistribution { P50 = 300, P90 = 400, Max = 500 } };
+            var big = new Archetype { Label = "a2", Extension = ".c", Count = 50, Class = ContentClass.GenericCode,
+                SizeDistribution = new SizeDistribution { P50 = 20_000, P90 = 30_000, Max = 40_000 } };
+            p.Archetypes.AddRange(bigFirst ? new[] { big, small } : new[] { small, big });
+            using var tmp = new TempDir();
+            var o = new GenOptions { Out = "x", Seed = 1337, WithOracle = true, OracleChain = 3, OracleScale = true };
+            var m = new OracleOverlay(o, p, tmp.Path, new List<string> { tmp.Path }).Emit();
+            string def = m.Symbols["func_1"].Def;
+            return new FileInfo(Path.Combine(tmp.Path, def[..def.LastIndexOf(':')])).Length;
+        }
+        long smallFirst = FuncBytes(bigFirst: false);
+        Assert.True(smallFirst > 10_000, $"func file {smallFirst} B");
+        Assert.Equal(smallFirst, FuncBytes(bigFirst: true));
+    }
+
     [Fact]
     public void ByteMass_IsAbsent_ByDefault()
     {

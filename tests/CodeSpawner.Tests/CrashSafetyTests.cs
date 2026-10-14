@@ -37,7 +37,9 @@ public class CrashSafetyTests
     private static string Gen(TempDir tmp, string name, params string[] extra)
     {
         string corpus = Path.Combine(tmp.Path, name);
-        int rc = Cli(new[] { "gen", "--out", corpus }.Concat(Tiny).Concat(extra).ToArray());
+        var overridden = extra.Where(a => a.StartsWith("--", StringComparison.Ordinal)).ToHashSet();   // a repeat is refused
+        var tiny = Tiny.Chunk(2).Where(kv => !overridden.Contains(kv[0])).SelectMany(kv => kv);
+        int rc = Cli(new[] { "gen", "--out", corpus }.Concat(tiny).Concat(extra).ToArray());
         Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
         return corpus;
     }
@@ -101,6 +103,7 @@ public class CrashSafetyTests
         // 3-way leaves B as the base: it records nothing, so it can repeat and a 2-way can follow.
         Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--three-way"));
         Assert.False(File.Exists(Mutator.MutationStatePath(corpus)));
+        Assert.True(File.Exists(Mutator.MutationStatePath(corpus + "_v1")));   // the variants are edited copies
         Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--three-way", "--seed", "2"));
         Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source"));
         Assert.Equal(markerBytes, File.ReadAllBytes(marker));             // the record lives beside the tree, not in it
@@ -115,6 +118,7 @@ public class CrashSafetyTests
 
         Gen(tmp, "c");                                                    // regen in place clears the record
         Assert.False(File.Exists(Mutator.MutationStatePath(corpus)));
+        Assert.False(File.Exists(Mutator.MutationStatePath(corpus + "_v1"))); // and the variants' with them
         Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--seed", "2"));
     }
 
@@ -438,6 +442,51 @@ public class CrashSafetyTests
         Directory.CreateDirectory(tmp.File("g-manifest.json.tmp"));    // the manifest's temp name is taken
         Assert.Equal(2, Cli("gen", "--out", o, "--from-profile", prof, "--with-oracle"));
         Assert.Contains("cannot write the manifest", _lastErr);
-        Assert.Equal(new[] { ".codespawner" }, Directory.GetFileSystemEntries(o).Select(Path.GetFileName));
+        Assert.False(Directory.Exists(o));                             // probed before --out was even created
+    }
+
+    // A corpus deleted by hand leaves its manifest, delta and mutate record behind; they name it, so the next gen at
+    // that path drops them (even with --manifest=false), and the new tree is not refused as already mutated.
+    [Fact]
+    public void Gen_AfterAManualDelete_DropsTheOldCorpusSiblings()
+    {
+        using var tmp = new TempDir();
+        string corpus = Gen(tmp, "c");
+        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--edit-kind", "eol"));
+        Assert.True(File.Exists(corpus + "-mutated.txt") && File.Exists(corpus + "-delta.json"));
+        Directory.Delete(corpus, recursive: true);
+
+        Gen(tmp, "c", "--manifest=false");
+        Assert.False(File.Exists(corpus + "-manifest.json"));
+        Assert.False(File.Exists(corpus + "-mutated.txt"));
+        Assert.False(File.Exists(corpus + "-delta.json"));
+    }
+
+    // A sibling manifest naming another corpus root is not ours to remove.
+    [Fact]
+    public void Gen_LeavesASiblingManifestThatNamesAnotherCorpus()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c");
+        string foreign = "{\n  \"_meta\": {\n    \"corpusRoot\": \"C:\\\\elsewhere\"\n  }\n}\n";
+        File.WriteAllText(corpus + "-manifest.json", foreign);
+        File.WriteAllText(corpus + "-delta.json", foreign);
+        Gen(tmp, "c", "--manifest=false");
+        Assert.True(File.Exists(corpus + "-manifest.json"));
+        Assert.True(File.Exists(corpus + "-delta.json"));
+    }
+
+    // The probe runs before the wipe: a regen that cannot write its manifest leaves the old corpus as it was.
+    [Fact]
+    public void Regen_UnwritableManifest_KeepsTheOldCorpus()
+    {
+        using var tmp = new TempDir();
+        string corpus = Gen(tmp, "c");
+        var before = Directory.GetFiles(corpus, "*", SearchOption.AllDirectories).Order().ToArray();
+        Directory.CreateDirectory(corpus + "-manifest.json.tmp");
+        Assert.Equal(2, Cli(new[] { "gen", "--out", corpus }.Concat(Tiny).ToArray()));
+        Assert.Contains("cannot write the manifest", _lastErr);
+        Assert.Equal(before, Directory.GetFiles(corpus, "*", SearchOption.AllDirectories).Order().ToArray());
+        Assert.True(File.Exists(corpus + "-manifest.json"));
     }
 }

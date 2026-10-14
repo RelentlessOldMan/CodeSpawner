@@ -294,7 +294,7 @@ public class ProgramTests
             ",\"extension\":" + System.Text.Json.JsonSerializer.Serialize(ext) +
             ",\"count\":1,\"sizeDistribution\":{\"p50\":10,\"p90\":10,\"max\":10}}]}");
 
-        Assert.Equal(1, Cli("gen", "--out", Path.Combine(tmp.Path, "out"), "--from-profile", prof));
+        Assert.Equal(2, Cli("gen", "--out", Path.Combine(tmp.Path, "out"), "--from-profile", prof));   // bad input
         Assert.Contains("plain file-name fragment", _lastErr);
         Assert.Equal(new[] { prof }, Directory.EnumerateFileSystemEntries(tmp.Path, "*", SearchOption.AllDirectories));
     }
@@ -316,12 +316,12 @@ public class ProgramTests
     }
 
     // Well-formed JSON of the wrong shape is bad input too: mutate exits 2 with an "error:" line, verify reports
-    // FAIL (or passes a manifest with nothing to check) — neither throws. A symbol without a def is a verify FAIL,
+    // FAIL, or exits 2 when it is no manifest (no _meta) or declares nothing to check — neither throws. A symbol without a def is a verify FAIL,
     // never a silent pass.
     [Theory]
-    [InlineData("{\"symbols\":{}}", 1)]                                                              // no _meta
+    [InlineData("{\"symbols\":{}}", 2)]                                                              // no _meta
     [InlineData("{\"_meta\":{\"manifestVersion\":1.5},\"symbols\":{}}", 1)]                        // non-integer version
-    [InlineData("{\"_meta\":{\"manifestVersion\":1,\"seed\":99999999999},\"symbols\":{}}", 0)]    // seed overflows int
+    [InlineData("{\"_meta\":{\"manifestVersion\":1,\"seed\":99999999999},\"symbols\":{}}", 2)]    // seed overflows int; nothing to check
     [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"refs\":[]}}}", 1)]      // symbol without def
     [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"def\":null}}}", 1)]     // null def
     [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"def\":\"a.c:1\",\"refs\":[null]}}}", 2)]   // null ref: malformed (exit 2)

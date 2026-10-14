@@ -244,9 +244,11 @@ public sealed class OracleOverlay
     private long BodyPadStatements()
     {
         if (!_o.OracleScale) return 0;
-        long targetBytes = 0;
-        foreach (var a in _profile.Archetypes)
-            if (a.Extension == ".c") { targetBytes = a.SizeDistribution.P50; break; }
+        // The .c archetype most files fall in (the first one listed was often the smallest size band); ties go to
+        // the label, so the choice doesn't depend on profile order.
+        var c = _profile.Archetypes.Where(a => a.Extension == ".c")
+            .OrderByDescending(a => a.Count).ThenBy(a => a.Label, StringComparer.Ordinal).FirstOrDefault();
+        long targetBytes = c?.SizeDistribution.P50 ?? 0;
         if (targetBytes <= 0) return 0;
         // Each filler statement is ~14 bytes ("    acc ^= NN;\n"); leave headroom for the fixed spine lines.
         long pad = Math.Max(0, (targetBytes - 200) / 14);

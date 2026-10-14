@@ -186,7 +186,9 @@ For each archetype: mint `count` files of `extension`, sizes drawn from `sizeDis
 synthesized to the archetype's **class + feature vector** — e.g. `preprocessor-dense` emits generic
 `#define`s at the measured density and identifier-uniqueness; `inline-function-heavy` emits generic inline
 function bodies (so parse cost matches); `tabular-data` emits csv rows; etc. Files scatter into a
-synthesized dir tree matching the depth/fan-out histograms. Deterministic via `--seed`. All identifiers,
+synthesized dir tree matching the depth histogram, weighted so the files-per-dir histogram comes back too
+(each directory is dealt a bucket in the measured proportions; before 1.1.11 files were spread uniformly).
+Deterministic via `--seed`. All identifiers,
 paths, and content are generic and fake.
 
 ### Fidelity modes

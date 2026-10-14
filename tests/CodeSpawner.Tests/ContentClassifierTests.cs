@@ -83,6 +83,15 @@ public class ContentClassifierTests
         Assert.Equal(ContentClass.TabularData, Classify(data));
     }
 
+    // A prototype header repeats one comma count on every line, but its commas are argument separators.
+    [Fact]
+    public void PrototypeHeader_IsGenericCode_NotTabularData()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 40; i++) sb.Append("int api_").Append(i).Append("(int handle, const char *name);\n");
+        Assert.Equal(ContentClass.GenericCode, Classify(Bytes.Of(sb.ToString())));
+    }
+
     [Fact]
     public void SingleVeryLongLine_IsMinifiedLongLine()
     {

@@ -48,6 +48,8 @@ public sealed class Containment
 
     public string? Resolve(string rel)
     {
+        // A NUL or control character is no file name; GetFullPath would throw on it (an unhandled crash, not a refusal).
+        if (rel.IndexOfAny(Path.GetInvalidPathChars()) >= 0) return null;
         string full = Path.GetFullPath(Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar)));
         char sep = Path.DirectorySeparatorChar;
         if (full.StartsWith(_root + sep, Cmp)) return NoLinksBelow(_root, full) ? full : null;

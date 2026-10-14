@@ -125,9 +125,28 @@ public class ManifestVerifierTests
     public void MissingMetaOrSymbols_Fails()
     {
         using var tmp = new TempDir();
-        Assert.Equal(1, VerifyRaw(tmp, @"{""symbols"":{}}"));                         // no _meta
-        Assert.Equal(1, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":1}}"));      // no symbols
+        Assert.Equal(2, VerifyRaw(tmp, @"{""symbols"":{}}"));                         // no _meta: not a manifest
+        Assert.Equal(2, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":1}}"));      // no symbols
+        Assert.Equal(2, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":1},""symbols"":[]}"));
         Assert.NotEqual(0, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":2},""symbols"":{}}"));  // wrong version
+    }
+
+    // A manifest that declares nothing checkable used to PASS with "0 symbols".
+    [Fact]
+    public void NothingToCheck_IsNotAPass()
+    {
+        using var tmp = new TempDir();
+        Assert.Equal(2, VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":1},""symbols"":{}}"));
+    }
+
+    // A NUL in a site path is refused as a bad site, not a crash.
+    [Fact]
+    public void NulInASitePath_FailsCleanly()
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp, @"{""_meta"":{""manifestVersion"":1},""symbols"":{""foo"":{""def"":""a\u0000.c:1""}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "int foo(void){return 0;}\n"));
+        Assert.Equal(1, rc);
     }
 
     [Fact]
@@ -165,8 +184,20 @@ public class ManifestVerifierTests
         using var tmp = new TempDir();
         int rc = VerifyRaw(tmp,
             @"{""_meta"":{""manifestVersion"":1},""symbols"":{""patho_x"":{""def"":""a.c:1"",""expectedMiss"":true}}}",
-            c => File.WriteAllText(Path.Combine(c, "a.c"), "int patho_x(void){return 0;}\n"));
-        Assert.NotEqual(0, rc);   // an expected-miss symbol that is lexically present is NOT an honest miss
+            c => File.WriteAllText(Path.Combine(c, "a.c"), "CS_MK_HANDLER(x) int patho_x(void){return 0;}\n"));
+        Assert.Equal(1, rc);   // lexically present is NOT an honest miss, even beside the generator macro
+    }
+
+    // The two halves of the honest-miss check, each on its own: the generator alone passes, no generator fails.
+    [Theory]
+    [InlineData("CS_MK_HANDLER(x)\n", 0)]
+    [InlineData("int unrelated;\n", 1)]
+    public void ExpectedMiss_NeedsTheGenerator_AndNoLiteral(string line, int want)
+    {
+        using var tmp = new TempDir();
+        Assert.Equal(want, VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""patho_x"":{""def"":""a.c:1"",""expectedMiss"":true}}}",
+            c => File.WriteAllText(Path.Combine(c, "a.c"), line)));
     }
 
     [Fact]

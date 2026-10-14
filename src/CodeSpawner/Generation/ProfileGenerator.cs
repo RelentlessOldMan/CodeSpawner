@@ -22,14 +22,16 @@ public sealed class ProfileGenerator
         var sw = Stopwatch.StartNew();
         var profile = ProfileReader.Load(_o.FromProfile!);
 
-        PrepareOutputDir();
         string outFull = new DirectoryInfo(_o.Out).FullName;
+        // Before the wipe: an unwritable manifest must not cost the old corpus.
         if (_o.WithOracle) CorpusGenerator.ProbeManifestWritable(CorpusGenerator.ManifestPath(outFull), "drop --with-oracle");
+        PrepareOutputDir();
         Console.WriteLine($"Regenerating from {_o.FromProfile} (posture={profile.Posture.Label()}, " +
                           $"{profile.Archetypes.Count} archetypes, seed {_o.Seed}) ...");
 
         var dirs = BuildDirs(outFull, profile);
         Console.WriteLine($"  dir tree: {dirs.Count} dirs");
+        long[]? dirCum = DirWeights(profile, dirs.Count);
 
         // Each archetype gets its own RngLaneWidth-wide band of the ProfileGen stream index, so no two
         // (archetype, file) pairs ever share a stream. The index is 64-bit (no cast), so the archetype lane
@@ -55,7 +57,7 @@ public sealed class ProfileGenerator
             Parallel.For(0L, count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
             {
                 var rng = Rng.For(_o.Seed, Category.ProfileGen, archIndex * RngLaneWidth + i);
-                string dir = dirs[rng.Next(dirs.Count)];
+                string dir = dirs[dirCum is null ? rng.Next(dirs.Count) : PickWeighted(dirCum, ref rng)];
                 string path = Path.Combine(dir, $"{a.Label}_{i}{ext}");
                 long size = ArchetypeSynthesizer.DrawSize(ref rng, a.SizeDistribution);
                 ArchetypeSynthesizer.Write(path, a.Class, size, ref rng);
@@ -126,6 +128,62 @@ public sealed class ProfileGenerator
             }
         }
         return pool;
+    }
+
+    /// <summary>Cumulative per-directory weights that make files land per the profile's <c>filesPerDirHistogram</c>, or
+    /// null (a uniform pick, as before 1.1.11) when the profile has none. Each directory is dealt a bucket in the
+    /// histogram's proportions, in a seeded shuffle, and weighted by the bucket's file count: "0" holds none, "5-16" ~10,
+    /// and "65+" whatever mean is left once the other buckets take their share of the profile's files.</summary>
+    private long[]? DirWeights(ProfileModel profile, int dirCount)
+    {
+        var buckets = new List<(long Weight, long Dirs)>();
+        long histDirs = 0, files = profile.Archetypes.Sum(a => a.Count), placed = 0, bigDirs = 0;
+        foreach (var (label, n) in profile.Dirs.FilesPerDirHistogram.Entries)
+        {
+            if (n <= 0) continue;
+            long w = label switch
+            {
+                "5-16" => 10,
+                "17-64" => 40,
+                "65+" => -1,   // resolved below
+                _ => long.TryParse(label, NumberStyles.None, CultureInfo.InvariantCulture, out long k) ? k : -2,
+            };
+            if (w == -2) continue;   // a label this version does not know: skip it rather than guess
+            buckets.Add((w, n));
+            histDirs += n;
+            if (w < 0) bigDirs += n; else placed += w * n;
+        }
+        if (histDirs == 0) return null;
+        long big = bigDirs > 0 ? Math.Max(65, (files - placed) / bigDirs) : 0;
+
+        // Deal buckets to a seeded shuffle of the directories, in the histogram's proportions.
+        var order = new int[dirCount];
+        for (int i = 0; i < dirCount; i++) order[i] = i;
+        var rng = Rng.For(_o.Seed, Category.ProfileDir, 0);
+        for (int i = dirCount - 1; i > 0; i--) { int j = rng.Next(i + 1); (order[i], order[j]) = (order[j], order[i]); }
+        var weight = new long[dirCount];
+        long seen = 0;
+        int next = 0;
+        foreach (var (w, n) in buckets)
+        {
+            seen += n;
+            int upTo = (int)Math.Round((double)seen * dirCount / histDirs);
+            for (; next < upTo; next++) weight[order[next]] = w < 0 ? big : w;
+        }
+
+        var cum = new long[dirCount];
+        long total = 0;
+        for (int i = 0; i < dirCount; i++) cum[i] = total += weight[i];
+        return total > 0 ? cum : null;   // every directory dealt "0": nothing to weight by
+    }
+
+    /// <summary>A directory index drawn in proportion to its weight (<paramref name="cum"/> is cumulative).</summary>
+    private static int PickWeighted(long[] cum, ref Rng rng)
+    {
+        long u = (long)(ulong)(((UInt128)rng.NextULong() * (ulong)cum[^1]) >> 64);
+        int lo = 0, hi = cum.Length - 1;   // the first cum[i] > u; a zero-weight dir repeats its predecessor's cum, so never wins
+        while (lo < hi) { int mid = (lo + hi) >>> 1; if (cum[mid] > u) hi = mid; else lo = mid + 1; }
+        return lo;
     }
 
     private void PrepareOutputDir() => OutputDir.Prepare(_o.Out, _o.Force);

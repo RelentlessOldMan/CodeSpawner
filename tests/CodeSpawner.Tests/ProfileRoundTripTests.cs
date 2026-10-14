@@ -193,6 +193,6 @@ public class ProfileRoundTripTests
         using var tmp = new TempDir();
         string path = tmp.File("bad.json");
         File.WriteAllText(path, "{\"_meta\":{\"profileVersion\":999}}");
-        Assert.Throws<InvalidOperationException>(() => ProfileReader.Load(path));
+        Assert.Throws<FormatException>(() => ProfileReader.Load(path));
     }
 }

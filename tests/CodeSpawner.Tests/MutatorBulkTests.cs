@@ -854,6 +854,16 @@ public class MutatorBulkTests
         Assert.Contains(clean, m => m.GetProperty("side").GetString() == "v1" && m.GetProperty("oldStart").GetInt32() == 14);
         Assert.Contains(clean, m => m.GetProperty("side").GetString() == "v2" && m.GetProperty("oldStart").GetInt32() == 16);
 
+        // file order, as a line diff emits them: the add/add insert after line 10 sits between line 8 and line 12
+        foreach (var v in new[] { "v1", "v2" })
+        {
+            var olds = ModifiedRecord($"{corpus}-delta-{v}.json", "src_0.c").GetProperty("hunks").EnumerateArray()
+                .Select(h => h.GetProperty("oldStart").GetInt32()).ToList();
+            Assert.Equal(olds.OrderBy(x => x), olds);
+        }
+        var bases = conflicts.Select(c => c.GetProperty("baseStart").GetInt32()).ToList();
+        Assert.Equal(bases.OrderBy(x => x), bases);
+
         static string Op(JsonElement c, string side) => c.GetProperty(side).GetProperty("op").GetString()!;
         static int NL(JsonElement c, string side) => c.GetProperty(side).GetProperty("newLines").GetInt32();
     }
@@ -958,6 +968,38 @@ public class MutatorBulkTests
         Assert.StartsWith("// mutate single-locality insert", lines[ns - 1]);
         // and nothing else changed: exactly one line carries the marker
         Assert.Equal(1, lines.Count(l => l.Contains("single-locality insert")));
+    }
+
+    // A one-line giant without a final newline: the insert must not merge into that line. The line gains its
+    // terminator, so it changed too: ONE replace hunk (old 1,1 -> new 1,2), the shape a line diff reports.
+    [Fact]
+    public void Bulk_Giant_SingleLocality_OnAnUnterminatedLastLine_IsOneReplace()
+    {
+        using var tmp = new TempDir();
+        string line = "#define BIG " + new string('x', 1_100_000);
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 1, lines: 10, extra: c =>
+            File.WriteAllText(Path.Combine(c, "big.h"), line));
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "giant", GiantMinMb = 1, GiantEdit = "single", Seed = 3 });
+
+        var h = ModifiedRecord(delta, "big.h").GetProperty("hunks").EnumerateArray().Single();
+        Assert.Equal(("replace", 1, 1, 1, 2), (h.GetProperty("op").GetString(), h.GetProperty("oldStart").GetInt32(),
+            h.GetProperty("oldLines").GetInt32(), h.GetProperty("newStart").GetInt32(), h.GetProperty("newLines").GetInt32()));
+        Assert.Equal(line + "\n// mutate single-locality insert 0\n", File.ReadAllText(Path.Combine(corpus, "big.h")));
+    }
+
+    // A 3-way variant is an edited copy of the base: mutating it against the base manifest is refused, and a regen
+    // of the base clears that record with the variant.
+    [Fact]
+    public void ThreeWay_Variants_AreRecordedAsMutated()
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = BuildCorpus(tmp, nSource: 2, lines: 20);
+        Assert.Equal(0, Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, Seed = 9 }));
+        string manifest = Path.Combine(tmp.Path, "corpus-manifest.json");
+        var ex = Assert.Throws<InvalidOperationException>(() => Mutator.Run(new MutateOptions
+            { Corpus = corpus + "_v1", Manifest = manifest, Target = "source", Seed = 1 }));
+        Assert.Contains("already mutated (variant)", ex.Message);
+        Assert.True(File.Exists(corpus + "-mutated.txt") == false);                // B itself stays unmutated
     }
 
     [Fact]

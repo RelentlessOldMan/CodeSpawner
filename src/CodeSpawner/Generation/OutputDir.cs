@@ -51,11 +51,12 @@ public static class OutputDir
         int? oldRoots = ours ? ReadLinkedRoots(full) ?? LegacyLinkedRoots(trimmed) : null;
         var staleRoots = LinkedRootsToClear(trimmed, oldRoots, force, newRoots);
 
-        if (ours)
+        if (ours || SiblingsRecordThisCorpus(trimmed))
         {
             // The old sibling manifest, mutate artifacts and 3-way variants described the corpus being deleted; drop
             // them first so an interrupted regen (or --manifest=false) never leaves them beside a different tree.
-            // Only for a marker-carrying corpus: a foreign directory's neighbours are not ours to remove.
+            // Only for a marker-carrying corpus, or one deleted by hand whose manifest or mutate record names it: a
+            // foreign directory's neighbours are not ours to remove.
             string staleManifest = CorpusGenerator.ManifestPath(full);
             if (File.Exists(staleManifest)) File.Delete(staleManifest);
             Mutation.Mutator.RemoveDeltaArtifacts(trimmed);
@@ -63,10 +64,14 @@ public static class OutputDir
             string state = Mutation.Mutator.MutationStatePath(trimmed);
             if (File.Exists(state)) File.Delete(state);
             foreach (var variant in new[] { trimmed + "_v1", trimmed + "_v2" })
+            {
+                string variantState = Mutation.Mutator.MutationStatePath(variant);   // a 3-way run marks its variants
+                if (File.Exists(variantState)) File.Delete(variantState);
                 if (!IsLink(variant)                           // a link made by hand: what it points at is not ours
                     && (File.Exists(Path.Combine(variant, MarkerName)) || File.Exists(Path.Combine(variant, Mutation.Mutator.JournalName)))
                     && UnsafeToDelete(variant) is null)
                     DeleteMarkerLast(variant);
+            }
         }
         foreach (var sib in staleRoots) Directory.Delete(sib, recursive: true);
         if (ours) DeleteMarkerLast(outDir);
@@ -103,6 +108,33 @@ public static class OutputDir
             for (var m = re.Match(line); m.Success; m = m.NextMatch())
                 if (int.TryParse(m.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out int n) && n > max) max = n;
         return max + 1;
+    }
+
+    /// <summary>True when the sibling manifest's <c>_meta.corpusRoot</c> is this path, or the sibling mutate record is
+    /// ours: the corpus they described was deleted by hand, and left in place they would describe the new one (a stale
+    /// mutate record even refuses mutating it).</summary>
+    private static bool SiblingsRecordThisCorpus(string trimmed)
+    {
+        string state = Mutation.Mutator.MutationStatePath(trimmed);
+        if (File.Exists(state) && File.ReadLines(state).FirstOrDefault()?.StartsWith("CodeSpawner ", StringComparison.Ordinal) == true)
+            return true;
+        string manifest = CorpusGenerator.ManifestPath(trimmed);
+        if (!File.Exists(manifest)) return false;
+        using var r = new StreamReader(manifest);
+        for (int i = 0; i < 16 && r.ReadLine() is { } line; i++)   // corpusRoot is among _meta's first fields
+        {
+            string t = line.Trim().TrimEnd(',');
+            if (!t.StartsWith("\"corpusRoot\":", StringComparison.Ordinal)) continue;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse("{" + t + "}");
+                string? root = doc.RootElement.GetProperty("corpusRoot").GetString();
+                return root is not null && string.Equals(Path.TrimEndingDirectorySeparator(root), trimmed,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            }
+            catch (System.Text.Json.JsonException) { return false; }
+        }
+        return false;
     }
 
     private static bool IsLink(string dir) =>

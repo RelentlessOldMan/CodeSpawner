@@ -102,7 +102,16 @@ public class PresetsTests
     public void UserArg_Overrides_PresetValue_EndToEnd()
     {
         // The whole point of preset-first ordering: a user --scale beats the preset's --scale.
-        var o = ArgParser.ParseGen(Presets.Expand(new[] { "--preset", "ci", "--out", "x", "--scale", "0.5" }));
-        Assert.Equal(0.5, o.Scale);
+        var args = Presets.Expand(new[] { "--preset", "ci", "--out", "x", "--scale", "0.5" }, out int n);
+        Assert.Equal(0.5, ArgParser.ParseGen(args, n).Scale);
+    }
+
+    // Overriding the preset is not a repeat; the user giving a knob twice, or two presets, is.
+    [Fact]
+    public void UserRepeat_And_TwoPresets_AreRefused()
+    {
+        var args = Presets.Expand(new[] { "--preset", "ci", "--out", "x", "--scale", "0.5", "--scale", "0.2" }, out int n);
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(args, n));
+        Assert.Throws<ArgException>(() => Presets.Expand(new[] { "--preset", "ci", "--preset=memory" }, out _));
     }
 }

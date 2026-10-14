@@ -1,3 +1,4 @@
+using CodeSpawner.Generation;
 using CodeSpawner.Cli;
 using CodeSpawner.Scan;
 using Xunit;
@@ -36,6 +37,26 @@ public class ScanTests
         Assert.True(doc.RootElement.GetProperty("totals").GetProperty("files").GetInt32() >= 4);   // the 4 files we wrote
     }
 
+    // Files land per the measured files-per-dir histogram: one full directory among nine empty ones stays that way,
+    // where a uniform pick spread the files over all ten.
+    [Fact]
+    public void FromProfile_FollowsTheFilesPerDirHistogram()
+    {
+        using var tmp = new TempDir();
+        string tree = Path.Combine(tmp.Path, "tree");
+        Directory.CreateDirectory(tree);
+        for (int i = 0; i < 80; i++) File.WriteAllText(Path.Combine(tree, $"f{i}.c"), $"int f{i}(void) {{ return {i}; }}\n");
+        for (int i = 0; i < 9; i++) Directory.CreateDirectory(Path.Combine(tree, $"empty{i}"));
+        string prof = Path.Combine(tmp.Path, "prof.json");
+        Assert.Equal(0, new Scanner(ArgParser.ParseScan(new[] { tree, "--out", prof })).Run());
+
+        string o = Path.Combine(tmp.Path, "g");
+        new ProfileGenerator(ArgParser.ParseGen(new[] { "--out", o, "--from-profile", prof })).Run();
+        var full = Directory.EnumerateDirectories(o, "*", SearchOption.AllDirectories).Append(o)
+            .Count(d => Directory.EnumerateFiles(d).Any(f => !f.EndsWith(".codespawner", StringComparison.Ordinal)));
+        Assert.Equal(1, full);
+    }
+
     [Fact]
     public void Scan_CountsFilesItCannotRead()
     {
@@ -61,11 +82,31 @@ public class ScanTests
         Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree, "--out", tmp.File("p.json"), "--structure-only", "--content-stats" }));
         Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree, "--out", Path.Combine(tree, "src", "f.c") }));
         Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree + Path.DirectorySeparatorChar, "--out", Path.Combine(tree, "p.json") }));
-        ArgParser.ParseScan(new[] { tree, "--out", tree + "-profile.json", "--structure-only", "--structure-only" });   // a sibling, a repeat
+        ArgParser.ParseScan(new[] { tree, "--out", tree + "-profile.json", "--structure-only" });   // a sibling is fine
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree, "--out", tree + "-profile.json", "--structure-only", "--structure-only" }));
         Assert.Equal(1350, Scanner.Round3(1347));
         Assert.Equal(840000, Scanner.Round3(840043));
         Assert.Equal(999, Scanner.Round3(999));
         Assert.Equal(10000, Scanner.Round3(9996));
+    }
+
+    // Depth is measured from the tree root, so a trailing separator on the argument doesn't shift it by one.
+    [Fact]
+    public void Scan_DepthHistogram_IgnoresATrailingSeparator()
+    {
+        using var tmp = new TempDir();
+        string tree = Path.Combine(tmp.Path, "tree");
+        Directory.CreateDirectory(Path.Combine(tree, "a", "b"));
+        File.WriteAllText(Path.Combine(tree, "a", "b", "f.c"), "int x;\n");
+        string Depths(string arg)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(ScanToText(arg, tmp.File(Guid.NewGuid() + ".json"), "--structure-only"));
+            return doc.RootElement.GetProperty("dirs").GetProperty("depthHistogram").GetRawText();
+        }
+        string plain = Depths(tree);
+        Assert.Equal(plain, Depths(tree + Path.DirectorySeparatorChar));
+        Assert.Contains("\"2\"", plain);                                            // root 0, a 1, a/b 2
+        Assert.DoesNotContain("\"-1\"", plain);
     }
 
     [Fact]
@@ -74,7 +115,7 @@ public class ScanTests
         using var tmp = new TempDir();
         string prof = Path.Combine(tmp.Path, "p.json");
         string missing = Path.Combine(tmp.Path, "no-such-tree");
-        Assert.Equal(1, new Scanner(ArgParser.ParseScan(new[] { missing, "--out", prof })).Run());
+        Assert.Equal(2, new Scanner(ArgParser.ParseScan(new[] { missing, "--out", prof })).Run());   // bad input
     }
 
     [Fact]
