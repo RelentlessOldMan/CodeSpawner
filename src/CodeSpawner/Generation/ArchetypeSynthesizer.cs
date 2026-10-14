@@ -172,11 +172,18 @@ public static class ArchetypeSynthesizer
         if (hi <= lo) return lo;
         // Log-uniform inside the band, as file sizes are: uniform made the top 10% average (p90+max)/2, so one big
         // file in a cluster tripled its synthesized bytes. Integer-only (a doubling, then uniform within it), so a
-        // seed draws the same size on every machine.
+        // seed draws the same size on every machine. A draw past hi is redrawn, so the last, partial doubling is
+        // weighted by its width instead of a full doubling's share (which piled ~half the band's files into a
+        // sliver just under hi). With two or more doublings a draw is accepted at least half the time.
         int doublings = 0;
         while (doublings < 62 && (lo << doublings) < hi && (lo << doublings) <= long.MaxValue / 2) doublings++;
-        long from = lo << rng.Next(doublings), to = Math.Min(hi, from * 2);
-        return from + (long)((ulong)rng.NextULong() % (ulong)Math.Max(1, to - from));
+        if (doublings == 1) return lo + (long)((ulong)rng.NextULong() % (ulong)(hi - lo));
+        while (true)
+        {
+            long from = lo << rng.Next(doublings);
+            long x = from + (long)((ulong)rng.NextULong() % (ulong)from);
+            if (x < hi) return x;
+        }
     }
 
     private static int A(byte[] buf, int len, string s)

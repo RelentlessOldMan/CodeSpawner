@@ -119,10 +119,41 @@ public class MutatorSafetyTests
 
         var ex = Assert.Throws<ArgException>(() =>
             Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, EditDensity = 0.5 }));
-        Assert.Contains("was not created by CodeSpawner", ex.Message);
+        Assert.Contains("is not a 3-way variant from an earlier run", ex.Message);
         Assert.True(File.Exists(precious));
         Assert.True(File.Exists(priorDelta));                       // refused BEFORE the stale-artifact sweep
         Assert.Equal(before, File.ReadAllText(Path.Combine(corpus, "src_0.c")));
+    }
+
+    // Every corpus carries the .codespawner marker, so a separate corpus named <corpus>_v1 has one too. Only a
+    // tree a 3-way run recorded as its variant may be replaced: by a later --three-way, or by a regen of <corpus>.
+    [Fact]
+    public void SeparateCorpusNamedLikeAVariant_SurvivesRegenAndThreeWay()
+    {
+        using var tmp = new TempDir();
+        string corpus = BuildCorpus(tmp, 3);
+        string other = corpus + "_v1";
+        Directory.CreateDirectory(other);
+        File.WriteAllText(Path.Combine(other, ".codespawner"), "CodeSpawner test\n");
+        string precious = Path.Combine(other, "src_0.c");
+        File.WriteAllText(precious, "int separate_corpus;\n");
+
+        Assert.Throws<ArgException>(() =>
+            Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", ThreeWay = true, EditDensity = 0.5 }));
+        Assert.True(File.Exists(precious));
+
+        CodeSpawner.Generation.OutputDir.Prepare(corpus, force: true);
+        Assert.True(File.Exists(precious));
+
+        // A real variant (recorded by its 3-way run) is still swept by the regen.
+        string variant = corpus + "_v2";
+        Directory.CreateDirectory(variant);
+        File.WriteAllText(Path.Combine(variant, ".codespawner"), "CodeSpawner test\n");
+        File.WriteAllText(Mutator.MutationStatePath(variant), "CodeSpawner test\nvariant\n");
+        CodeSpawner.Generation.OutputDir.Prepare(corpus, force: true);
+        Assert.False(Directory.Exists(variant));
+        Assert.False(File.Exists(Mutator.MutationStatePath(variant)));
+        Assert.True(File.Exists(precious));
     }
 
     [Fact]

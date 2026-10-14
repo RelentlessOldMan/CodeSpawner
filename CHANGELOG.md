@@ -11,6 +11,70 @@ reads it.
 
 ## [Unreleased]
 
+## [1.1.13] - 2026-10-14
+
+### Corpus bytes change (regenerate and re-freeze)
+Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these ways:
+- **Every register header** (giant, big, med, dense, shrink and restream seeds) now stops one register earlier.
+  The last register used to cross the byte cap by up to ~200 B. Now a header never exceeds `--max-header-mb`,
+  `--dense-under-mb`, or a band's drawn size. The other files are unchanged.
+- **Block family numbers are disjoint** (agreed with CodeCompass). Each band starts past the previous band's end,
+  so no two headers share a `HWIO_BLK{n}_*` macro family. This changes corpora with more than 100 giant headers
+  or more than 900 big headers; there the big band (and everything after it) moves up. Below those counts the
+  historical bases (100 / 1000 / 100000 / 200000 / 300000) stand.
+- An explicit `--macro-density N` emits exactly N defines in a giant. It used to round up to a multiple of 3.
+- `gen --from-profile` draws sizes in the top doubling of each size band by width. Before, about half of the
+  band's files landed just under its upper bound when that doubling was a sliver. Profile regenerations change
+  file sizes.
+
+### Changed
+- Rename `similarityMilli` follows the metric pinned with CodeDiffer: lines are counted on the decoded text (a
+  BOM honoured, so UTF-16 files score by their characters, not their bytes), CR/CRLF count as LF, and rounding is
+  half-up in integers, `(1000·common + m/2) / m` (9/16 now records 563, not 562). The value is measured from the
+  old and new files rather than from the planned edit count. Rename deltas whose files hit a .5 tie, or which
+  are UTF-16, record a different `similarityMilli` (and so a different `diffTruthSha`) than 1.1.12.
+- A rename decoy is never a byte-exact copy of its source: a short file the 10% marker draw missed gets one
+  marked line, and a non-text or empty file gets no decoy.
+- `mutate --files-changed N` edits N files whenever the target has them. A chosen file the edit kind cannot change
+  (empty, or binary for a text kind) used to be dropped silently, so `--files-changed 1` could write an empty
+  delta and exit 0. The next file in the shuffled pool now takes its place. Runs with no such file are
+  unchanged. It warns when the target has fewer than N files, or fewer than N could be edited.
+- `mutate` refuses knobs the chosen mode would ignore: `--edits`, `--through` and `--restream` with `--target`;
+  `--edit-density`, `--giant-min-mb` and `--overlap-fraction` without it; `--overlap-fraction` without
+  `--three-way`; and `--giant-edit` outside 2-way content or mixed edits.
+- `scan` refuses the tree given twice (`scan a --tree b` used to scan b), and refuses `--sample` below 0.
+- `codespawner` with no arguments exits 2 (usage error), like any other bad command line. It used to exit 1.
+
+### Fixed
+- A directory named `<out>_v1`/`_v2` is no longer deleted by a regen of `<out>` or replaced by
+  `mutate --three-way` just because it holds a corpus. It must be a 3-way variant (its mutation state says so,
+  or a variant copy was interrupted). A variant written by 1.1.8 or earlier has no state file, so it is left in
+  place; delete it by hand.
+- The rename margin check holds far less memory (one flat sorted index instead of a dictionary per file), and
+  has a budget of 32M indexed lines: renames past it are not checked and a stderr warning says how many.
+- The rename cross-match warning names the real cause: identical or near-identical files in the target set
+  (default `--source-bodies same` sources, or `--target all`'s `.bak/.o/.lst` copies). The best-match guarantee
+  is documented for `--source-bodies varied` corpora mutated with `--target source`.
+- `scan` refuses an `--out` that reaches the scanned tree through a junction, subst drive or other alias.
+- `scan` no longer records name-like suffixes as extensions: a dotfile (`.name`) counts as `(dotfile)`, and an
+  extension outside the common C/C++/build set that appears in fewer than 3 directories folds into `(other)`.
+- `scripts\release.ps1` unstages the version bump if the release commit itself fails.
+- `gen --from-profile --with-oracle` refuses `--oracle-depth`, `--oracle-shared-leaves` and
+  `--oracle-reachable-frac` without `--oracle-fanout`. The default linear chain ignored them silently.
+- The `--from-profile --with-oracle` manifest records its seed and oracle knobs in `_meta.gen`. The profile path
+  is not recorded.
+- `verify` checks for `VENDOR_missing_*.h` in the linked roots (`<corpus>_rootN`) too, not only the main tree.
+- `_meta.gen.dirs` is at least 1. A tiny `--scale` recorded `dirs: 0`, which a replay refused.
+- Help text: the `--decoy-fraction` note no longer splits its sentence, and the smoke example shows `.\_fw`
+  (not `.\\_fw`).
+- `scripts\bench.ps1`: the profile privacy check could not fail on a leaked path, because JSON doubles the
+  backslashes. It now matches the escaped and slash forms. The script no longer calls itself a release gate,
+  since `release.ps1` runs `dotnet test`, not the bench.
+- `scripts\release.ps1` refuses a version older than the current one.
+- `scripts\build.ps1 -Rid linux-x64` (any non-Windows RID) looks for `codespawner`, not `codespawner.exe`.
+- Tests: the indirect edges' `dispatched` is checked against the emitted C call sites; a second `prevTruthSha`
+  golden pins the `expectedMiss` byte; `mutate` with a newer manifest version is refused before it edits.
+
 ## [1.1.12] - 2026-10-14
 
 ### Added
@@ -586,7 +650,8 @@ reads it.
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.12...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.13...HEAD
+[1.1.13]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.12...v1.1.13
 [1.1.12]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.11...v1.1.12
 [1.1.11]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.10...v1.1.11
 [1.1.10]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.9...v1.1.10

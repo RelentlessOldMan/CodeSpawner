@@ -140,6 +140,20 @@ public class ArgParserTests
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--oracle-chain", "40" }));
     }
 
+    // Depth, shared leaves and the reachable fraction shape the fanout DAG; without --oracle-fanout they were
+    // silently ignored. --oracle-indirect works on the linear chain too.
+    [Theory]
+    [InlineData("--oracle-depth", "3")]
+    [InlineData("--oracle-shared-leaves", "2")]
+    [InlineData("--oracle-reachable-frac", "0.5")]
+    public void Gen_DagOnlyOracleKnob_WithoutFanout_IsRefused(string knob, string value)
+    {
+        var ex = Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--with-oracle", knob, value }));
+        Assert.Contains("--oracle-fanout", ex.Message);
+        ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--with-oracle", "--oracle-fanout", "2", knob, value });
+        ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--with-oracle", "--oracle-indirect", "4" });
+    }
+
     // --from-profile takes its shape from the profile; the classic knobs (or a preset's) would be ignored.
     [Fact]
     public void Gen_FromProfile_RefusesTheClassicKnobs()
@@ -150,6 +164,27 @@ public class ArgParserTests
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(args, n));
         ArgParser.ParseGen(new[] { "--out", "c", "--from-profile", "p", "--seed", "3", "--force", "--with-oracle", "--oracle-bytes" });
     }
+
+    // A knob the chosen mode never reads used to be accepted and dropped, so the run did something else than asked.
+    [Theory]
+    [InlineData("--target", "source", "--edits", "3")]
+    [InlineData("--target", "source", "--restream", "true")]
+    [InlineData("--target", "source", "--through", "true")]
+    [InlineData("--target", "source", "--overlap-fraction", "0.5")]
+    [InlineData("--target", "source", "--edit-kind", "eol", "--giant-edit", "single")]
+    [InlineData("--target", "source", "--three-way", "true", "--giant-edit", "single")]
+    [InlineData("--edit-density", "0.5")]
+    [InlineData("--giant-min-mb", "4")]
+    [InlineData("--overlap-fraction", "0.5")]
+    public void Mutate_KnobTheModeIgnores_IsRefused(params string[] knobs) =>
+        Assert.Throws<ArgException>(() => ArgParser.ParseMutate(new[] { "--corpus", "c" }.Concat(knobs).ToArray()));
+
+    [Theory]
+    [InlineData("--target", "source", "--three-way", "true", "--overlap-fraction", "0.5", "--edit-density", "0.1")]
+    [InlineData("--target", "giant", "--edit-kind", "mixed", "--giant-edit", "single", "--giant-min-mb", "4")]
+    [InlineData("--edits", "3", "--restream", "true", "--through", "true")]
+    public void Mutate_KnobTheModeReads_IsAccepted(params string[] knobs) =>
+        ArgParser.ParseMutate(new[] { "--corpus", "c" }.Concat(knobs).ToArray());
 
     [Fact]
     public void RepeatedOption_IsRefused_OnEveryCommand()
@@ -243,6 +278,38 @@ public class ArgParserTests
     [Fact]
     public void Scan_SecondPositional_Throws()
         => Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "/a", "/b", "--out", "p" }));
+
+    // A junction outside the tree that points into it is the tree by another name: the profile would land inside.
+    [Fact]
+    public void Scan_OutThroughAJunctionIntoTheTree_Throws()
+    {
+        if (!OperatingSystem.IsWindows()) return;                    // junctions are an NTFS construct
+        using var tmp = new TempDir();
+        string tree = Path.Combine(tmp.Path, "tree");
+        Directory.CreateDirectory(Path.Combine(tree, "sub"));
+        string link = Path.Combine(tmp.Path, "alias");
+        var mk = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{tree}\"")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        mk.WaitForExit();
+        Assert.True(Directory.Exists(Path.Combine(link, "sub")), "junction setup failed");
+        try
+        {
+            var ex = Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree, "--out", Path.Combine(link, "sub", "p.json") }));
+            Assert.Contains("inside the tree being scanned", ex.Message);
+            ArgParser.ParseScan(new[] { tree, "--out", Path.Combine(tmp.Path, "p.json") });   // a real outside path is fine
+        }
+        finally { Directory.Delete(link); }                          // removes the junction only
+    }
+
+    // `scan a --tree b` used to scan b silently; --sample -1 meant "all" by accident (0 is the documented "all").
+    [Fact]
+    public void Scan_TreeGivenTwice_OrNegativeSample_Throws()
+    {
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "/a", "--tree", "/b", "--out", "p" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "--tree", "/a", "--tree", "/b", "--out", "p" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { "/a", "--out", "p", "--sample", "-1" }));
+        Assert.Equal(0, ArgParser.ParseScan(new[] { "--tree", "/a", "--out", "p", "--sample", "0" }).Sample);
+    }
 
     [Fact]
     public void Scan_MinClusterBelowOne_Throws()

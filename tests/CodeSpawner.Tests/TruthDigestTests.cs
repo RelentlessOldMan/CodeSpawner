@@ -63,6 +63,17 @@ public class TruthDigestTests
         Assert.Equal(TruthDigest.Compute(absent), TruthDigest.Compute(explicitFalse));
     }
 
+    // The golden above has no expectedMiss symbol, so it never pinned that byte's spelling ('1', last field). This
+    // vector adds one; it was computed from the format spec by a separate implementation (Python hashlib), which
+    // also reproduces Golden.
+    [Fact]
+    public void Compute_ExpectedMissGolden()
+    {
+        var truth = GoldenTruth();
+        truth["vendor_gated_0"] = new() { Def = "block2/src_3.c:9", ExpectedMiss = true };
+        Assert.Equal("ac237e3b37660077debfe62a22f918603192d8ef501d88fb461d1548299f1190", TruthDigest.Compute(truth));
+    }
+
     [Fact]
     public void Compute_ExpectedMissTrue_ChangesHash()
     {

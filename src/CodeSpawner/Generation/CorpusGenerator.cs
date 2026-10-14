@@ -168,8 +168,28 @@ public sealed class CorpusGenerator
     /// </summary>
     private void PrepareOutputDir() => OutputDir.Prepare(_o.Out, _o.Force, _o.LinkedRoots);
 
+    /// <summary>
+    /// The first block-family number of each reg-header band, woven into every macro name (<c>HWIO_BLK{fam}_...</c>).
+    /// The historical bases (giant 0, big 100, med 1000, dense 100000, shrink 200000, restream 300000) are kept
+    /// while the bands fit; a band that would run into the next pushes the next one up, so no two headers ever
+    /// share a family (1.1.13: before, more than 100 giants or 900 big+med headers reused family numbers).
+    /// </summary>
+    internal static (int Big, int Med, int Dense, int Shrink, int Restream) FamilyBases(
+        int nGiant, int nBig, int nMed, int nDense, int nShrink)
+    {
+        int big = Math.Max(100, nGiant);
+        int med = Math.Max(1000, big + nBig);
+        int dense = Math.Max(100_000, med + nMed);
+        int shrink = Math.Max(200_000, dense + nDense);
+        int restream = Math.Max(300_000, shrink + nShrink);
+        return (big, med, dense, shrink, restream);
+    }
+
+    private (int Big, int Med, int Dense, int Shrink, int Restream) _fam;
+
     private List<string> EmitHeaders(DirTree tree, int nGiant, int nBig, int nMed, int nDense, PopulationStats stats)
     {
+        _fam = FamilyBases(nGiant, nBig, nMed, nDense, _o.ShrinkSeeds);
         // Giants fill to MaxHeaderMB by default; an explicit -macro-density caps the define count instead
         // (the "many macros, few bytes" memory axis). Either way a giant carries ~1M+ #defines.
         long giantDefineCap = _o.WasSet("MacroDensity") ? _o.MacroDensity : long.MaxValue;
@@ -188,23 +208,23 @@ public sealed class CorpusGenerator
         {
             var rng = Rng.For(_o.Seed, Category.BigHeader, i);
             long bytes = (long)rng.Next(10, 100) * 1024 * 1024;
-            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regbig_{i}.h"), 2_000_000, bytes, 100 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regbig_{i}.h"), 2_000_000, bytes, _fam.Big + i);
             stats.Add("big-headers", 1, s.Bytes, s.Idents);
         });
         Parallel.For(0, nMed, HeaderParallel, i =>
         {
             var rng = Rng.For(_o.Seed, Category.MedHeader, i);
             long bytes = (long)rng.Next(1, 10) * 1024 * 1024;
-            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regmed_{i}.h"), 200_000, bytes, 1000 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"regmed_{i}.h"), 200_000, bytes, _fam.Med + i);
             stats.Add("med-headers", 1, s.Bytes, s.Idents);
         });
-        // dense-band: headers parked just under DenseUnderMb with maximally-unique idents (fam base 100000
-        // keeps them distinct from the giant/big/med bands). Fill to the byte ceiling (defines uncapped).
+        // dense-band: headers parked just under DenseUnderMb with maximally-unique idents (their own family band,
+        // see FamilyBases). Fill to the byte ceiling (defines uncapped).
         long denseMaxBytes = (long)_o.DenseUnderMb * 1024 * 1024;
         Parallel.For(0, nDense, HeaderParallel, i =>
         {
             var rng = Rng.For(_o.Seed, Category.DenseHeader, i);
-            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"dense_{i}.h"), long.MaxValue, denseMaxBytes, 100_000 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"dense_{i}.h"), long.MaxValue, denseMaxBytes, _fam.Dense + i);
             stats.Add("dense-band", 1, s.Bytes, s.Idents);
         });
         return [.. giantPaths];
@@ -224,13 +244,13 @@ public sealed class CorpusGenerator
         Parallel.For(0, nShrink, HeaderParallel, i =>
         {
             var rng = Rng.For(_o.Seed, Category.MutateSeed, i);
-            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"mut_shrink_{i}.h"), long.MaxValue, 9L * 1024 * 1024, 200_000 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"mut_shrink_{i}.h"), long.MaxValue, 9L * 1024 * 1024, _fam.Shrink + i);
             stats.Add("mutate-shrink-seed", 1, s.Bytes, s.Idents);
         });
         Parallel.For(0, nRestream, HeaderParallel, i =>
         {
             var rng = Rng.For(_o.Seed, Category.MutateSeed, 1_000_000 + i);
-            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"mut_restream_{i}.h"), long.MaxValue, 129L * 1024 * 1024, 300_000 + i);
+            var s = RegHeaderEmitter.Write(Path.Combine(tree.PickDir(ref rng), $"mut_restream_{i}.h"), long.MaxValue, 129L * 1024 * 1024, _fam.Restream + i);
             stats.Add("mutate-restream-seed", 1, s.Bytes, s.Idents);
         });
     }
@@ -280,7 +300,7 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("shrinkSeeds", (long)_o.ShrinkSeeds));
         g.Add(GenKnob.Of("restreamSeeds", (long)_o.RestreamSeeds));
         g.Add(GenKnob.Of("giantIncluders", (long)_o.GiantIncluders));
-        g.Add(GenKnob.Of("dirs", (long)_o.Eff("Dirs", _o.Dirs)));          // scaled like the counts (DirTree)
+        g.Add(GenKnob.Of("dirs", (long)Math.Max(1, _o.Eff("Dirs", _o.Dirs))));   // scaled like the counts; 0 builds as 1 (DirTree) and replays as --dirs 1
         g.Add(GenKnob.Of("depth", (long)_o.Depth));
         g.Add(GenKnob.Of("linkedRoots", (long)_o.LinkedRoots));
         g.Add(GenKnob.Of("unresolvedIncludes", (long)_o.UnresolvedIncludes));

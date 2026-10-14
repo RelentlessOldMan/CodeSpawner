@@ -193,10 +193,12 @@ public static class Mutator
             throw new InvalidOperationException($"--corpus '{corpus}': {why}; recorded in {path}. {regen}");
     }
 
-    private static string BeginJournal(string dir)
+    private const string VariantCopyJournal = "3-way variant copy in progress";
+
+    private static string BeginJournal(string dir, string what = "mutate in progress")
     {
         string path = Path.Combine(dir, JournalName);
-        File.WriteAllText(path, $"CodeSpawner {Program.Version}: mutate in progress\n");
+        File.WriteAllText(path, $"CodeSpawner {Program.Version}: {what}\n");
         return path;
     }
 
@@ -223,6 +225,9 @@ public static class Mutator
         ShufflePaths(pool, o.Seed, 101);                       // deterministic selection order
         int n = o.FilesChanged is { } fc ? Math.Min(fc, pool.Count) : pool.Count;
         var chosen = pool.Take(n).OrderBy(p => p, StringComparer.Ordinal).ToList();
+        if (o.FilesChanged is { } asked && asked > pool.Count)
+            Console.Error.WriteLine($"warning: --files-changed {asked} asked for more files than --target {o.Target} " +
+                                    $"matches ({pool.Count}); all {pool.Count} were chosen");
 
         if (o.ThreeWay)                                        // refuse a foreign _v1/_v2 BEFORE touching anything
         {
@@ -266,13 +271,22 @@ public static class Mutator
         bool mixed = o.Kind == "mixed";
         var files = new List<DiffFile>();
         long touched = 0;
-        for (int i = 0; i < chosen.Count; i++)
+        // A chosen file the kind cannot edit (empty, binary for a text kind) is skipped; with --files-changed the
+        // next files of the shuffled pool stand in for it, so the delta holds N edited files whenever the pool can.
+        // A run with no skips edits exactly the files and indices it always did.
+        int want = o.FilesChanged is null ? chosen.Count : n, next = n;
+        var toEdit = new List<string>(chosen);
+        for (int i = 0; i < toEdit.Count; i++)
         {
             // mixed assigns a deterministic per-file kind (the taxonomy cycle), so one delta spans every reason;
             // every other kind applies uniformly. Renames are always a separate pass (--edit-kind rename).
             string kind = mixed ? MixedCycle[i % MixedCycle.Length] : o.Kind;
-            var df = BuildDiffFile(AbsOf(corpus, chosen[i]), chosen[i], kind, o, i, giantFloor, stride);
-            if (df is null) continue;                          // honesty: no actual change ⇒ not recorded
+            var df = BuildDiffFile(AbsOf(corpus, toEdit[i]), toEdit[i], kind, o, i, giantFloor, stride);
+            if (df is null)                                    // honesty: no actual change ⇒ not recorded
+            {
+                if (o.FilesChanged is not null && next < pool.Count) toEdit.Add(pool[next++]);
+                continue;
+            }
             touched += df.Run is { } r ? (r.RangeEnd - r.RangeStart) / r.Stride + 1
                                        : df.Hunks.Sum(h => Math.Max(h.OldLines, h.NewLines));
             files.Add(df);
@@ -287,6 +301,9 @@ public static class Mutator
         WriteMutationState(corpus, BulkState);
         File.Delete(journal);
         Console.WriteLine($"  ~{touched} line(s) changed across {files.Count} file(s); diffTruthSha {diffSha[..12]}…");
+        if (files.Count < want)
+            Console.Error.WriteLine($"warning: only {files.Count} of the {want} file(s) asked for took an --edit-kind " +
+                                    $"{o.Kind} edit; the others are empty, binary or unreadable and are not in the delta");
         return 0;
     }
 
@@ -305,7 +322,7 @@ public static class Mutator
         int decoyThreshold = (int)Math.Round(Math.Clamp(o.DecoyFraction, 0, 1) * 1000);
 
         var renames = new List<Rename>();
-        var fromBags = new List<LineBag?>();                    // per rename: its base content, for the margin check
+        var margin = new RenameMarginIndex();                  // per rename: its base lines, for the margin check
         var modified = new List<DiffFile>();
         var added = new List<string>();
 
@@ -321,7 +338,15 @@ public static class Mutator
                 string dupAbs = AbsOf(corpus, dupRel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dupAbs)!);
                 File.Copy(abs, dupAbs, overwrite: true);
-                AppendPerLine(dupAbs, 0.1, o.Seed, 10_000 + i, n => $" /*decoy:{i}:{n}*/");
+                var marked = AppendPerLine(dupAbs, 0.1, o.Seed, 10_000 + i, n => $" /*decoy:{i}:{n}*/");
+                if (marked is { Count: 0 } && TryReadText(dupAbs, out string dupText, out var dupEnc)
+                    && SplitLines(dupText) is { Count: > 0 } dupLines)
+                    marked = ChangeFirstNLines(dupAbs, dupLines, dupEnc, 1, i);   // a short file the draw missed
+                if (marked is not { Count: > 0 })              // not text, or empty: it would be an exact copy
+                {
+                    File.Delete(dupAbs);
+                    continue;
+                }
                 added.Add(dupRel);
                 continue;
             }
@@ -331,7 +356,8 @@ public static class Mutator
             string toAbs = AbsOf(corpus, toRel);
             Directory.CreateDirectory(Path.GetDirectoryName(toAbs)!);
             var (oldSha, oldSize) = HashFile(abs);
-            fromBags.Add(LineBag.Of(abs));
+            var fromBag = LineBag.Of(abs);
+            margin.Add(fromBag);                               // index = renames.Count: every path below adds one
             File.Move(abs, toAbs);                             // the rename
 
             if (target >= 1000)
@@ -356,7 +382,13 @@ public static class Mutator
                 continue;
             }
             var (newSha, newSize) = HashFile(toAbs);
-            int realizedMilli = (int)Math.Round((lines.Count - toChange) * 1000.0 / lines.Count);
+            int lineCount = lines.Count;
+            text = null!;                                      // free this copy before the edited file is re-read
+            lines = null!;
+            // The REALIZED similarity, by the pinned metric over the actual old and new bytes.
+            int realizedMilli = fromBag is not null && LineBag.Of(toAbs) is { } toBag
+                ? LineBag.Milli(LineBag.Common(fromBag, toBag), fromBag.Lines, toBag.Lines)
+                : LineBag.Milli(lineCount - toChange, lineCount, lineCount);
             var df = new DiffFile
             {
                 Path = toRel, Reason = "content", OldSha = oldSha, NewSha = newSha, OldSize = oldSize, NewSize = newSize,
@@ -366,7 +398,7 @@ public static class Mutator
             renames.Add(new Rename(rel, toRel, realizedMilli));
         }
 
-        var (dropped, contested) = EnforceRenameMargin(corpus, renames, fromBags, added);
+        var (dropped, contested) = EnforceRenameMargin(corpus, renames, margin, added);
 
         string prevSha = TruthDigest.Compute(basem.Symbols);
         string diffSha = DiffDigest.Compute(modified, renames);
@@ -374,11 +406,16 @@ public static class Mutator
         Console.WriteLine($"  {renames.Count} rename(s) ({renames.Count(r => r.SimilarityMilli >= 1000)} pure), " +
                           $"{added.Count} decoy add(s)" + (dropped > 0 ? $" ({dropped} dropped as too close to a rename)" : "") +
                           $"; diffTruthSha {diffSha[..12]}…");
+        if (margin.Skipped > 0)
+            Console.Error.WriteLine(
+                $"warning: {margin.Skipped} rename(s) were not margin-checked: the renamed files' lines exceed the " +
+                $"check's {RenameMarginIndex.MaxEntries:N0}-line budget. Use --files-changed to rename fewer files.");
         if (contested > 0)
             Console.Error.WriteLine(
                 $"warning: {contested} recorded rename(s) have another renamed file within {RenameMarginMilli} milli of " +
-                "their similarity, so a best-match detector may pair them wrongly. This corpus's sources share their " +
-                "body lines; generate it with --source-bodies varied for rename fixtures.");
+                "their similarity, so a best-match detector may pair them wrongly. The target set holds identical or " +
+                "near-identical files (sources from the default --source-bodies same, or .bak/.o/.lst copies). For " +
+                "rename fixtures generate with --source-bodies varied and mutate with --target source.");
         return 0;
     }
 
@@ -392,40 +429,23 @@ public static class Mutator
     /// <see cref="RenameMarginMilli"/> of a rename's own similarity, in either direction of the pairing, is deleted
     /// and dropped from <c>added</c>. A competing <c>to</c> of another rename can't be dropped, so those renames
     /// are only counted. A rename below the margin (a tiny file whose every line changed) has no content match to
-    /// protect and is skipped, as is one whose base was too large to read.
+    /// protect and is skipped, as is one whose base isn't text or didn't fit the index budget.
     /// </summary>
     private static (int Dropped, int Contested) EnforceRenameMargin(
-        string corpus, List<Rename> renames, List<LineBag?> fromBags, List<string> added)
+        string corpus, List<Rename> renames, RenameMarginIndex margin, List<string> added)
     {
-        var index = new Dictionary<ulong, List<(int R, int Count)>>();
-        for (int r = 0; r < renames.Count; r++)
-            if (fromBags[r] is { } bag)
-                foreach (var (h, c) in bag.Counts)
-                    (index.TryGetValue(h, out var post) ? post : index[h] = new()).Add((r, c));
-
-        bool Guarded(int r) => fromBags[r] is not null && renames[r].SimilarityMilli >= RenameMarginMilli;
-        int[] Sims(LineBag x)
-        {
-            var common = new int[renames.Count];
-            foreach (var (h, c) in x.Counts)
-                if (index.TryGetValue(h, out var post))
-                    foreach (var (r, rc) in post) common[r] += Math.Min(c, rc);
-            var sims = new int[renames.Count];
-            for (int r = 0; r < renames.Count; r++)
-                if (fromBags[r] is { } fb)
-                    sims[r] = LineBag.SimilarityMilli(common[r], fb.Lines, x.Lines);
-            return sims;
-        }
+        margin.Seal();
+        bool Guarded(int r) => margin.Has(r) && renames[r].SimilarityMilli >= RenameMarginMilli;
+        bool TooClose(int r, int sim, int owner) => Guarded(owner) && sim > renames[owner].SimilarityMilli - RenameMarginMilli;
 
         int dropped = 0;
         for (int d = added.Count - 1; d >= 0; d--)
         {
             string abs = AbsOf(corpus, added[d]);
             if (LineBag.Of(abs) is not { } bag) continue;
-            var sims = Sims(bag);
             bool tooClose = false;
-            for (int r = 0; r < renames.Count && !tooClose; r++)
-                tooClose = Guarded(r) && sims[r] > renames[r].SimilarityMilli - RenameMarginMilli;
+            foreach (var (r, sim) in margin.Scores(bag))
+                if (TooClose(r, sim, r)) { tooClose = true; break; }
             if (!tooClose) continue;
             File.Delete(abs);
             added.RemoveAt(d);
@@ -436,49 +456,139 @@ public static class Mutator
         for (int t = 0; t < renames.Count; t++)
         {
             if (LineBag.Of(AbsOf(corpus, renames[t].To)) is not { } bag) continue;
-            var sims = Sims(bag);
-            for (int r = 0; r < renames.Count; r++)
+            foreach (var (r, sim) in margin.Scores(bag))
             {
-                if (r == t || fromBags[r] is null) continue;
-                if (Guarded(r) && sims[r] > renames[r].SimilarityMilli - RenameMarginMilli) contested.Add(r);   // r's from prefers t's to
-                if (Guarded(t) && sims[r] > renames[t].SimilarityMilli - RenameMarginMilli) contested.Add(t);   // t's to prefers r's from
+                if (r == t) continue;
+                if (TooClose(r, sim, r)) contested.Add(r);     // r's from prefers t's to
+                if (TooClose(t, sim, t)) contested.Add(t);     // t's to prefers r's from
             }
         }
         return (dropped, contested.Count);
     }
 
-    /// <summary>A file's lines as the pinned rename-similarity metric sees them: EOL-normalized (a CR before each LF
-    /// dropped), a final newline not starting another line, kept as a multiset of 64-bit line hashes.</summary>
+    /// <summary>
+    /// Every rename's base lines in one flat array of (line hash, rename, count) sorted by hash: 16 bytes per
+    /// distinct line per rename, so the check costs a fraction of the renamed bytes rather than a multiple. Past
+    /// <see cref="MaxEntries"/> further renames are left out (unchecked) and counted in <see cref="Skipped"/>.
+    /// </summary>
+    private sealed class RenameMarginIndex
+    {
+        internal const int MaxEntries = 32 << 20;          // lines held: 256 MB of bags, then 512 MB of entries
+        private readonly record struct Entry(ulong Hash, int Rename, int Count);
+        private List<LineBag?>? _bags = new();             // per rename until Seal: its base lines, or null if left out
+        private readonly List<int> _lines = new();         // per rename: its line count, or -1 if left out
+        private Entry[] _sorted = Array.Empty<Entry>();
+        private long _held;
+        public int Skipped { get; private set; }
+
+        public void Add(LineBag? bag)
+        {
+            if (bag is not null && _held + bag.Lines > MaxEntries) { bag = null; Skipped++; }
+            _bags!.Add(bag);
+            _lines.Add(bag?.Lines ?? -1);
+            _held += bag?.Lines ?? 0;
+        }
+
+        public bool Has(int r) => _lines[r] >= 0;
+
+        /// <summary>Flatten the bags into one exactly-sized array sorted by hash, then let the bags go.</summary>
+        public void Seal()
+        {
+            var bags = _bags!;
+            _bags = null;
+            int n = 0;
+            foreach (var bag in bags) if (bag is not null) n += bag.Runs().Count();
+            var entries = new Entry[n];
+            n = 0;
+            for (int r = 0; r < bags.Count; r++)
+            {
+                if (bags[r] is not { } bag) continue;
+                foreach (var (h, c) in bag.Runs()) entries[n++] = new Entry(h, r, c);
+                bags[r] = null;
+            }
+            Array.Sort(entries, (x, y) => x.Hash != y.Hash ? x.Hash.CompareTo(y.Hash) : x.Rename.CompareTo(y.Rename));
+            _sorted = entries;
+        }
+
+        /// <summary>The similarity of <paramref name="x"/> to each indexed rename's base it shares a line with.</summary>
+        public IEnumerable<(int Rename, int Milli)> Scores(LineBag x)
+        {
+            var common = new Dictionary<int, int>();
+            foreach (var (h, c) in x.Runs())
+            {
+                int lo = 0, hi = _sorted.Length;              // the first entry with Hash >= h
+                while (lo < hi) { int mid = (lo + hi) >>> 1; if (_sorted[mid].Hash < h) lo = mid + 1; else hi = mid; }
+                for (int k = lo; k < _sorted.Length && _sorted[k].Hash == h; k++)
+                    common[_sorted[k].Rename] = common.GetValueOrDefault(_sorted[k].Rename) + Math.Min(c, _sorted[k].Count);
+            }
+            foreach (var (r, n) in common.OrderBy(e => e.Key))
+                yield return (r, LineBag.Milli(n, _lines[r], x.Lines));
+        }
+    }
+
+    /// <summary>
+    /// A file's lines as the pinned rename-similarity metric sees them (docs/diff-delta-design.md): the DECODED
+    /// text (a BOM honoured, otherwise strict UTF-8), split on LF, CRLF or a lone CR, a final terminator not
+    /// starting another line; kept as a sorted multiset of 64-bit line hashes. Null for a file that isn't text,
+    /// which a detector pairs by exact sha only.
+    /// </summary>
     private sealed class LineBag
     {
-        private const long MaxBytes = 256L << 20;           // a rename of a larger file is not margin-checked
-        public Dictionary<ulong, int> Counts { get; } = new();
-        public int Lines { get; private set; }
+        private readonly ulong[] _sorted;
+        private LineBag(ulong[] sorted) => _sorted = sorted;
+        public int Lines => _sorted.Length;
 
         public static LineBag? Of(string abs)
         {
-            if (!File.Exists(abs) || new FileInfo(abs).Length > MaxBytes) return null;
-            byte[] data = File.ReadAllBytes(abs);
-            var bag = new LineBag();
-            int start = 0;
-            for (int i = 0; i <= data.Length; i++)
+            if (!File.Exists(abs) || !TryReadText(abs, out string text, out _)) return null;
+            var h = new List<ulong>();                     // the same line split as SplitLines, without the strings
+            int i = 0;
+            while (i < text.Length)
             {
-                if (i < data.Length && data[i] != (byte)'\n') continue;
-                if (i == data.Length && start == data.Length) break;   // after a final newline: no empty last line
-                int end = i > start && data[i - 1] == (byte)'\r' && i < data.Length ? i - 1 : i;
-                ulong h = 14695981039346656037UL;              // FNV-1a
-                for (int k = start; k < end; k++) h = (h ^ data[k]) * 1099511628211UL;
-                bag.Counts[h] = bag.Counts.TryGetValue(h, out int c) ? c + 1 : 1;
-                bag.Lines++;
-                start = i + 1;
+                ulong v = 14695981039346656037UL;          // FNV-1a over the line's UTF-16 code units
+                for (; i < text.Length && text[i] != '\n' && text[i] != '\r'; i++)
+                    v = ((v ^ (byte)text[i]) * 1099511628211UL ^ (byte)(text[i] >> 8)) * 1099511628211UL;
+                h.Add(v);
+                if (i < text.Length) i += text[i] == '\r' && i + 1 < text.Length && text[i + 1] == '\n' ? 2 : 1;
             }
-            return bag;
+            var sorted = h.ToArray();
+            Array.Sort(sorted);
+            return new LineBag(sorted);
         }
 
-        /// <summary><c>round(common / max(lines) * 1000)</c>, as the delta's <c>similarityMilli</c>; two empty files
-        /// are identical.</summary>
-        public static int SimilarityMilli(int common, int linesA, int linesB) =>
-            Math.Max(linesA, linesB) is var m && m > 0 ? (int)Math.Round(common * 1000.0 / m) : 1000;
+        /// <summary>Each distinct line hash with its count, in hash order.</summary>
+        public IEnumerable<(ulong Hash, int Count)> Runs()
+        {
+            for (int i = 0; i < _sorted.Length;)
+            {
+                int j = i;
+                while (j < _sorted.Length && _sorted[j] == _sorted[i]) j++;
+                yield return (_sorted[i], j - i);
+                i = j;
+            }
+        }
+
+        /// <summary>The multiset intersection size of two files' lines.</summary>
+        public static int Common(LineBag a, LineBag b)
+        {
+            int i = 0, j = 0, n = 0;
+            while (i < a._sorted.Length && j < b._sorted.Length)
+            {
+                int c = a._sorted[i].CompareTo(b._sorted[j]);
+                if (c == 0) { n++; i++; j++; }
+                else if (c < 0) i++;
+                else j++;
+            }
+            return n;
+        }
+
+        /// <summary><c>common / max(lines)</c> in thousandths, rounded half-up in integers:
+        /// <c>(1000·common + m/2) / m</c>, as the delta's <c>similarityMilli</c>. Two empty files are identical.</summary>
+        public static int Milli(int common, int linesA, int linesB)
+        {
+            long m = Math.Max(linesA, linesB);
+            return m == 0 ? 1000 : (int)((1000L * common + m / 2) / m);
+        }
     }
 
     /// <summary>Append a marker to the first <paramref name="n"/> lines (contiguous ⇒ one coalesced hunk),
@@ -616,7 +726,7 @@ public static class Mutator
         EnsureReplaceable(dst);
         if (Directory.Exists(dst)) Directory.Delete(dst, true);
         Directory.CreateDirectory(dst);
-        BeginJournal(dst);                                     // first: a half-copied variant is already marked
+        BeginJournal(dst, VariantCopyJournal);                 // first: a half-copied variant is already marked
         foreach (var dir in Directory.EnumerateDirectories(src, "*", TreeWalk))
             Directory.CreateDirectory(Path.Combine(dst, RelOf(src, dir).Replace('/', Path.DirectorySeparatorChar)));
         foreach (var f in Directory.EnumerateFiles(src, "*", TreeWalk))
@@ -624,19 +734,38 @@ public static class Mutator
     }
 
     /// <summary>
+    /// Whether <paramref name="dir"/> is a 3-way variant a previous run made: its <c>-mutated.txt</c> records
+    /// <c>variant</c>, or it holds the journal of a variant copy cut short (not the journal of an in-place mutate,
+    /// which a separate corpus can carry too). The <c>.codespawner</c> marker alone is not enough: every corpus has
+    /// one, so a separate corpus that happens to be named <c>&lt;corpus&gt;_v1</c> would pass.
+    /// </summary>
+    internal static bool IsVariantTree(string dir)
+    {
+        string state = MutationStatePath(TrimDir(dir));
+        try
+        {
+            if (File.Exists(state) && File.ReadLines(state).Skip(1).FirstOrDefault()?.Trim() == VariantState) return true;
+            string journal = Path.Combine(dir, JournalName);
+            return File.Exists(journal) && File.ReadAllText(journal).Contains(VariantCopyJournal, StringComparison.Ordinal);
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary>
     /// A 3-way variant tree (<c>&lt;corpus&gt;_v1/_v2</c>) may be replaced only if it is absent, empty, or a previous
-    /// variant (a copy of the corpus, so it carries the <c>.codespawner</c> marker, or the journal if the copy was cut
-    /// short). Anything else at that path
-    /// is a directory we did not create — refuse rather than recursively delete it.
+    /// variant (<see cref="IsVariantTree"/>). Anything else at that path, a separate corpus included, is not ours to
+    /// replace — refuse rather than recursively delete it.
     /// </summary>
     private static void EnsureReplaceable(string dst)
     {
         if (File.Exists(dst))
             throw new ArgException($"3-way variant path '{dst}' is a file; move it aside and re-run.");
         if (!Directory.Exists(dst) || !Directory.EnumerateFileSystemEntries(dst).Any()) return;
-        if (!File.Exists(Path.Combine(dst, MarkerName)) && !File.Exists(Path.Combine(dst, JournalName)))   // journal: a copy cut short
-            throw new ArgException($"3-way variant directory '{dst}' already exists, is not empty, and was not created " +
-                                   "by CodeSpawner. Refusing to delete it; move it aside and re-run.");
+        if (!IsVariantTree(dst))
+            throw new ArgException($"3-way variant directory '{dst}' already exists, is not empty, and is not a 3-way " +
+                                   "variant from an earlier run (it may be a separate corpus). Refusing to delete it; " +
+                                   "move it aside and re-run.");
     }
 
     /// <summary>Recursive walk that never follows a junction/symlink: a reparse point inside the corpus must not pull

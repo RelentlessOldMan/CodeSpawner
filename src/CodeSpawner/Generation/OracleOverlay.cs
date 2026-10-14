@@ -119,6 +119,18 @@ public sealed class OracleOverlay
             Seed = _o.Seed,
             CorpusRoot = _outFull,
         };
+        // The oracle knobs that shaped this truth. The rest of the recipe is the profile file itself, which is not
+        // recorded (its path can name a private tree), so a plain-gen replay of these is refused, never misread.
+        m.Gen.Add(GenKnob.Of("seed", (long)_o.Seed));
+        m.Gen.Add(GenKnob.Of("withOracle", true));
+        m.Gen.Add(GenKnob.Of("oracleScale", _o.OracleScale));
+        m.Gen.Add(GenKnob.Of("oracleBytes", _o.OracleBytes));
+        m.Gen.Add(GenKnob.Of("oracleChain", (long)_o.OracleChain));
+        m.Gen.Add(GenKnob.Of("oracleFanout", (long)_o.OracleFanout));
+        m.Gen.Add(GenKnob.Of("oracleDepth", (long)_o.OracleDepth));
+        m.Gen.Add(GenKnob.Of("oracleSharedLeaves", (long)_o.OracleSharedLeaves));
+        m.Gen.Add(GenKnob.Of("oracleReachableFrac", _o.OracleReachableFrac));
+        m.Gen.Add(GenKnob.Of("oracleIndirect", (long)_o.OracleIndirect));
 
         for (int i = 0; i < n; i++)
         {

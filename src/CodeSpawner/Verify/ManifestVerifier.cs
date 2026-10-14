@@ -77,9 +77,10 @@ public static class ManifestVerifier
         var paths = new Generation.Containment(corpus);
         int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0;
 
-        // A file named VENDOR_missing_*.h must exist NOWHERE in the tree (the unresolved-include premise).
-        bool anyVendorHeaderPresent =
-            Directory.EnumerateFiles(corpus, "VENDOR_missing_*.h", NoLinks).Any();
+        // A file named VENDOR_missing_*.h must exist NOWHERE in the tree, its linked roots included (the
+        // unresolved-include premise: an include path may span every root).
+        bool anyVendorHeaderPresent = CorpusRoots(corpus)
+            .Any(r => Directory.EnumerateFiles(r, "VENDOR_missing_*.h", NoLinks).Any());
 
         foreach (var sym in symbols.EnumerateObject())
         {
@@ -261,6 +262,23 @@ public static class ManifestVerifier
         if (!lines[line - 1].Contains(symbol + "(")) { why = $"line {line} lacks '{symbol}('"; return false; }
         why = "";
         return true;
+    }
+
+    /// <summary>The corpus and its linked roots: the real (non-link) sibling dirs named <c>&lt;corpus&gt;_root&lt;N&gt;</c>.</summary>
+    private static IEnumerable<string> CorpusRoots(string corpus)
+    {
+        string dir = corpus.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        yield return dir;
+        string? parent = Path.GetDirectoryName(dir);
+        if (parent is null) yield break;
+        string prefix = Path.GetFileName(dir) + "_root";
+        foreach (var sib in Directory.EnumerateDirectories(parent, prefix + "*"))
+        {
+            string tail = Path.GetFileName(sib)[prefix.Length..];
+            if (tail.Length > 0 && tail.All(char.IsAsciiDigit)
+                && !new DirectoryInfo(sib).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                yield return sib;
+        }
     }
 
     /// <summary>Recursive walk that never follows a junction/symlink (the walk mutate uses), so a link inside the

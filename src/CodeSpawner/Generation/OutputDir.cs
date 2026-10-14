@@ -65,12 +65,13 @@ public static class OutputDir
             if (File.Exists(state)) File.Delete(state);
             foreach (var variant in new[] { trimmed + "_v1", trimmed + "_v2" })
             {
-                string variantState = Mutation.Mutator.MutationStatePath(variant);   // a 3-way run marks its variants
-                if (File.Exists(variantState)) File.Delete(variantState);
+                // Only a variant a 3-way run made (its state says so): a separate corpus named <out>_v1 is not ours.
+                if (!Mutation.Mutator.IsVariantTree(variant)) continue;
+                string variantState = Mutation.Mutator.MutationStatePath(variant);
                 if (!IsLink(variant)                           // a link made by hand: what it points at is not ours
-                    && (File.Exists(Path.Combine(variant, MarkerName)) || File.Exists(Path.Combine(variant, Mutation.Mutator.JournalName)))
-                    && UnsafeToDelete(variant) is null)
+                    && Directory.Exists(variant) && UnsafeToDelete(variant) is null)
                     DeleteMarkerLast(variant);
+                if (File.Exists(variantState)) File.Delete(variantState);
             }
         }
         foreach (var sib in staleRoots) Directory.Delete(sib, recursive: true);

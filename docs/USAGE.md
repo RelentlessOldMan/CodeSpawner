@@ -290,7 +290,7 @@ codespawner gen --out D:\death --preset death
 robocopy D:\death \\SERVER\share\death /E /MT:16 /R:1 /W:1
 # (then run your tool against \\SERVER\share\death)
 
-# Release gate: run the full battery.
+# Before a release: run the full battery (release.ps1 runs only `dotnet test`).
 .\scripts\bench.ps1
 ```
 

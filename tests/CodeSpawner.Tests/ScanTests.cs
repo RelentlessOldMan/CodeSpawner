@@ -218,6 +218,39 @@ public class ScanTests
         Assert.Equal(NoClock(text), NoClock(again));
     }
 
+    // A suffix common enough to pass --min-cluster can still be a name: a dotfile (".zqxcanary-acme", all name) in
+    // many dirs, or a user's suffix ("notes.zqxcanaryjs") repeated in their own dir. Neither is recorded.
+    [Theory]
+    [InlineData("")]
+    [InlineData("--structure-only")]
+    public void Scan_NameLikeSuffixes_NeverRecorded(string postureFlag)
+    {
+        using var tmp = new TempDir();
+        string root = Path.Combine(tmp.Path, "tree");
+        for (int d = 0; d < 3; d++)
+        {
+            string dir = Path.Combine(root, $"d{d}");
+            Directory.CreateDirectory(dir);
+            for (int k = 0; k < 2; k++)
+            {
+                Directory.CreateDirectory(Path.Combine(dir, $"k{k}"));
+                File.WriteAllText(Path.Combine(dir, $"k{k}", $".{Canary}-acme"), "x\n");
+            }
+        }
+        string mine = Path.Combine(root, "home");
+        Directory.CreateDirectory(mine);
+        for (int i = 0; i < 6; i++) File.WriteAllText(Path.Combine(mine, $"notes{i}.{Canary}js"), "x\n");
+        for (int i = 0; i < 6; i++) File.WriteAllText(Path.Combine(root, $"d{i % 3}", $"f{i}.c"), "int x;\n");
+
+        string[] posture = postureFlag == "" ? Array.Empty<string>() : new[] { postureFlag };
+        string text = ScanToText(root, Path.Combine(tmp.Path, "p.json"), posture);
+        Assert.DoesNotContain(Canary, text, StringComparison.OrdinalIgnoreCase);
+        using var doc = System.Text.Json.JsonDocument.Parse(text);
+        var exts = doc.RootElement.GetProperty("extensions").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("ext").GetString()!, e => e.GetProperty("files").GetInt64());
+        Assert.Equal(new Dictionary<string, long> { [".c"] = 6, ["(dotfile)"] = 6, ["(other)"] = 6 }, exts);
+    }
+
     // gen --from-profile honours the profile: one file per archetype count (named <label>_<i><ext>, "other" → .dat),
     // every size inside its archetype's drawn range (give or take the line the cut lands on), and the same profile + seed is byte-identical.
     [Fact]
