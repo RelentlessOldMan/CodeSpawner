@@ -100,6 +100,12 @@ public static class ArgParser
     {
         var o = new ScanOptions { Tree = "" };
         var c = new Cursor(args);
+        bool posture = false;
+        void Posture(Profile.PrivacyPosture p)
+        {
+            if (posture && o.Posture != p) throw new ArgException("--structure-only and --content-stats are exclusive; pick one");
+            posture = true; o.Posture = p;
+        }
         while (c.Next())
         {
             if (c.Key is null)
@@ -113,8 +119,8 @@ public static class ArgParser
                 case "tree": o.Tree = c.Val(); break;
                 case "out": o.Out = c.Val(); break;
                 // posture switches, not booleans: a word after them is the positional tree, never a value
-                case "structure-only": c.NoValue(); o.Posture = Profile.PrivacyPosture.StructureOnly; break;
-                case "content-stats": c.NoValue(); o.Posture = Profile.PrivacyPosture.ContentStats; break;
+                case "structure-only": c.NoValue(); Posture(Profile.PrivacyPosture.StructureOnly); break;
+                case "content-stats": c.NoValue(); Posture(Profile.PrivacyPosture.ContentStats); break;
                 case "min-cluster": o.MinCluster = c.Int(); break;
                 case "sample": o.Sample = c.Int(); break;
                 default: throw new ArgException($"unknown option --{c.Key}");
@@ -123,6 +129,10 @@ public static class ArgParser
         if (string.IsNullOrWhiteSpace(o.Tree)) throw new ArgException("scan <tree> is required");
         if (string.IsNullOrWhiteSpace(o.Out)) throw new ArgException("--out <profile.json> is required");
         if (o.MinCluster < 1) throw new ArgException("--min-cluster must be >= 1");
+        // scan never writes into the tree it reads (the profile would land in it, or overwrite one of its files).
+        string tree = Path.TrimEndingDirectorySeparator(Path.GetFullPath(o.Tree)) + Path.DirectorySeparatorChar;
+        if (Path.GetFullPath(o.Out).StartsWith(tree, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ArgException($"--out '{o.Out}' is inside the tree being scanned; write the profile somewhere else");
         return o;
     }
 

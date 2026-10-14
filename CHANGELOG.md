@@ -11,6 +11,32 @@ reads it.
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-10-13
+
+### Fixed
+- Regenerating a corpus no longer empties what a `<out>_v1`/`_v2` junction or
+  symlink points at; a linked variant is left alone.
+- Two `mutate` runs on one corpus can no longer interleave edits: mutate holds
+  an exclusive `<corpus>-mutating.lock` for its whole run and refuses (exit 1)
+  while another run holds it.
+- On Windows the never-delete guards (drive root, current directory, user
+  profile, executable directory, system folders) also compare directory
+  identity, so `\\?\`, `\\localhost\C$`, `subst` and 8.3 aliases are refused.
+- Regenerating over a 1.1.5-or-earlier corpus with a larger `--linked-roots`
+  no longer clears a non-empty `_rootN` the old corpus never wrote without
+  `--force`: the roots it owns are read from its manifest.
+- `gen --from-profile` minified files are never cut below the 100,000-byte
+  line that makes them minified (a 100,000–100,005 byte draw could land just
+  under it and re-classify as text).
+
+### Changed
+- `scan` k-anonymizes the extension histogram: extensions fewer than
+  `--min-cluster` files share, and suffixes that aren't extension-shaped, are
+  counted as `(other)` (generated as `.dat`). Ties sort by extension.
+- `scan` rounds archetype p50/p90/max to 3 significant digits.
+- `scan` refuses an `--out` inside the scanned tree, and refuses
+  `--structure-only` together with `--content-stats`.
+
 ## [1.1.9] - 2026-10-13
 
 ### Changed
@@ -476,7 +502,8 @@ reads it.
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.9...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.10...HEAD
+[1.1.10]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.9...v1.1.10
 [1.1.9]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.8...v1.1.9
 [1.1.8]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.6...v1.1.7

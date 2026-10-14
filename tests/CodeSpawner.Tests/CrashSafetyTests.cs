@@ -233,6 +233,24 @@ public class CrashSafetyTests
         Assert.True(File.Exists(far));                                 // not in the new corpus's way: untouched
     }
 
+    // A 1.1.5 corpus's manifest names the roots it wrote; a sibling beyond them holds someone else's files, so a
+    // regen with more --linked-roots refuses it (before deleting anything) unless --force.
+    [Fact]
+    public void LegacyMarker_LinkedRootsBeyondItsManifest_NeedForce()
+    {
+        using var tmp = new TempDir();
+        string corpus = Gen(tmp, "c", "--linked-roots", "2");
+        File.WriteAllText(Path.Combine(corpus, ".codespawner"), "CodeSpawner 1.1.5\n");
+        string user = Path.Combine(corpus + "_root2", "user.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(user)!);
+        File.WriteAllText(user, "mine");
+
+        Assert.Equal(2, Cli(new[] { "gen", "--out", corpus, "--linked-roots", "3" }.Concat(Tiny).ToArray()));
+        Assert.Contains("_root2", _lastErr);
+        Assert.True(File.Exists(user));
+        Assert.True(File.Exists(Path.Combine(corpus, ".codespawner")));   // refused before the first delete
+    }
+
     // A 1.1.5 corpus's marker doesn't record its linked roots: its _rootN in the new range are its own (cleared, no
     // --force needed), and an unrecorded one beyond that range is left alone.
     [Fact]
@@ -268,6 +286,57 @@ public class CrashSafetyTests
 
         Gen(tmp, "c");
         Assert.Equal(0, Cli("verify", "--corpus", corpus));
+    }
+
+    // A <corpus>_v1 that is a junction (to another corpus, say) is not ours: a regen must not empty its target.
+    [Fact]
+    public void Regen_LeavesAJunctionedVariantAndItsTargetAlone()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var tmp = new TempDir();
+        string other = Gen(tmp, "other");
+        int before = Directory.GetFileSystemEntries(other, "*", SearchOption.AllDirectories).Length;
+        string corpus = Gen(tmp, "c");
+        Junction(corpus + "_v1", other);
+
+        Gen(tmp, "c");
+        Assert.Equal(before, Directory.GetFileSystemEntries(other, "*", SearchOption.AllDirectories).Length);
+        Assert.Equal(0, Cli("verify", "--corpus", other));
+        Assert.True(Directory.Exists(corpus + "_v1"));
+    }
+
+    // Two mutates of one corpus can't run at once: the second is refused while the first holds the lock, and
+    // nothing of it is written. The lock goes when the run ends.
+    [Fact]
+    public void Mutate_RefusesWhileAnotherRunHoldsTheCorpus()
+    {
+        using var tmp = new TempDir();
+        string corpus = Gen(tmp, "c");
+        string lockPath = corpus + "-mutating.lock";
+        using (new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Equal(1, Cli("mutate", "--corpus", corpus, "--target", "source"));
+            Assert.Contains("being mutated by another run", _lastErr);
+            Assert.False(File.Exists(corpus + "-delta.json"));
+            Assert.False(File.Exists(Path.Combine(corpus, ".codespawner-mutating")));
+        }
+        File.Delete(lockPath);
+        Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source"));
+        Assert.False(File.Exists(lockPath));                           // deleted on close
+    }
+
+    // The delete guards compare the directory, not only its path text: \\?\ and admin-share aliases of the working
+    // directory's parent are refused too.
+    [Fact]
+    public void UnsafeToDelete_SeesThroughPathAliases()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string parent = Path.GetDirectoryName(Directory.GetCurrentDirectory())!;
+        Assert.NotNull(OutputDir.UnsafeToDelete(@"\\?\" + parent));
+        string share = $@"\\localhost\{parent[0]}${parent[2..]}";
+        if (Directory.Exists(share)) Assert.NotNull(OutputDir.UnsafeToDelete(share));   // admin shares may be off
+        using var tmp = new TempDir();
+        Assert.Null(OutputDir.UnsafeToDelete(@"\\?\" + tmp.Path));
     }
 
     // ---- containment ----

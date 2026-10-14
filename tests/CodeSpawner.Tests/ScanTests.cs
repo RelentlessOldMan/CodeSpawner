@@ -53,6 +53,22 @@ public class ScanTests
     }
 
     [Fact]
+    public void Scan_RefusesConflictingPostures_AndAnOutInsideTheTree()
+    {
+        using var tmp = new TempDir();
+        string tree = Path.Combine(tmp.Path, "tree");
+        Directory.CreateDirectory(tree);
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree, "--out", tmp.File("p.json"), "--structure-only", "--content-stats" }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree, "--out", Path.Combine(tree, "src", "f.c") }));
+        Assert.Throws<ArgException>(() => ArgParser.ParseScan(new[] { tree + Path.DirectorySeparatorChar, "--out", Path.Combine(tree, "p.json") }));
+        ArgParser.ParseScan(new[] { tree, "--out", tree + "-profile.json", "--structure-only", "--structure-only" });   // a sibling, a repeat
+        Assert.Equal(1350, Scanner.Round3(1347));
+        Assert.Equal(840000, Scanner.Round3(840043));
+        Assert.Equal(999, Scanner.Round3(999));
+        Assert.Equal(10000, Scanner.Round3(9996));
+    }
+
+    [Fact]
     public void Scan_MissingTree_ReturnsError()
     {
         using var tmp = new TempDir();
@@ -99,6 +115,9 @@ public class ScanTests
         }
         File.WriteAllText(Path.Combine(root, $"{Canary}_lonely.py"), $"# {Canary}\n{Canary}_x = '{Canary}'\n");
         File.WriteAllText(Path.Combine(root, $"{Canary}_notes.txt"), $"{Canary} secret notes\n");
+        // a dot inside a name is not an extension: neither a rare suffix nor one that isn't extension-shaped is kept
+        File.WriteAllText(Path.Combine(root, $"board deck.{Canary}"), "x\n");
+        File.WriteAllText(Path.Combine(root, $"backup.{Canary}@example.com.old copy"), "x\n");
         return root;
     }
 
@@ -135,8 +154,15 @@ public class ScanTests
         Assert.All(real, a => Assert.Matches("^a[0-9]+$", a.GetProperty("label").GetString()!));
         Assert.All(real, a => Assert.Equal(6, a.GetProperty("count").GetInt32()));
         Assert.Equal("*", other.GetProperty("extension").GetString());
-        Assert.Equal(2, other.GetProperty("count").GetInt32());
+        Assert.Equal(4, other.GetProperty("count").GetInt32());
         Assert.DoesNotContain(arch, a => a.GetProperty("extension").GetString() is ".py" or ".txt");
+        // the extension histogram is k-anonymized too: the four lone suffixes are one (other) row
+        var exts = doc.RootElement.GetProperty("extensions").EnumerateArray()
+            .ToDictionary(e => e.GetProperty("ext").GetString()!, e => e.GetProperty("files").GetInt64());
+        Assert.Equal(new Dictionary<string, long> { [".c"] = 6, [".h"] = 6, ["(other)"] = 4 }, exts);
+        // p50/p90/max are rounded, never one file's exact size
+        Assert.All(arch, a => Assert.All(new[] { "p50", "p90", "max" },
+            k => { long v = a.GetProperty("sizeDistribution").GetProperty(k).GetInt64(); Assert.Equal(Scanner.Round3(v), v); }));
 
         // posture decides which blocks exist
         bool reads = posture.Length == 0 || posture[0] == "--content-stats", stats = posture.Length > 0 && posture[0] == "--content-stats";

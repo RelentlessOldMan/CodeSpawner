@@ -38,7 +38,7 @@ public static class ContentClassifier
     private const double XMacroFrac = 0.30;
     private const double TemplateFrac = 0.03;
     private const double TabularFrac = 0.70;           // >=70% of non-blank lines share the modal comma count
-    private const long MinifiedLineLen = 100_000;      // a single line this long (with few lines) -> minified
+    internal const long MinifiedLineLen = 100_000;      // a single line this long (with few lines) -> minified
     private const int MinifiedMaxLines = 50;
     private const double BlobHighEntropyBits = 3.0;    // Shannon entropy of byte values on the prefix
 

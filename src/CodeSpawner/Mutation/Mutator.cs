@@ -51,7 +51,28 @@ public static class Mutator
     // Per thread, like InMemoryTextMaxOverride, so a test shrinking them can't leak into a parallel test class.
     [ThreadStatic] internal static long? GrowTargetOverride, ShrinkTargetOverride, RestreamTargetOverride;
 
+    /// <summary>
+    /// Mutate holds an exclusive lock (<c>&lt;corpus&gt;-mutating.lock</c>, beside the tree) for its whole run, so two
+    /// mutates of one corpus can't interleave: the journal alone is checked then written, and the first run to finish
+    /// would delete it under the other. The OS drops the lock if the process dies; the file is deleted on close (a
+    /// killed run on POSIX can leave it behind, and the next run simply reuses it).
+    /// </summary>
     public static int Run(MutateOptions o)
+    {
+        string corpus = Path.GetFullPath(o.Corpus);
+        if (!File.Exists(Path.Combine(corpus, MarkerName))) return RunLocked(o);   // refused there, before any write
+        string lockPath = TrimDir(corpus) + "-mutating.lock";
+        FileStream held;
+        try { held = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose); }
+        catch (IOException)
+        {
+            throw new InvalidOperationException(
+                $"--corpus '{corpus}' is being mutated by another run ({lockPath} is held). Wait for it to finish.");
+        }
+        using (held) return RunLocked(o);
+    }
+
+    private static int RunLocked(MutateOptions o)
     {
         string corpus = Path.GetFullPath(o.Corpus);
         if (!Directory.Exists(corpus)) { Console.Error.WriteLine($"error: corpus not found: {corpus}"); return 2; }

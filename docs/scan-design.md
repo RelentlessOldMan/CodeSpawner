@@ -42,9 +42,14 @@ macro names or values, literals, or any byte snippet. Content is read to COMPUTE
 **Only stored:** counts, histograms, ratios, distributions, and category labels (e.g. `preprocessor-dense`).
 
 Hardening:
-- **k-anonymity** (`--min-cluster N`, default e.g. 5) — archetypes with fewer than N files fold into an
-  `other` bucket so a unique/identifying file can't be singled out.
+- **k-anonymity** (`--min-cluster N`, default 5) — archetypes with fewer than N files fold into an
+  `other` bucket so a unique/identifying file can't be singled out. The extension histogram is folded the
+  same way: an extension fewer than N files share is counted under `(other)`, and so is any suffix that
+  isn't extension-shaped (`^\.[a-z0-9_+-]{1,16}$`), since it is part of a file name.
 - **Rounding / bucketing** — sizes and ratios are bucketed/rounded; no exact per-file values leak.
+  Archetype p50/p90/max (each one file's size) are rounded to 3 significant digits.
+- `--out` may not be inside the scanned tree, and `--structure-only` with `--content-stats` is refused
+  rather than letting the last one win.
 - **Sampling** (`--sample N`) — content stats/labels from up to N files per (ext, size-band) group; bounds
   time and exposure on huge trees. Structure counts remain exact.
 - Read-only; deterministic; offline. The output contains no secret by construction, and is small enough to
