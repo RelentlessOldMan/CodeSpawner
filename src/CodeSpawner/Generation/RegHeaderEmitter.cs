@@ -25,7 +25,9 @@ public static class RegHeaderEmitter
 
     /// <summary>
     /// Write a register header to <paramref name="path"/>. Stops at whichever comes first:
-    /// <paramref name="defines"/> emitted or <paramref name="maxBytes"/> reached. <paramref name="fam"/>
+    /// <paramref name="defines"/> emitted (the last register emits only the defines still owed, so the count is
+    /// exact) or the next register would take the file, <c>#endif</c> included, past <paramref name="maxBytes"/>
+    /// (a whole register is the unit, so the file never exceeds the cap). <paramref name="fam"/>
     /// is the block family number woven into symbol names. Returns the bytes + identifier count emitted.
     /// </summary>
     public static HeaderStats Write(string path, long defines, long maxBytes, int fam)
@@ -48,10 +50,13 @@ public static class RegHeaderEmitter
         len = Int(buf, len, fam);
         len = Ascii(buf, len, " (synthetic) */\n");
 
+        const int EndifBytes = 7;                          // "#endif\n"
         long emitted = 0;
         int reg = 0;
-        while (emitted < defines && flushed + len < maxBytes)
+        while (emitted < defines)
         {
+            int mark = len;
+            long owed = defines - emitted;
             // #define HWIO_BLK{fam}_REG{reg}_ADDR (BASE_BLOCK{fam} + 0x{addr:x8})
             len = Ascii(buf, len, "#define HWIO_BLK");
             len = Int(buf, len, fam);
@@ -61,22 +66,31 @@ public static class RegHeaderEmitter
             len = Int(buf, len, fam);
             len = Ascii(buf, len, " + 0x");
             len = Hex8(buf, len, (uint)reg * 4u);
-            len = Ascii(buf, len, ")\n#define HWIO_BLK");
-            len = Int(buf, len, fam);
-            len = Ascii(buf, len, "_REG");
-            len = Int(buf, len, reg);
-            len = Ascii(buf, len, "_RMSK 0x000000ff\n#define HWIO_BLK");
-            len = Int(buf, len, fam);
-            len = Ascii(buf, len, "_REG");
-            len = Int(buf, len, reg);
-            len = Ascii(buf, len, "_IN in_dword(HWIO_BLK");
-            len = Int(buf, len, fam);
-            len = Ascii(buf, len, "_REG");
-            len = Int(buf, len, reg);
-            len = Ascii(buf, len, "_ADDR)\n");
+            len = Ascii(buf, len, ")\n");
+            if (owed >= 2)
+            {
+                len = Ascii(buf, len, "#define HWIO_BLK");
+                len = Int(buf, len, fam);
+                len = Ascii(buf, len, "_REG");
+                len = Int(buf, len, reg);
+                len = Ascii(buf, len, "_RMSK 0x000000ff\n");
+            }
+            if (owed >= 3)
+            {
+                len = Ascii(buf, len, "#define HWIO_BLK");
+                len = Int(buf, len, fam);
+                len = Ascii(buf, len, "_REG");
+                len = Int(buf, len, reg);
+                len = Ascii(buf, len, "_IN in_dword(HWIO_BLK");
+                len = Int(buf, len, fam);
+                len = Ascii(buf, len, "_REG");
+                len = Int(buf, len, reg);
+                len = Ascii(buf, len, "_ADDR)\n");
+            }
+            if (flushed + len + EndifBytes > maxBytes) { len = mark; break; }   // this register would cross the cap
 
             reg++;
-            emitted += 3;
+            emitted += Math.Min(3, owed);
 
             if (len >= FlushThreshold)
             {

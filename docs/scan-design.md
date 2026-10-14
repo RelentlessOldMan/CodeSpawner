@@ -45,7 +45,10 @@ Hardening:
 - **k-anonymity** (`--min-cluster N`, default 5) — archetypes with fewer than N files fold into an
   `other` bucket so a unique/identifying file can't be singled out. The extension histogram is folded the
   same way: an extension fewer than N files share is counted under `(other)`, and so is any suffix that
-  isn't extension-shaped (`^\.[a-z0-9_+-]{1,16}$`), since it is part of a file name.
+  isn't extension-shaped (`^\.[a-z0-9_+-]{1,16}$`), since it is part of a file name. A dotfile (`.name`, all
+  name) counts as `(dotfile)`. An extension outside the common C/C++/build set must also appear in at least
+  3 directories (1.1.13): a suffix confined to fewer is more likely a person's or project's name
+  (`notes.jsmith`) than a file type, so it folds into `(other)`.
 - **Rounding / bucketing** — sizes and ratios are bucketed/rounded; no exact per-file values leak.
   Archetype p50/p90/max (each one file's size) are rounded to 3 significant digits.
 - `--out` may not be inside the scanned tree, and `--structure-only` with `--content-stats` is refused

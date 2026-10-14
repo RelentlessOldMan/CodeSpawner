@@ -22,6 +22,38 @@ public class ProgramTests
         finally { _lastErr = err.ToString(); Console.SetOut(o); Console.SetError(e); }
     }
 
+    // The usage text is a raw string: a doubled backslash prints doubled, and an inserted line must not split a
+    // sentence (the decoy-fraction note once landed between "decoys" and "(original kept)").
+    [Fact]
+    public void UsageText_HasNoDoubledBackslash_AndDecoyHelpReadsInOrder()
+    {
+        Assert.DoesNotContain(@"\\", Program.UsageText);
+        Assert.Matches(@"near-duplicate ADD decoys\s+\(original kept\)", Program.UsageText);
+    }
+
+    // A newer manifest format may carry fields this build cannot honour, so mutate must refuse it before editing.
+    [Theory]
+    [InlineData("--edits", "1")]
+    [InlineData("--target", "source")]
+    public void Mutate_NewerManifestVersion_IsRefused_CorpusUntouched(params string[] mode)
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c"), man = Path.Combine(tmp.Path, "c-manifest.json");
+        Assert.Equal(0, Cli("gen", "--out", corpus, "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0",
+                            "--med-headers", "0", "--cfiles", "2"));
+        string text = File.ReadAllText(man);
+        Assert.Contains("\"manifestVersion\": 1", text);
+        File.WriteAllText(man, text.Replace("\"manifestVersion\": 1", "\"manifestVersion\": 2"));
+        string Snapshot() => string.Join("\n", Directory.EnumerateFiles(tmp.Path, "*", SearchOption.AllDirectories)
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .Select(f => f + " " + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(f)))));
+        string before = Snapshot();
+
+        Assert.NotEqual(0, Cli(new[] { "mutate", "--corpus", corpus }.Concat(mode).ToArray()));
+        Assert.Contains("manifest version 2", _lastErr);
+        Assert.Equal(before, Snapshot());
+    }
+
     [Fact]
     public void Dispatch_ExitCodes()
     {
@@ -29,7 +61,7 @@ public class ProgramTests
         Assert.Equal(0, Cli("--help"));
         Assert.Equal(0, Cli("gen", "--help"));            // <command> --help prints usage, not "unknown knob"
         Assert.Equal(0, Cli("mutate", "--corpus", "x", "-h"));
-        Assert.Equal(1, Cli());                       // no args ⇒ usage + error exit
+        Assert.Equal(2, Cli());                       // no args ⇒ usage + usage-error exit
         Assert.Equal(2, Cli("bogus-command"));        // unknown command
         Assert.Equal(0, Cli("digest-selftest"));      // the four golden vectors reproduce
         Assert.Equal(2, Cli("gen"));                  // ArgException (missing --out) ⇒ exit 2
@@ -64,6 +96,16 @@ public class ProgramTests
         // a tiny bulk mutate on the generated corpus (diff-oracle mode)
         Assert.Equal(0, Cli("mutate", "--corpus", corpus, "--target", "source", "--files-changed", "1", "--edit-density", "0.5"));
         Assert.True(File.Exists(Path.Combine(tmp.Path, "corpus-delta.json")));
+        // the first shuffled pick here is not editable text: another file stands in, so the delta holds the 1 asked for
+        Assert.DoesNotContain("warning:", _lastErr);
+        using (var d = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(tmp.Path, "corpus-delta.json"))))
+            Assert.Equal(1, d.RootElement.GetProperty("fileOps").GetProperty("modified").GetArrayLength());
+
+        // asking for more files than the target holds still runs, but says so (it used to exit 0 silently)
+        string corpus3 = Path.Combine(tmp.Path, "corpus3");
+        Assert.Equal(0, Cli(new[] { "gen", "--out", corpus3 }.Concat(tiny).ToArray()));
+        Assert.True(Cli("mutate", "--corpus", corpus3, "--target", "source", "--files-changed", "1000000") == 0, _lastErr);
+        Assert.Contains("--files-changed 1000000 asked for more files", _lastErr);
     }
 
     [Fact]
@@ -134,6 +176,32 @@ public class ProgramTests
 
         foreach (var (root, other) in new[] { ("a", "b"), ("a_root1", "b_root1") })
             Assert.Equal(TreeSnapshot(Path.Combine(tmp.Path, root)), TreeSnapshot(Path.Combine(tmp.Path, other)));
+    }
+
+    // A tiny --scale scales --dirs to 0, which DirTree builds as 1 but _meta.gen recorded as 0, and --dirs 0 is
+    // refused, so the replay failed. Every non-default structure knob must replay too.
+    [Fact]
+    public void Gen_MetaGen_TinyScaleAndNonDefaultKnobs_Replay()
+    {
+        using var tmp = new TempDir();
+        string a = Path.Combine(tmp.Path, "a"), b = Path.Combine(tmp.Path, "b");
+        var args = RichGenArgs(a).Select(x => x == "0.0003" ? "0.00001" : x).Concat(new[]
+        {
+            "--build-output", "--compile-db", "partial", "--no-newline", "--depth", "5",
+            "--giant-includers", "2", "--shrink-seeds", "1",
+        }).ToArray();
+        int rc = Cli(args);
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+        Assert.Equal("1", MetaGen(Path.Combine(tmp.Path, "a-manifest.json"))["dirs"]);
+        ReplayMetaGen(Path.Combine(tmp.Path, "a-manifest.json"), b);
+        // compile_commands.json holds absolute paths (as a real one does): equal once the output root is aligned.
+        const string Db = "compile_commands.json";
+        var sa = TreeSnapshot(a); var sb = TreeSnapshot(b);
+        Assert.True(sa.Remove(Db) && sb.Remove(Db));
+        Assert.Equal(sa, sb);
+        static string Esc(string p) => p.Replace("\\", "\\\\");
+        Assert.Equal(File.ReadAllText(Path.Combine(a, Db)).Replace(Esc(a), "<root>"),
+                     File.ReadAllText(Path.Combine(b, Db)).Replace(Esc(b), "<root>"));
     }
 
     // --macro-density is a cap only when set; unset, giants fill to maxHeaderMB uncapped. Recording the 1M default
@@ -407,8 +475,28 @@ public class ProgramTests
 
         // --from-profile --with-oracle regenerates a look-alike AND overlays a ground-truth manifest.
         string regen = Path.Combine(tmp.Path, "regen");
-        Assert.Equal(0, Cli("gen", "--out", regen, "--from-profile", prof, "--with-oracle"));
+        Assert.Equal(0, Cli("gen", "--out", regen, "--from-profile", prof, "--with-oracle", "--oracle-fanout", "2", "--oracle-indirect", "3"));
         Assert.True(File.Exists(Path.Combine(tmp.Path, "regen-manifest.json")));   // sibling manifest emitted
+        var gen = MetaGen(Path.Combine(tmp.Path, "regen-manifest.json"));           // the oracle knobs are recorded
+        Assert.Equal("2", gen["oracleFanout"]);
+        Assert.Equal("3", gen["oracleIndirect"]);
+        Assert.Equal("true", gen["withOracle"]);
+        Assert.DoesNotContain(gen.Values, v => v.Contains("prof.json"));            // the profile path is not
+
+        // Each recorded indirect edge's `dispatched` matches the emitted C: the owner's file takes the target's
+        // address into a slot, and calls through that slot exactly when the edge says dispatched.
+        var m = CodeSpawner.Manifest.ManifestReader.Load(Path.Combine(tmp.Path, "regen-manifest.json"));
+        var edges = m.Symbols.Values.SelectMany(s => s.IndirectEdges.Select(e => (s.Def, e))).ToList();
+        Assert.Equal(3, edges.Count);
+        Assert.Contains(edges, x => x.e.Dispatched);
+        Assert.Contains(edges, x => !x.e.Dispatched);
+        foreach (var (def, e) in edges)
+        {
+            string c = File.ReadAllText(Path.Combine(regen, def[..def.LastIndexOf(':')]));
+            var slot = System.Text.RegularExpressions.Regex.Match(c, $@"\(\*(ip_\d+)(?:\[1\])?\)\(int\) = \{{? ?&{e.Target}\b");
+            Assert.True(slot.Success, $"{e.Target}: no address-taken slot in {def}");
+            Assert.Equal(e.Dispatched, System.Text.RegularExpressions.Regex.IsMatch(c, $@"acc \+= {slot.Groups[1].Value}(\[0\])?\(x\);"));
+        }
 
         // refuses a foreign non-empty dir, honours --force
         string foreign = Path.Combine(tmp.Path, "foreign");

@@ -97,6 +97,13 @@ public static class ArgParser
                 throw new ArgException($"--from-profile takes its shape from the profile and ignores {string.Join(", ", ignored.Select(k => "--" + k))}; drop them (a --preset counts too)");
             var oracle = given.FirstOrDefault(k => k.StartsWith("oracle-", StringComparison.Ordinal));
             if (oracle is not null && !o.WithOracle) throw new ArgException($"--{oracle} requires --with-oracle");
+            // These shape the fanout DAG; the default linear chain (--oracle-fanout 0) has none of them.
+            var d = new GenOptions { Out = "" };
+            string? dagOnly = o.OracleDepth != d.OracleDepth ? "oracle-depth"
+                : o.OracleSharedLeaves != d.OracleSharedLeaves ? "oracle-shared-leaves"
+                : o.OracleReachableFrac != d.OracleReachableFrac ? "oracle-reachable-frac" : null;
+            if (dagOnly is not null && o.OracleFanout <= 0)
+                throw new ArgException($"--{dagOnly} shapes the --oracle-fanout DAG and is ignored by the default linear chain; add --oracle-fanout <n>");
         }
         else
         {
@@ -177,11 +184,13 @@ public static class ArgParser
             {
                 // first positional is the tree to scan
                 if (string.IsNullOrEmpty(o.Tree)) { o.Tree = c.Raw; continue; }
-                throw new ArgException($"unexpected argument '{c.Raw}'");
+                throw new ArgException($"unexpected argument '{c.Raw}' (the tree to scan is already '{o.Tree}')");
             }
             switch (c.Key)
             {
-                case "tree": o.Tree = c.Val(); break;
+                case "tree":
+                    if (!string.IsNullOrEmpty(o.Tree)) throw new ArgException("the tree to scan is given twice (a positional <tree> and --tree, or --tree repeated); give it once");
+                    o.Tree = c.Val(); break;
                 case "out": o.Out = c.Val(); break;
                 // posture switches, not booleans: a word after them is the positional tree, never a value
                 case "structure-only": c.NoValue(); Posture(Profile.PrivacyPosture.StructureOnly); break;
@@ -194,20 +203,34 @@ public static class ArgParser
         if (string.IsNullOrWhiteSpace(o.Tree)) throw new ArgException("scan <tree> is required");
         if (string.IsNullOrWhiteSpace(o.Out)) throw new ArgException("--out <profile.json> is required");
         if (o.MinCluster < 1) throw new ArgException("--min-cluster must be >= 1");
+        if (o.Sample < 0) throw new ArgException($"--sample must be >= 0, got {o.Sample}");
         // scan never writes into the tree it reads (the profile would land in it, or overwrite one of its files).
         string tree = Path.TrimEndingDirectorySeparator(Path.GetFullPath(o.Tree)) + Path.DirectorySeparatorChar;
-        if (Path.GetFullPath(o.Out).StartsWith(tree, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        if (Path.GetFullPath(o.Out).StartsWith(tree, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+            || ReachesDir(Path.GetDirectoryName(Path.GetFullPath(o.Out)), Generation.DirIdentity.Of(tree)))
             throw new ArgException($"--out '{o.Out}' is inside the tree being scanned; write the profile somewhere else");
         return o;
+    }
+
+    /// <summary>True when <paramref name="dir"/> or an ancestor IS the directory <paramref name="id"/> names, so an
+    /// alias of the tree (a junction, a subst drive, \\localhost\C$) counts as inside it.</summary>
+    private static bool ReachesDir(string? dir, Generation.DirIdentity? id)
+    {
+        if (id is null) return false;
+        for (; dir is not null; dir = Path.GetDirectoryName(dir))
+            if (Directory.Exists(dir) && Generation.DirIdentity.Of(dir) == id) return true;
+        return false;
     }
 
     public static Mutation.MutateOptions ParseMutate(string[] args)
     {
         var o = new Mutation.MutateOptions { Corpus = "" };
         var c = new Cursor(args);
+        var given = new HashSet<string>(StringComparer.Ordinal);   // knobs the user typed, to refuse ones the mode ignores
         while (c.Next())
         {
             if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}'");
+            given.Add(c.Key);
             switch (c.Key)
             {
                 case "corpus": o.Corpus = c.Val(); break;
@@ -251,6 +274,11 @@ public static class ArgParser
             if (o.GiantMinMb < 1) throw new ArgException("--giant-min-mb must be >= 1");
             if (o.ShardSize < 0) throw new ArgException("--shard-size must be >= 0 (0 = monolithic delta)");
             if (o.ShardSize > 0 && o.ThreeWay) throw new ArgException("--shard-size applies to the 2-way delta; it cannot be combined with --three-way");
+            foreach (var knob in new[] { "edits", "through", "restream" })
+                if (given.Contains(knob)) throw new ArgException($"--{knob} applies to the step mode (no --target); bulk mode ignores it");
+            if (given.Contains("overlap-fraction") && !o.ThreeWay) throw new ArgException("--overlap-fraction requires --three-way");
+            if (o.GiantEdit is not null && (o.ThreeWay || o.Kind is not ("content" or "mixed")))
+                throw new ArgException("--giant-edit applies to 2-way content edits (--edit-kind content or mixed)");
             return o;
         }
 
@@ -261,6 +289,8 @@ public static class ArgParser
         if (o.ShardSize > 0) throw new ArgException("--shard-size requires --target (bulk mode)");
         if (o.DecoyFraction > 0) throw new ArgException("--decoy-fraction requires --target (bulk mode)");
         if (o.FilesChanged is not null) throw new ArgException("--files-changed requires --target (bulk mode)");
+        foreach (var knob in new[] { "edit-density", "giant-min-mb", "overlap-fraction" })
+            if (given.Contains(knob)) throw new ArgException($"--{knob} requires --target (bulk mode)");
         if (o.Edits < 1) throw new ArgException("--edits must be >= 1");
         if (o.Step is not null && o.Through) throw new ArgException("--step and --through are mutually exclusive");
         if (o.Step is { } k && (k < 1 || k > o.Edits)) throw new ArgException($"--step must be in 1..{o.Edits}");

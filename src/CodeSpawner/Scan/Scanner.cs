@@ -30,7 +30,7 @@ public sealed class Scanner
     private sealed class FileEntry
     {
         public required string Path;
-        public required string Ext;
+        public required string Ext;          // folded to (other) after the walk if it looks like a name
         public long Size;
         public FileStats? Stats; // populated only for sampled files under a content posture
     }
@@ -49,6 +49,7 @@ public sealed class Scanner
         var files = new List<FileEntry>();
         var basenameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         WalkFiles(treeFull, files, basenameCounts);
+        FoldNameLikeExtensions(files);
 
         var model = new ProfileModel
         {
@@ -162,6 +163,7 @@ public sealed class Scanner
             try { size = new FileInfo(path).Length; } catch { _unreadableFiles++; continue; }
             string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext.Length == 0) ext = "(none)";
+            else if (ext.Length == Path.GetFileName(path).Length) ext = DotfileExt;   // ".name": all name, no extension
             else if (!PlainExtension.IsMatch(ext)) ext = OtherExt;   // a dot inside a name, not an extension: never kept
             files.Add(new FileEntry { Path = path, Ext = ext, Size = size });
             string bn = Path.GetFileName(path).ToLowerInvariant();
@@ -197,6 +199,33 @@ public sealed class Scanner
     private static readonly System.Text.RegularExpressions.Regex PlainExtension =
         new(@"^\.[a-z0-9_+-]{1,16}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     internal const string OtherExt = "(other)";
+    internal const string DotfileExt = "(dotfile)";
+
+    /// <summary>Extensions recorded wherever they appear: what a C/C++ tree and its build hold.</summary>
+    private static readonly HashSet<string> KnownExts = new(SourceExts, StringComparer.Ordinal)
+    {
+        ".txt", ".md", ".json", ".xml", ".yml", ".yaml", ".ini", ".cfg", ".cmake", ".mk", ".mak", ".in", ".py",
+        ".sh", ".bat", ".cmd", ".ps1", ".pl", ".s", ".asm", ".def", ".rc", ".o", ".obj", ".a", ".lib", ".so",
+        ".dll", ".exe", ".pdb", ".d", ".map", ".lst", ".bak", ".log", ".html", ".css", ".js", ".png", ".gif",
+        ".jpg", ".ico", ".svg", ".pdf", ".zip", ".gz", ".tar", ".patch", ".diff", ".sln", ".vcxproj",
+        ".filters", ".user", ".props", ".targets", ".csv", ".dat", ".bin", ".tmp", ".old", ".orig",
+    };
+
+    /// <summary>The fewest distinct directories an extension outside <see cref="KnownExts"/> must appear in to be
+    /// recorded. A suffix confined to a few directories is more likely a name (a user's <c>notes.jsmith</c>, a
+    /// project's <c>build.acme</c>) than a file type, so it is folded into <c>(other)</c>.</summary>
+    internal const int MinExtDirs = 3;
+
+    private static void FoldNameLikeExtensions(List<FileEntry> files)
+    {
+        var dirs = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var f in files)
+            if (f.Ext.StartsWith('.') && !KnownExts.Contains(f.Ext))
+                (dirs.TryGetValue(f.Ext, out var d) ? d : dirs[f.Ext] = new(StringComparer.OrdinalIgnoreCase))
+                    .Add(Path.GetDirectoryName(f.Path) ?? "");
+        foreach (var f in files)
+            if (dirs.TryGetValue(f.Ext, out var d) && d.Count < MinExtDirs) f.Ext = OtherExt;
+    }
 
     /// <summary>Count + bytes per extension. An extension fewer than --min-cluster files share is folded into
     /// <c>(other)</c> like a small archetype is: a rare suffix can be a fragment of one file's name.</summary>

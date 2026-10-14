@@ -116,6 +116,23 @@ public class ArchetypeRoundTripTests
         Assert.True(tailSum / tail < (dist.P90 + dist.Max) / 4, $"tail mean {tailSum / tail}");
     }
 
+    // A band whose top doubling is a sliver (1000..2100: [1000,2000) then [2000,2100)) used to pick the sliver as
+    // often as the full doubling, so ~half the tail sat just under max. It now gets about its log-uniform share.
+    [Fact]
+    public void DrawSize_PartialLastDoubling_IsNotOverweighted()
+    {
+        var dist = new SizeDistribution { P50 = 500, P90 = 1000, Max = 2100 };
+        var rng = Rng.For(5, Category.ProfileGen, 0);
+        int tail = 0, sliver = 0;
+        for (int i = 0; i < 50_000; i++)
+        {
+            long s = ArchetypeSynthesizer.DrawSize(ref rng, dist);
+            Assert.InRange(s, 250, dist.Max);
+            if (s >= dist.P90) { tail++; if (s >= 2000) sliver++; }
+        }
+        Assert.InRange(sliver * 100 / tail, 3, 9);       // ~4.8% (log-uniform: 6.6%), not ~50%
+    }
+
     [Fact]
     public void DrawSize_IsDeterministic()
     {

@@ -16,7 +16,7 @@ public static class Program
         if (args.Length == 0 || IsHelp(args[0]))
         {
             PrintUsage();
-            return args.Length == 0 ? 1 : 0;
+            return args.Length == 0 ? 2 : 0;                  // no command is a usage error, like any bad input
         }
 
         string cmd = args[0].ToLowerInvariant();
@@ -239,8 +239,8 @@ public static class Program
                                       mixed        one kind/file  (cycles the six reasons; ≥6 content-bearing files ⇒ all)
                                       rename       move files     (graded renamed[] + rename+edit hunks)
               --decoy-fraction <f>  (rename only) fraction of files emitted as near-duplicate ADD decoys
-                                    (a decoy within 20 milli of a recorded rename is dropped)
-                                    (original kept) — rename false-positive traps, 0..1 (default 0)
+                                    (original kept) — rename false-positive traps, 0..1 (default 0);
+                                    a decoy within 20 milli of a recorded rename is dropped
               --shard-size <n>      0 = one monolithic <corpus>-delta.json (default); >0 = paged transport:
                                     a <corpus>-delta.index.json + <corpus>-delta.shard-NNN.json files of <= n
                                     modified records each (diffTruthSha is sharding-invariant; 2-way only)
@@ -316,6 +316,6 @@ public static class Program
             Flags take --flag, --flag=false or --flag false; values take --knob v or --knob=v.
             '<command> --help' prints this help.
 
-            Run 'codespawner gen --out .\\_fw --scale 0.01 --giant-headers 0' for a fast smoke.
+            Run 'codespawner gen --out .\_fw --scale 0.01 --giant-headers 0' for a fast smoke.
             """;
 }

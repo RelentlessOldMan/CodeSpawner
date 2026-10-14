@@ -31,7 +31,8 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 # Remove the previous exe FIRST: if this publish fails, there must be no stale binary left at the output path
 # for the existence check below (or release.ps1) to mistake for a fresh build. A running codespawner.exe can't
 # be deleted on Windows - that fails here, loudly, instead of silently shipping the old binary.
-$exe = Join-Path $dist "codespawner.exe"
+$exeName = if ($Rid -like 'win-*') { "codespawner.exe" } else { "codespawner" }   # no .exe off Windows
+$exe = Join-Path $dist $exeName
 if (Test-Path $exe) {
     try { Remove-Item $exe -Force }
     catch { throw "Cannot replace $exe (is a codespawner.exe still running?): $($_.Exception.Message)" }
@@ -53,5 +54,5 @@ if (Test-Path $exe) {
     $mb = [math]::Round((Get-Item $exe).Length / 1MB, 1)
     Write-Host "OK: $exe ($mb MB)"
 } else {
-    throw "publish did not produce codespawner.exe (see output above)"
+    throw "publish did not produce $exeName (see output above)"
 }

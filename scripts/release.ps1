@@ -72,6 +72,7 @@ if ($Version) {
     $ver = "{0}.{1}.{2}" -f $g[1].Value, $g[2].Value, ([int]$g[3].Value + 1)
 }
 if ($cur -eq $ver) { throw "Program.cs is already at $ver - bump to a new version (a release needs a version change to commit)." }
+if ([version]$ver -lt [version]$cur) { throw "$ver is older than the current $cur - a release only moves the version forward." }
 if (git tag --list "v$ver") { throw "Tag v$ver already exists locally - pick a new version (or delete the stale tag)." }
 if (git ls-remote --tags origin "refs/tags/v$ver") { throw "Tag v$ver already exists on origin - pick a new version." }
 Assert-Exit 'git ls-remote'
@@ -103,6 +104,8 @@ function Undo-LocalRelease {
         git reset --quiet --keep HEAD~1
         if ($LASTEXITCODE -ne 0) { Write-Warning "Could not undo the local 'Release v$ver' commit - run: git reset --keep HEAD~1" }
     } else {
+        # A failed commit (a hook, no identity) can leave the bump staged: unstage it before restoring the file.
+        if (-not $DryRun) { git restore --staged -- $verFile 2>$null }
         [System.IO.File]::WriteAllText($verFile, $src, $utf8NoBom)   # byte-exact original (incl. a dry run's dirty tree)
     }
 }

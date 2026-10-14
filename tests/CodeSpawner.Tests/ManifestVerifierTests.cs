@@ -282,6 +282,27 @@ public class ManifestVerifierTests
         Assert.NotEqual(0, rc);
     }
 
+    // A linked root (<corpus>_rootN) is part of the tree an include path searches, so a vendor header there breaks
+    // the premise too. A lookalike sibling (<corpus>_rootX) is not a linked root.
+    [Theory]
+    [InlineData("c_root1", 1)]
+    [InlineData("c_rootX", 0)]
+    public void GatedRef_VendorHeaderInALinkedRoot_Fails(string sibling, int expectFail)
+    {
+        using var tmp = new TempDir();
+        int rc = VerifyRaw(tmp,
+            @"{""_meta"":{""manifestVersion"":1},""symbols"":{""vendor_gated"":{""def"":""a.c:1"",""unreachableRefs"":[""a.c:3""]}}}",
+            c =>
+            {
+                File.WriteAllText(Path.Combine(c, "a.c"),
+                    "int vendor_gated(void);\n#ifdef VENDOR_OK\n  vendor_gated(1);\n#endif\n");
+                string root = Path.Combine(Path.GetDirectoryName(c)!, sibling);
+                Directory.CreateDirectory(root);
+                File.WriteAllText(Path.Combine(root, "VENDOR_missing_zlib.h"), "// premise says this must not exist\n");
+            });
+        Assert.Equal(expectFail == 1, rc != 0);
+    }
+
     [Fact]
     public void DupGroup_MissingSha256_IsMalformed_Fails()
     {

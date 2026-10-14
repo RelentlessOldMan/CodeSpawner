@@ -571,6 +571,54 @@ public class MutatorBulkTests
         }
     }
 
+    // The pinned metric rounds half-up in integers (agreed with CodeDiffer): a 16-line file in the 600 band keeps
+    // 9 of 16 lines = 562.5, recorded as 563 (C#'s default banker's rounding gave 562).
+    [Fact]
+    public void Rename_SimilarityMilli_RoundsHalfUp()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 4, lines: 16);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0, Seed = 5 });
+        var sims = Renamed(delta).Select(r => r.GetProperty("similarityMilli").GetInt32()).ToList();
+        Assert.Contains(563, sims);
+        Assert.DoesNotContain(562, sims);
+    }
+
+    // Lines are counted on the DECODED text: a UTF-16LE file's final "\n" is followed by a 0x00 byte, which a raw
+    // byte split counted as an extra line (833 recorded vs 857 by bytes for a 6-line file).
+    [Fact]
+    public void Rename_Utf16Source_SimilarityIsOverDecodedLines()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 0, lines: 0, extra: c =>
+        {
+            for (int i = 0; i < 4; i++)
+                File.WriteAllText(Path.Combine(c, $"src_{i}.c"),
+                    string.Concat(Enumerable.Range(0, 6).Select(l => $"int u{i}_{l};\n")), new System.Text.UnicodeEncoding(false, true));
+        });
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0, Seed = 5 });
+        // 6 lines: the 900 band changes 1 (5/6 = 833), 600 changes 3 (500), 300 changes 5 (167).
+        var sims = Renamed(delta).Select(r => r.GetProperty("similarityMilli").GetInt32()).OrderBy(x => x).ToList();
+        Assert.Equal(new[] { 167, 500, 833, 1000 }, sims);
+    }
+
+    // A decoy is a near-duplicate, never an exact copy: a short file the 10% marker draw missed still gets a mark.
+    [Fact]
+    public void Rename_Decoys_AreNeverExactCopies()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 12, lines: 2);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 1.0, Seed = 5 });
+        var added = Added(delta);
+        Assert.Equal(12, added.Count);
+        foreach (var d in added)
+        {
+            string dup = Path.Combine(corpus, d);
+            string src = Path.Combine(corpus, System.Text.RegularExpressions.Regex.Replace(Path.GetFileName(d), "_dup\\d+", ""));
+            Assert.NotEqual(Sha(File.ReadAllBytes(src)), Sha(File.ReadAllBytes(dup)));
+        }
+    }
+
     // With distinct sources nothing is near a rename, so every decoy is kept.
     [Fact]
     public void Rename_DistinctSources_KeepAllDecoys()

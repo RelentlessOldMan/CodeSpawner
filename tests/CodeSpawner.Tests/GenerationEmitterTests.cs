@@ -33,7 +33,8 @@ public class GenerationEmitterTests
 
         Assert.True(File.Exists(path));
         Assert.Equal(new FileInfo(path).Length, s.Bytes);       // reported bytes == on-disk bytes
-        Assert.True(s.Bytes > 0 && s.Bytes <= 8 * 1024 + 4096);  // honoured the ceiling (+ at most one register)
+        Assert.True(s.Bytes > 8 * 1024 - 300 && s.Bytes <= 8 * 1024);   // never past the ceiling, within one register of it
+        Assert.EndsWith("#endif\n", File.ReadAllText(path));
         Assert.True(s.Idents > 0);
         string text = File.ReadAllText(path);
         Assert.Contains("#ifndef REGMAP_", text);
@@ -55,6 +56,37 @@ public class GenerationEmitterTests
         Assert.Equal(sa.Idents, sb.Idents);
         Assert.Equal(File.ReadAllBytes(a), File.ReadAllBytes(b));
         Assert.True(sa.Bytes < 8 * 1024);                        // the define cap, not a byte ceiling, stopped it
+    }
+
+    // --macro-density is an exact define count, not rounded up to whole 3-define registers.
+    [Theory]
+    [InlineData(10)]
+    [InlineData(11)]
+    [InlineData(12)]
+    public void RegHeader_DefineCount_IsExact(int defines)
+    {
+        using var tmp = new TempDir();
+        string path = Path.Combine(tmp.Path, "reg.h");
+        var s = RegHeaderEmitter.Write(path, defines, maxBytes: long.MaxValue, fam: 7);
+        Assert.Equal(defines, s.Idents);
+        Assert.Equal(defines, File.ReadAllLines(path).Count(l => l.StartsWith("#define HWIO_BLK", StringComparison.Ordinal)));
+    }
+
+    // No two reg headers share a block family (their macro names would collide): each band starts past the
+    // previous band's end, and the historical bases stand while the bands fit.
+    [Theory]
+    [InlineData(4, 20, 50, 2, 1)]
+    [InlineData(150, 950, 10, 3, 2)]
+    [InlineData(0, 0, 0, 0, 0)]
+    public void FamilyBases_AreDisjoint(int nGiant, int nBig, int nMed, int nDense, int nShrink)
+    {
+        var f = CorpusGenerator.FamilyBases(nGiant, nBig, nMed, nDense, nShrink);
+        Assert.True(f.Big >= nGiant && f.Med >= f.Big + nBig && f.Dense >= f.Med + nMed
+                    && f.Shrink >= f.Dense + nDense && f.Restream >= f.Shrink + nShrink);
+        if (nGiant <= 100 && nBig <= 900)                        // fits: the historical bases, so bytes are unchanged
+            Assert.Equal((100, 1000, 100_000, 200_000, 300_000), f);
+        else
+            Assert.True(f.Big == Math.Max(100, nGiant) && f.Med == Math.Max(1000, f.Big + nBig));
     }
 
     // ---- BlobEmitter / TinyFileEmitter / OrdinaryHeaderEmitter ----

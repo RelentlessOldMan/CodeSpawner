@@ -11,7 +11,8 @@
     4. NEGATIVE      a tampered manifest must FAIL verify (the oracle isn't vacuous).
     5. THROUGHPUT    a header-heavy run must exceed a floor MB/s (regression guard, generous bound).
 
-  Exit 0 only if every check passes. Intended for CI and pre-release (release gate).
+  Exit 0 only if every check passes. Intended for CI and for running by hand before a release:
+  release.ps1 runs `dotnet test`, not this battery.
 
 .PARAMETER Exe        codespawner.exe (default: dist, else the Release build output).
 .PARAMETER Work       Scratch dir (default: %TEMP%\cs-bench). Cleared each run.
@@ -132,7 +133,9 @@ function StripScannedAt($p) { (Get-Content $p -Raw) -replace '"scannedAt":\s*"[^
 $scanDet = ((StripScannedAt "$Work\prof.json") -eq (StripScannedAt "$Work\prof2.json"))
 # Privacy: the profile must be numbers-only — no absolute path, no generated identifiers, no content tokens.
 $prof = Get-Content "$Work\prof.json" -Raw
-$leak = ($prof -match [regex]::Escape($scSrc)) -or ($prof -match 'HWIO|hot_shared|regmap|vendor_gated|CS_MK_HANDLER|func_\d')
+# The profile is JSON, so a leaked Windows path appears with its backslashes doubled: match every spelling.
+$pathForms = @($scSrc, $scSrc.Replace('\', '\\'), $scSrc.Replace('\', '/'), (Split-Path $Work -Leaf))
+$leak = ($pathForms | Where-Object { $prof.Contains($_) }).Count -gt 0 -or ($prof -match 'HWIO|hot_shared|regmap|vendor_gated|CS_MK_HANDLER|func_\d')
 $scRegen = Join-Path $Work "sc-regen"
 Gen --from-profile "$Work\prof.json" --out $scRegen --with-oracle
 & $Exe verify --corpus $scRegen | Out-Null
