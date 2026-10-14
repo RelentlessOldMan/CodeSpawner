@@ -64,13 +64,16 @@ Generates the corpus and (unless `--manifest false`) the ground-truth manifest. 
 it never shells out to an indexer or carver — each consumer drives its own verification. `--out` is
 cleared and recreated; a directory CodeSpawner didn't create is protected unless you pass `--force`.
 Some paths are refused even with `--force`: a drive or share root, the current directory, your user
-profile or a parent of either, a git checkout, and well-known user/system folders. Re-generating over an
+profile or a parent of either, a git checkout, and well-known user/system folders. On Windows these are
+compared by directory identity too, so an alias (`\\?\C:\...`, `\\localhost\C$\...`, a `subst` drive, an
+8.3 short name) is refused like the path it reaches. Re-generating over an
 existing corpus first removes everything the old one left beside it: its manifest, its mutate deltas
-(`-delta*.json`, `-conflict.json`), its 3-way variant trees (`_v1`/`_v2`) and its linked roots (`_rootN`).
+(`-delta*.json`, `-conflict.json`), its 3-way variant trees (`_v1`/`_v2`, unless one is a junction or
+symlink, which is left alone) and its linked roots (`_rootN`).
 The marker is deleted last, so an interrupted regen still leaves a directory CodeSpawner recognises. A
 non-empty `<out>_rootN` that the new corpus would write into is refused unless you pass `--force`, when it
-isn't part of the CodeSpawner corpus at `--out` (an `--out` regenerated over 1.1.5 or earlier counts its
-in-range `_rootN` as its own).
+isn't part of the CodeSpawner corpus at `--out` (for an `--out` from 1.1.5 or earlier, whose marker records
+no count, the `_rootN` its manifest names are its own; without that manifest none are).
 
 Output:
 - the corpus tree under `<out>/`,
@@ -111,6 +114,10 @@ run) and deletes it once the run's last artifact is written. If a run dies part-
 tree then matches neither its base manifest nor any delta, so mutate refuses the corpus and verify fails it
 until you regenerate it. Each file is rewritten through a temp file and renamed into place, so a single file
 is never left half-written.
+
+For its whole run mutate also holds an exclusive lock, `<corpus>-mutating.lock` beside the tree, so a
+second mutate of the same corpus is refused (exit 1) until the first ends. The OS releases it if the process
+dies, and the file is deleted when the run ends.
 
 Mutate also records what it has applied in `<corpus>-mutated.txt`, beside the corpus (never inside it, so a
 diff of base against variant sees only the delta's changes). A mutated tree no longer matches its base, so

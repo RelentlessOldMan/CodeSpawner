@@ -1,5 +1,6 @@
 using System.Buffers.Text;
 using CodeSpawner.Profile;
+using CodeSpawner.Scan;
 
 namespace CodeSpawner.Generation;
 
@@ -32,8 +33,15 @@ public static class ArchetypeSynthesizer
         int n = 0;
         // the long line's closing '\n' is written after the loop, so its units stop one byte short of the target.
         // Never smaller than the least that still re-classifies to its class: generic code needs its first function
-        // (66 bytes), inline-function-heavy two functions (119); a lone comment or a single function reads as other.
-        long floor = cls switch { ContentClass.GenericCode => 66, ContentClass.InlineFunctionHeavy => 119, _ => 0 };
+        // (66 bytes), inline-function-heavy two functions (119), a minified file its one line of 100,000 bytes; a lone
+        // comment, a single function or a shorter line reads as another class.
+        long floor = cls switch
+        {
+            ContentClass.GenericCode => 66,
+            ContentClass.InlineFunctionHeavy => 119,
+            ContentClass.MinifiedLongLine => ContentClassifier.MinifiedLineLen,
+            _ => 0,
+        };
         long limit = Math.Max(floor, cls == ContentClass.MinifiedLongLine ? targetBytes - 1 : targetBytes);
 
         void Flush() { if (len > 0) { fs.Write(buf, 0, len); flushed += len; len = 0; } }
@@ -106,7 +114,8 @@ public static class ArchetypeSynthesizer
                     break;
             }
             n++;
-            if (flushed + len >= limit) { len = CutToTarget(buf, unitStart, len, (int)(limit - flushed), flushed == 0); break; }
+            if (flushed + len >= limit)
+            { len = CutToTarget(buf, unitStart, len, (int)(limit - flushed), flushed == 0, floor - flushed); break; }
             Maybe();
         }
 
@@ -118,17 +127,18 @@ public static class ArchetypeSynthesizer
     /// The last unit crossed the target: end the file at whichever boundary inside it is nearest the target — a
     /// line end, or the unit's start/end — so the file lands within half a line of the target instead of up to one
     /// whole unit (~1.2 KB for generic code) over. Ties go to the shorter file. The unit's start counts only when
-    /// something was written before it, so a file is never empty. The cut unit is always still in the buffer: this
+    /// something was written before it, so a file is never empty, and no boundary below the class floor
+    /// (<paramref name="minLen"/>, relative to the buffer) counts. The cut unit is always still in the buffer: this
     /// runs before the flush check.
     /// </summary>
-    private static int CutToTarget(byte[] buf, int unitStart, int len, int room, bool nothingBefore)
+    private static int CutToTarget(byte[] buf, int unitStart, int len, int room, bool nothingBefore, long minLen)
     {
         if (len <= room) return len;
         int up = room + 1;
         while (up < len && buf[up - 1] != (byte)'\n') up++;                  // first boundary past the target
         int down = room;
         while (down > unitStart && buf[down - 1] != (byte)'\n') down--;      // last boundary at or under it
-        if (down == 0 && nothingBefore) return up;
+        if ((down == 0 && nothingBefore) || down < minLen) return up;
         return room - down <= up - room ? down : up;
     }
 

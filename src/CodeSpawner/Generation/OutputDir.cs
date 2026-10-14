@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using CodeSpawner.Cli;
+using Microsoft.Win32.SafeHandles;
 
 namespace CodeSpawner.Generation;
 
@@ -43,9 +46,9 @@ public static class OutputDir
                     $"--out '{outDir}' already exists, is not empty, and was not created by CodeSpawner. " +
                     "Refusing to delete it. Pass --force to overwrite, or choose a different --out.");
         }
-        // Our corpus from 1.1.5 or earlier records no count; its _rootN in the new corpus's range were made by the
-        // same gen, so they count as recorded (ones beyond it are left alone).
-        int? oldRoots = ours ? ReadLinkedRoots(full) ?? newRoots : null;
+        // Our corpus from 1.1.5 or earlier records no count in its marker; its manifest's ../<leaf>_rootN/ paths say
+        // which siblings it wrote. Without a manifest none count as recorded, so a non-empty one needs --force.
+        int? oldRoots = ours ? ReadLinkedRoots(full) ?? LegacyLinkedRoots(trimmed) : null;
         var staleRoots = LinkedRootsToClear(trimmed, oldRoots, force, newRoots);
 
         if (ours)
@@ -60,7 +63,8 @@ public static class OutputDir
             string state = Mutation.Mutator.MutationStatePath(trimmed);
             if (File.Exists(state)) File.Delete(state);
             foreach (var variant in new[] { trimmed + "_v1", trimmed + "_v2" })
-                if ((File.Exists(Path.Combine(variant, MarkerName)) || File.Exists(Path.Combine(variant, Mutation.Mutator.JournalName)))
+                if (!IsLink(variant)                           // a link made by hand: what it points at is not ours
+                    && (File.Exists(Path.Combine(variant, MarkerName)) || File.Exists(Path.Combine(variant, Mutation.Mutator.JournalName)))
                     && UnsafeToDelete(variant) is null)
                     DeleteMarkerLast(variant);
         }
@@ -85,6 +89,24 @@ public static class OutputDir
                 return n;
         return null;
     }
+
+    /// <summary>The <c>--linked-roots</c> count a 1.1.5-or-earlier corpus used, read from the <c>../&lt;leaf&gt;_rootN/</c>
+    /// paths in its manifest (1 when it has none), or null when the manifest is gone.</summary>
+    private static int? LegacyLinkedRoots(string trimmed)
+    {
+        string manifest = CorpusGenerator.ManifestPath(trimmed);
+        if (!File.Exists(manifest)) return null;
+        var re = new Regex(@"\.\./" + Regex.Escape(Path.GetFileName(trimmed)) + @"_root([0-9]+)/", RegexOptions.CultureInvariant);
+        int max = 0;
+        using var r = new StreamReader(manifest);
+        while (r.ReadLine() is { } line)
+            for (var m = re.Match(line); m.Success; m = m.NextMatch())
+                if (int.TryParse(m.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out int n) && n > max) max = n;
+        return max + 1;
+    }
+
+    private static bool IsLink(string dir) =>
+        Directory.Exists(dir) && (File.GetAttributes(dir) & FileAttributes.ReparsePoint) != 0;
 
     /// <summary>
     /// The <c>&lt;out&gt;_rootN</c> siblings to clear before a generation; throws (before anything is deleted) on one
@@ -144,12 +166,15 @@ public static class OutputDir
         string dir = Trim(full);
         string? root = Path.GetPathRoot(dir);
         if (root is not null && SamePath(dir, Trim(root))) return "which is a drive or share root";
+        // The checks below compare paths, which an alias of the same directory (\\?\C:\..., \\localhost\C$\...,
+        // a subst drive, an 8.3 short name) would get past; on Windows they also compare the directory itself.
+        var id = DirIdentity.Of(dir);
 
-        if (IsSameOrAncestor(dir, Directory.GetCurrentDirectory())) return "which is the current directory or one of its parents";
-        if (IsSameOrAncestor(dir, AppContext.BaseDirectory)) return "which contains the running codespawner executable";
+        if (IsSameOrAncestor(dir, Directory.GetCurrentDirectory(), id)) return "which is the current directory or one of its parents";
+        if (IsSameOrAncestor(dir, AppContext.BaseDirectory, id)) return "which contains the running codespawner executable";
 
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (home.Length > 0 && IsSameOrAncestor(dir, home)) return "which is the user profile or one of its parents";
+        if (home.Length > 0 && IsSameOrAncestor(dir, home, id)) return "which is the user profile or one of its parents";
 
         foreach (var sf in new[]
                  {
@@ -161,7 +186,8 @@ public static class OutputDir
                  })
         {
             string p = Environment.GetFolderPath(sf);
-            if (p.Length > 0 && SamePath(dir, Trim(p))) return "which is a well-known system or user folder";
+            if (p.Length > 0 && (SamePath(dir, Trim(p)) || (id is not null && DirIdentity.Of(Trim(p)) == id)))
+                return "which is a well-known system or user folder";
         }
 
         if (Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")))
@@ -173,13 +199,48 @@ public static class OutputDir
 
     private static bool SamePath(string a, string b) => string.Equals(a, b, PathComparison);
 
-    /// <summary>True when <paramref name="candidate"/> is <paramref name="other"/> or one of its ancestors.</summary>
-    private static bool IsSameOrAncestor(string candidate, string other)
+    /// <summary>True when <paramref name="candidate"/> is <paramref name="other"/> or one of its ancestors, by path or
+    /// (when <paramref name="id"/> is known) by directory identity, so the drive root an alias reaches counts too.</summary>
+    private static bool IsSameOrAncestor(string candidate, string other, DirIdentity? id)
     {
         string o = Trim(other);
-        return SamePath(candidate, o) || o.StartsWith(candidate + Path.DirectorySeparatorChar, PathComparison);
+        if (SamePath(candidate, o) || o.StartsWith(candidate + Path.DirectorySeparatorChar, PathComparison)) return true;
+        if (id is null) return false;
+        for (string? d = o; d is not null; d = Path.GetDirectoryName(d))
+            if (DirIdentity.Of(d) == id) return true;
+        return false;
     }
 
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+}
+
+/// <summary>A directory's identity on Windows (volume serial + file index), the same through any path that reaches
+/// it. Null off Windows or when the directory can't be opened; callers then rely on comparing paths.</summary>
+internal readonly record struct DirIdentity(uint Volume, ulong Index)
+{
+    public static DirIdentity? Of(string dir)
+    {
+        if (!OperatingSystem.IsWindows() || dir.Length == 0) return null;
+        // No access rights, share everything, open existing, backup semantics (required to open a directory).
+        using SafeFileHandle h = CreateFileW(dir, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        if (h.IsInvalid || !GetFileInformationByHandle(h, out var info)) return null;
+        return new DirIdentity(info.VolumeSerialNumber, ((ulong)info.FileIndexHigh << 32) | info.FileIndexLow);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public ulong CreationTime, LastAccessTime, LastWriteTime;
+        public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security,
+                                                     uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(SafeFileHandle h, out ByHandleFileInformation info);
 }

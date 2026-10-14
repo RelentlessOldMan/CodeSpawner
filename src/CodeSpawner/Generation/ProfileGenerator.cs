@@ -48,7 +48,7 @@ public sealed class ProfileGenerator
         {
             var a = profile.Archetypes[ai];
             if (a.Class == ContentClass.TemplateMetaprogramming) degraded++;
-            string ext = a.Extension == "*" ? ".dat" : a.Extension;
+            string ext = a.Extension is "*" or Scan.Scanner.OtherExt ? ".dat" : a.Extension;
             int archIndex = ai;
             long count = a.Count;
 

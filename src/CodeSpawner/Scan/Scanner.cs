@@ -162,6 +162,7 @@ public sealed class Scanner
             try { size = new FileInfo(path).Length; } catch { _unreadableFiles++; continue; }
             string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext.Length == 0) ext = "(none)";
+            else if (!PlainExtension.IsMatch(ext)) ext = OtherExt;   // a dot inside a name, not an extension: never kept
             files.Add(new FileEntry { Path = path, Ext = ext, Size = size });
             string bn = Path.GetFileName(path).ToLowerInvariant();
             basenameCounts.TryGetValue(bn, out int c);
@@ -192,7 +193,14 @@ public sealed class Scanner
             if (fc[i] > 0) m.SizeHistogram.Add(new HistogramBucket { Bucket = SizeBuckets[i].Label, Files = fc[i], Bytes = bc[i] });
     }
 
-    private static void BuildExtensionHistogram(List<FileEntry> files, ProfileModel m)
+    /// <summary>What an extension must look like to be recorded; anything else is part of a file name.</summary>
+    private static readonly System.Text.RegularExpressions.Regex PlainExtension =
+        new(@"^\.[a-z0-9_+-]{1,16}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    internal const string OtherExt = "(other)";
+
+    /// <summary>Count + bytes per extension. An extension fewer than --min-cluster files share is folded into
+    /// <c>(other)</c> like a small archetype is: a rare suffix can be a fragment of one file's name.</summary>
+    private void BuildExtensionHistogram(List<FileEntry> files, ProfileModel m)
     {
         var byExt = new Dictionary<string, (long files, long bytes)>(StringComparer.Ordinal);
         foreach (var f in files)
@@ -200,8 +208,14 @@ public sealed class Scanner
             byExt.TryGetValue(f.Ext, out var t);
             byExt[f.Ext] = (t.files + 1, t.bytes + f.Size);
         }
-        foreach (var kv in byExt) m.Extensions.Add(new ExtensionStat { Ext = kv.Key, Files = kv.Value.files, Bytes = kv.Value.bytes });
-        m.Extensions.Sort((x, y) => y.Bytes.CompareTo(x.Bytes));
+        (long files, long bytes) other = default;
+        foreach (var kv in byExt)
+        {
+            if (kv.Key == OtherExt || kv.Value.files < _o.MinCluster) other = (other.files + kv.Value.files, other.bytes + kv.Value.bytes);
+            else m.Extensions.Add(new ExtensionStat { Ext = kv.Key, Files = kv.Value.files, Bytes = kv.Value.bytes });
+        }
+        if (other.files > 0) m.Extensions.Add(new ExtensionStat { Ext = OtherExt, Files = other.files, Bytes = other.bytes });
+        m.Extensions.Sort((x, y) => y.Bytes != x.Bytes ? y.Bytes.CompareTo(x.Bytes) : string.CompareOrdinal(x.Ext, y.Ext));
     }
 
     private void BuildDirStats(string root, ProfileModel m)
@@ -365,7 +379,16 @@ public sealed class Scanner
     {
         var sizes = cluster.Select(f => f.Size).OrderBy(x => x).ToArray();
         long P(double q) => sizes[Math.Min(sizes.Length - 1, (int)(q * sizes.Length))];
-        return new SizeDistribution { P50 = P(0.50), P90 = P(0.90), Max = sizes[^1] };
+        return new SizeDistribution { P50 = Round3(P(0.50)), P90 = Round3(P(0.90)), Max = Round3(sizes[^1]) };
+    }
+
+    /// <summary>A size rounded to 3 significant digits (1347 → 1350, 840043 → 840000): p50/p90/max are each one
+    /// file's exact size, which the profile must not carry.</summary>
+    internal static long Round3(long v)
+    {
+        long scale = 1;
+        while (v / scale >= 1000) scale *= 10;
+        return (v + scale / 2) / scale * scale;
     }
 
     private void FoldOther(List<(FileEntry[] cluster, ContentClass cls)> small, ProfileModel m,
@@ -392,9 +415,9 @@ public sealed class Scanner
             Class = modal,
             SizeDistribution = new SizeDistribution
             {
-                P50 = allSizes[allSizes.Count / 2],
-                P90 = allSizes[Math.Min(allSizes.Count - 1, (int)(0.9 * allSizes.Count))],
-                Max = allSizes[^1],
+                P50 = Round3(allSizes[allSizes.Count / 2]),
+                P90 = Round3(allSizes[Math.Min(allSizes.Count - 1, (int)(0.9 * allSizes.Count))]),
+                Max = Round3(allSizes[^1]),
             },
         });
         if (_o.Posture.ReadsContent() && modal.IsParsedSource()) Accumulate(byClassBytes, modal, bytes);

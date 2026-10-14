@@ -62,20 +62,23 @@ public class ArchetypeRoundTripTests
                 var rng = Rng.For(7, Category.ProfileGen, (int)cls);
                 ArchetypeSynthesizer.Write(path, cls, target, ref rng);
                 long len = new FileInfo(path).Length;
-                Assert.True(Math.Abs(len - target) <= 64, $"{cls} @ {target}: {len} bytes");
+                long want = cls == ContentClass.MinifiedLongLine ? Math.Max(target, 100_001) : target;   // its floor: one 100 KB line + LF
+                Assert.True(Math.Abs(len - want) <= 64, $"{cls} @ {target}: {len} bytes");
             }
     }
 
     [Theory]
-    [InlineData(ContentClass.GenericCode)]
-    [InlineData(ContentClass.InlineFunctionHeavy)]
-    public void TinyTargets_StillReClassify(ContentClass cls)
+    [InlineData(ContentClass.GenericCode, 1L, 400L)]
+    [InlineData(ContentClass.InlineFunctionHeavy, 1L, 400L)]
+    [InlineData(ContentClass.MinifiedLongLine, 99_990L, 100_012L)]
+    public void TinyTargets_StillReClassify(ContentClass cls, long from, long to)
     {
-        // Cut to the target, a tiny generic file was a lone comment (read as text) and a tiny inline-heavy file a
-        // single function (read as generic code); each class has a floor that keeps enough to re-classify.
+        // Cut to the target, a tiny generic file was a lone comment (read as text), a tiny inline-heavy file a single
+        // function (read as generic code) and a minified file just over 100 KB could round to a 99,996-byte line
+        // (read as text); each class has a floor that keeps enough to re-classify.
         using var tmp = new TempDir();
         string path = tmp.File("tiny.dat");
-        for (long target = 1; target <= 400; target++)
+        for (long target = from; target <= to; target++)
         {
             var rng = Rng.For(7, Category.ProfileGen, (int)cls);
             ArchetypeSynthesizer.Write(path, cls, target, ref rng);
