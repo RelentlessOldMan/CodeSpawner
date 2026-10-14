@@ -236,6 +236,12 @@ the target, so tiny files honestly report low similarity). Pure renames (1000) a
 `renamed` stays flat. `--decoy-fraction f` emits near-duplicate ADDs (`*_dup*`, original kept) into
 `fileOps.added` as rename false-positive traps — `added` is NOT digested (not a locked digest section), it is
 scoring truth for CodeDiffer: the `{from,to}` set is the recall oracle, the decoys the precision oracle.
+**Rename margin (1.1.12):** every decoy left in `added` scores at most `similarityMilli − 20` against every
+recorded rename's `from` (pinned metric, both directions of pairing); a decoy closer than that is deleted and
+left out of `added`. Renames below 20 milli and bases over 256 MB are not checked. Another rename's `to` can't
+be dropped, so a corpus whose sources are near-copies of each other (the default `--source-bodies same`) can
+still have renames that cross-match; mutate warns on stderr with the count. Generate rename fixtures with
+`gen --source-bodies varied`, where sources share almost no lines and every recorded pair is the best match.
 **Step 4 status:** IMPLEMENTED. `--three-way --overlap-fraction f` leaves base B pristine and emits two
 mutated sibling trees `B_v1/` + `B_v2/`, their standard `deltaKind:"diff"` deltas `B-delta-v1.json` /
 `B-delta-v2.json`, and `B-conflict.json` (`deltaKind:"conflict-3way"`, `_meta.conflictTruthSha`). All edits

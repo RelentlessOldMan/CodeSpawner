@@ -157,6 +157,37 @@ public class ProgramTests
     }
 
     // _meta.gen as knob → value text (bools lower-case, strings bare, numbers raw).
+    // --source-bodies varied gives every src_i.c its own body lines (rename fixtures need sources that aren't
+    // near-copies of each other). Default output is untouched and the knob is recorded only when varied, so an
+    // existing corpus regenerates byte-identically; varied leaves the symbol truth as-is and replays.
+    [Fact]
+    public void Gen_SourceBodiesVaried_DistinctBodies_SameTruth_RecordedAndReplays()
+    {
+        using var tmp = new TempDir();
+        string a = Path.Combine(tmp.Path, "a"), b = Path.Combine(tmp.Path, "b"), c = Path.Combine(tmp.Path, "c");
+        int rc = Cli(RichGenArgs(a));
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+        Assert.False(MetaGen(Path.Combine(tmp.Path, "a-manifest.json")).ContainsKey("sourceBodies"));
+        rc = Cli(RichGenArgs(b).Concat(new[] { "--source-bodies", "varied" }).ToArray());
+        Assert.True(rc == 0, $"gen exit {rc}: {_lastErr}");
+        Assert.Equal("varied", MetaGen(Path.Combine(tmp.Path, "b-manifest.json"))["sourceBodies"]);
+
+        static string Symbols(string m) =>
+            System.Text.Json.JsonDocument.Parse(File.ReadAllText(m)).RootElement.GetProperty("symbols").GetRawText();
+        Assert.Equal(Symbols(Path.Combine(tmp.Path, "a-manifest.json")), Symbols(Path.Combine(tmp.Path, "b-manifest.json")));
+
+        var srcs = Directory.GetFiles(b, "src_*.c", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.Ordinal).ToList();
+        Assert.True(srcs.Count >= 2);
+        var x = File.ReadAllLines(srcs[0]); var y = File.ReadAllLines(srcs[1]);
+        var yc = y.GroupBy(l => l).ToDictionary(g => g.Key, g => g.Count());
+        int common = x.GroupBy(l => l).Sum(g => Math.Min(g.Count(), yc.GetValueOrDefault(g.Key)));
+        Assert.True(common * 10 < Math.Max(x.Length, y.Length), $"{common} of {x.Length}/{y.Length} lines shared");
+
+        ReplayMetaGen(Path.Combine(tmp.Path, "b-manifest.json"), c);
+        Assert.Equal(TreeSnapshot(b), TreeSnapshot(c));
+        Assert.Equal(2, Cli("gen", "--out", Path.Combine(tmp.Path, "d"), "--source-bodies", "odd"));
+    }
+
     private static Dictionary<string, string> MetaGen(string manifest)
     {
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));

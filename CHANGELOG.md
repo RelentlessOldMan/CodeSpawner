@@ -11,6 +11,17 @@ reads it.
 
 ## [Unreleased]
 
+### Added
+- `gen --source-bodies varied` gives every `src_i.c` its own body lines. By default all sources share one
+  repeated filler line, so any two are ~98.5% line-similar and a rename can't be told from a near-copy.
+  Default output is unchanged (byte-identical); the knob is recorded in `_meta.gen` only when `varied`.
+
+### Fixed
+- `mutate --edit-kind rename` no longer lets a decoy out-score a recorded rename: any decoy within 20 milli
+  of a rename's `similarityMilli` against its `from` is dropped from disk and from `added`. Renames that
+  cross-match each other (sources near-copies of each other) get a stderr warning recommending
+  `--source-bodies varied`. Existing rename corpora may now carry fewer decoys; `diffTruthSha` is unchanged.
+
 ## [1.1.11] - 2026-10-14
 
 ### Fixed

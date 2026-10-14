@@ -68,8 +68,12 @@ public static class SourceEmitter
                 lines.Add("    acc += hot_shared(x);");
                 hotSlots[i] = $"{p}:{lines.Count}";
             }
-            for (int l = 0; l < 600; l++)
-                lines.Add("    acc = (acc * 1664525 + 1013904223) ^ (acc >> 3);");
+            if (o.VariedSourceBodies)                  // drawn last: the include picks above are unchanged
+                for (int l = 0; l < 600; l++)
+                    lines.Add($"    acc = (acc * 1664525 + {(uint)rng.NextULong()}u) ^ (acc >> {1 + l % 7});");
+            else
+                for (int l = 0; l < 600; l++)
+                    lines.Add("    acc = (acc * 1664525 + 1013904223) ^ (acc >> 3);");
             lines.Add("    return acc;");
             lines.Add("}");
 

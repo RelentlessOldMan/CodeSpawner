@@ -531,6 +531,56 @@ public class MutatorBulkTests
         Assert.Equal(6, Directory.GetFiles(corpus, "src_*.c").Count(f => !Path.GetFileName(f).Contains("_dup")));
     }
 
+    // Line-multiset similarity, the pinned rename metric (files here are LF, no CR).
+    private static int SimMilli(string[] a, string[] b)
+    {
+        var bc = b.GroupBy(l => l).ToDictionary(g => g.Key, g => g.Count());
+        int common = a.GroupBy(l => l).Sum(g => Math.Min(g.Count(), bc.GetValueOrDefault(g.Key)));
+        return (int)Math.Round(common * 1000.0 / Math.Max(a.Length, b.Length));
+    }
+
+    // CodeDiffer's report: when sources share their lines, a decoy (a ~90% copy) out-scores a rename+edit's own
+    // `to` against its `from`, so the recorded pair isn't the best match. Every surviving decoy must now sit at
+    // least RenameMarginMilli under each rename's similarity; with near-identical sources some get dropped.
+    [Fact]
+    public void Rename_DecoysNeverOutscoreARecordedRename_TooCloseOnesDropped()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 0, lines: 0, extra: c =>
+        {
+            for (int i = 0; i < 12; i++)                 // identical bar one line: every pair ~98% similar
+                File.WriteAllText(Path.Combine(c, $"src_{i}.c"), string.Join("\n",
+                    Enumerable.Range(0, 50).Select(l => l == 0 ? $"// file {i}" : $"int g_{l}(void) {{ return {l}; }}")));
+        });
+        var before = Directory.GetFiles(corpus, "src_*.c").ToDictionary(f => Path.GetFileName(f), File.ReadAllLines);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0.5, Seed = 5 });
+
+        var renamed = Renamed(delta);
+        var added = Added(delta);
+        Assert.Contains(renamed, r => r.GetProperty("similarityMilli").GetInt32() < 1000);
+        int origDecoys = Directory.GetFiles(corpus, "*_dup*").Length;
+        Assert.Equal(added.Count, origDecoys);            // a dropped decoy is gone from disk too
+        Assert.True(added.Count < 6, $"{added.Count} decoys kept");
+        foreach (var r in renamed)
+        {
+            int s = r.GetProperty("similarityMilli").GetInt32();
+            var from = before[Path.GetFileName(r.GetProperty("from").GetString()!)];
+            foreach (var d in added)
+                Assert.True(SimMilli(from, File.ReadAllLines(Path.Combine(corpus, d))) <= s - Mutator.RenameMarginMilli,
+                    $"decoy {d} vs {r.GetProperty("from")} (s={s})");
+        }
+    }
+
+    // With distinct sources nothing is near a rename, so every decoy is kept.
+    [Fact]
+    public void Rename_DistinctSources_KeepAllDecoys()
+    {
+        using var tmp = new TempDir();
+        var (corpus, delta) = BuildCorpus(tmp, nSource: 10, lines: 30);
+        Mutator.Run(new MutateOptions { Corpus = corpus, Target = "source", EditKind = "rename", DecoyFraction = 0.5, Seed = 5 });
+        Assert.Equal(5, Added(delta).Count);
+    }
+
     [Fact]
     public void Rename_IsDeterministic()
     {

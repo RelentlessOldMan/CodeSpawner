@@ -305,6 +305,7 @@ public static class Mutator
         int decoyThreshold = (int)Math.Round(Math.Clamp(o.DecoyFraction, 0, 1) * 1000);
 
         var renames = new List<Rename>();
+        var fromBags = new List<LineBag?>();                    // per rename: its base content, for the margin check
         var modified = new List<DiffFile>();
         var added = new List<string>();
 
@@ -330,6 +331,7 @@ public static class Mutator
             string toAbs = AbsOf(corpus, toRel);
             Directory.CreateDirectory(Path.GetDirectoryName(toAbs)!);
             var (oldSha, oldSize) = HashFile(abs);
+            fromBags.Add(LineBag.Of(abs));
             File.Move(abs, toAbs);                             // the rename
 
             if (target >= 1000)
@@ -364,12 +366,119 @@ public static class Mutator
             renames.Add(new Rename(rel, toRel, realizedMilli));
         }
 
+        var (dropped, contested) = EnforceRenameMargin(corpus, renames, fromBags, added);
+
         string prevSha = TruthDigest.Compute(basem.Symbols);
         string diffSha = DiffDigest.Compute(modified, renames);
         WriteDiffDelta(corpus, basem, o, prevSha, diffSha, modified, renames, added);
         Console.WriteLine($"  {renames.Count} rename(s) ({renames.Count(r => r.SimilarityMilli >= 1000)} pure), " +
-                          $"{added.Count} decoy add(s); diffTruthSha {diffSha[..12]}…");
+                          $"{added.Count} decoy add(s)" + (dropped > 0 ? $" ({dropped} dropped as too close to a rename)" : "") +
+                          $"; diffTruthSha {diffSha[..12]}…");
+        if (contested > 0)
+            Console.Error.WriteLine(
+                $"warning: {contested} recorded rename(s) have another renamed file within {RenameMarginMilli} milli of " +
+                "their similarity, so a best-match detector may pair them wrongly. This corpus's sources share their " +
+                "body lines; generate it with --source-bodies varied for rename fixtures.");
         return 0;
+    }
+
+    /// <summary>How far below a recorded rename's <c>similarityMilli</c> every other added file must score against
+    /// its <c>from</c>, so the true pair is the unique best match by the pinned metric.</summary>
+    internal const int RenameMarginMilli = 20;
+
+    /// <summary>
+    /// Keep every recorded rename the clear best match. Each added file (the renames' <c>to</c>s and the decoys) is
+    /// scored against each rename's base content by the pinned similarity metric. A decoy within
+    /// <see cref="RenameMarginMilli"/> of a rename's own similarity, in either direction of the pairing, is deleted
+    /// and dropped from <c>added</c>. A competing <c>to</c> of another rename can't be dropped, so those renames
+    /// are only counted. A rename below the margin (a tiny file whose every line changed) has no content match to
+    /// protect and is skipped, as is one whose base was too large to read.
+    /// </summary>
+    private static (int Dropped, int Contested) EnforceRenameMargin(
+        string corpus, List<Rename> renames, List<LineBag?> fromBags, List<string> added)
+    {
+        var index = new Dictionary<ulong, List<(int R, int Count)>>();
+        for (int r = 0; r < renames.Count; r++)
+            if (fromBags[r] is { } bag)
+                foreach (var (h, c) in bag.Counts)
+                    (index.TryGetValue(h, out var post) ? post : index[h] = new()).Add((r, c));
+
+        bool Guarded(int r) => fromBags[r] is not null && renames[r].SimilarityMilli >= RenameMarginMilli;
+        int[] Sims(LineBag x)
+        {
+            var common = new int[renames.Count];
+            foreach (var (h, c) in x.Counts)
+                if (index.TryGetValue(h, out var post))
+                    foreach (var (r, rc) in post) common[r] += Math.Min(c, rc);
+            var sims = new int[renames.Count];
+            for (int r = 0; r < renames.Count; r++)
+                if (fromBags[r] is { } fb)
+                    sims[r] = LineBag.SimilarityMilli(common[r], fb.Lines, x.Lines);
+            return sims;
+        }
+
+        int dropped = 0;
+        for (int d = added.Count - 1; d >= 0; d--)
+        {
+            string abs = AbsOf(corpus, added[d]);
+            if (LineBag.Of(abs) is not { } bag) continue;
+            var sims = Sims(bag);
+            bool tooClose = false;
+            for (int r = 0; r < renames.Count && !tooClose; r++)
+                tooClose = Guarded(r) && sims[r] > renames[r].SimilarityMilli - RenameMarginMilli;
+            if (!tooClose) continue;
+            File.Delete(abs);
+            added.RemoveAt(d);
+            dropped++;
+        }
+
+        var contested = new HashSet<int>();
+        for (int t = 0; t < renames.Count; t++)
+        {
+            if (LineBag.Of(AbsOf(corpus, renames[t].To)) is not { } bag) continue;
+            var sims = Sims(bag);
+            for (int r = 0; r < renames.Count; r++)
+            {
+                if (r == t || fromBags[r] is null) continue;
+                if (Guarded(r) && sims[r] > renames[r].SimilarityMilli - RenameMarginMilli) contested.Add(r);   // r's from prefers t's to
+                if (Guarded(t) && sims[r] > renames[t].SimilarityMilli - RenameMarginMilli) contested.Add(t);   // t's to prefers r's from
+            }
+        }
+        return (dropped, contested.Count);
+    }
+
+    /// <summary>A file's lines as the pinned rename-similarity metric sees them: EOL-normalized (a CR before each LF
+    /// dropped), a final newline not starting another line, kept as a multiset of 64-bit line hashes.</summary>
+    private sealed class LineBag
+    {
+        private const long MaxBytes = 256L << 20;           // a rename of a larger file is not margin-checked
+        public Dictionary<ulong, int> Counts { get; } = new();
+        public int Lines { get; private set; }
+
+        public static LineBag? Of(string abs)
+        {
+            if (!File.Exists(abs) || new FileInfo(abs).Length > MaxBytes) return null;
+            byte[] data = File.ReadAllBytes(abs);
+            var bag = new LineBag();
+            int start = 0;
+            for (int i = 0; i <= data.Length; i++)
+            {
+                if (i < data.Length && data[i] != (byte)'\n') continue;
+                if (i == data.Length && start == data.Length) break;   // after a final newline: no empty last line
+                int end = i > start && data[i - 1] == (byte)'\r' && i < data.Length ? i - 1 : i;
+                ulong h = 14695981039346656037UL;              // FNV-1a
+                for (int k = start; k < end; k++) h = (h ^ data[k]) * 1099511628211UL;
+                bag.Counts[h] = bag.Counts.TryGetValue(h, out int c) ? c + 1 : 1;
+                bag.Lines++;
+                start = i + 1;
+            }
+            return bag;
+        }
+
+        /// <summary><c>round(common / max(lines) * 1000)</c>, as the delta's <c>similarityMilli</c>; two empty files
+        /// are identical.</summary>
+        public static int SimilarityMilli(int common, int linesA, int linesB) =>
+            Math.Max(linesA, linesB) is var m && m > 0 ? (int)Math.Round(common * 1000.0 / m) : 1000;
     }
 
     /// <summary>Append a marker to the first <paramref name="n"/> lines (contiguous ⇒ one coalesced hunk),

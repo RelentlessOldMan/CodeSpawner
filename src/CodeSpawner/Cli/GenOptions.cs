@@ -30,6 +30,10 @@ public sealed class GenOptions
     public int LinkedRoots { get; set; } = 1;
     public int UnresolvedIncludes { get; set; } = 0;
     public bool Manifest { get; set; } = true;
+    /// <summary><c>--source-bodies varied</c>: each <c>src_i.c</c> body line gets its own constants, so no two sources
+    /// share their ~600 body lines. The default (same) repeats one filler line, which makes any two sources ~98.5%
+    /// line-similar: rename fixtures then can't tell a rename from a near-copy of another file.</summary>
+    public bool VariedSourceBodies { get; set; }
 
     // --- Batch 1 pathologies (all OFF by default; see docs/ROADMAP.md). ---
 
