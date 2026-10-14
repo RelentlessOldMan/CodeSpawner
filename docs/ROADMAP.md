@@ -14,7 +14,7 @@ Catalogue of pathological corpus shapes, agreed with the CodeCompass session (20
 
 ---
 
-## Batch 1 — shipping now (all deterministic, manifest-safe, no version change)
+## Batch 1 — SHIPPED (v1.0.1; all deterministic, manifest-safe, no version change)
 
 | Preset | Knobs | Failure axis it exercises |
 |---|---|---|
@@ -57,7 +57,7 @@ and released. `mutate` command: deterministic in-place edits emitting symbol-ove
 `baseManifestSha` + `prevTruthSha` chain binding; gen `--shrink-seeds`/`--restream-seeds` targets;
 `digest-selftest` guards the canonical form. Validated: full bench 16/16, restream 129 MB→100 MB smoke,
 prevTruthSha chains across `--step`. CodeCompass consumes it (watcher/reconcile/sidecar-delete);
-CodeCarver doesn't need it. **v1.1 backlog: rename/move edit.**
+CodeCarver doesn't need it. (The rename/move edit from the v1.1 backlog shipped in the diff-delta mode below.)
 
 - **`mutate` / churn** — `codespawner mutate --corpus X --edits N --seed S`: deterministically edit / add /
   remove files IN PLACE (guarded by the `.codespawner` marker, no clobber) and emit a **delta manifest**
@@ -65,7 +65,15 @@ CodeCarver doesn't need it. **v1.1 backlog: rename/move edit.**
   consumer can assert *post-edit ground truth = base ⊕ delta*. This is the incremental-index / watcher /
   reconcile / sidecar-delete oracle CodeCompass currently can only eyeball. Gets its own design doc first.
 
-## `scan` / shape-profile — SHIPPED v1 (2026-09-29)
+## diff-delta (bulk diff-oracle mutate) — SHIPPED (v1.1.0, 2026-10-02; extended through v1.1.12)
+
+Built for CodeDiffer. Spec locked in `docs/diff-delta-design.md`. `mutate` bulk mode emits a base→variant
+diff delta with hunk-level truth and `diffTruthSha`, `--edit-kind` reason classes, rename/move with graded
+`similarityMilli` plus near-duplicate decoys, and native 3-way (`--three-way`, `conflictTruthSha`,
+`--conflict-edges`). v1.1.12 added `gen --source-bodies varied` and a 20-milli rename margin, so every
+recorded rename is the unique best match against the decoys.
+
+## `scan` / shape-profile — SHIPPED v1 (v1.0.5, 2026-09-29)
 
 Both consumers signed off; design frozen and BUILT. `scan <tree> --out profile.json` (read-only, 3 privacy
 postures) → numbers-only profile; `gen --from-profile` regenerates a look-alike (shape replication +
@@ -110,15 +118,16 @@ design doc → loop CodeCompass + CodeCarver → build.
   class-labeled default** so the profile people actually run reproduces the memory failure mode; precise
   numerics under `--content-stats`; fixed+documented thresholds off the same single-pass content-class heuristic.
 
-Both consumers signed off. Design is frozen for v1 build. Not yet built.
+Both consumers signed off. Design frozen; built and shipped in v1.0.5.
 
-## Ground-truth oracle v1 extension — LOCKED, building (2026-09-30)
+## Ground-truth oracle v1 extension — SHIPPED (v1.0.8 + v1.0.9, 2026-09-30)
 
 3-way design chat (`claudes-chatroom`: CodeSpawner ↔ CodeCarver ↔ CodeCompass) locked an **additive v1**
 extension that makes carve **correctness** testable against the corpus for the first time. Full spec:
 `docs/oracle-v1-design.md`. The gap: the `--with-oracle` spine was a linear chain, so precision was trivially
 ~100% and indirect edges (fn-pointers/vector-tables/init_array) — where every real carve bug lives — weren't
-in the ground truth at all. Ships in order **1+3 → 2 → 4**, all stay v1 (verifier/reader ignore unknown fields):
+in the ground truth at all. Shipped in order **1+3 → 2 → 4** (all four phases in v1.0.8; v1.0.9 guarantees a reachable undispatched
+indirect edge), all stay v1 (verifier/reader ignore unknown fields):
 
 1. **Non-linear C call graph** — seeded DAG; `--oracle-fanout/-depth/-shared-leaves`; **default off = linear
    spine** (existing runs byte-identical); no schema change.
@@ -136,8 +145,8 @@ Recorded so we build on real need, not speculation. Nothing below is green-lit; 
 
 | Item | CodeCarver | CodeCompass | Decision |
 |---|---|---|---|
-| **mutate / churn** | Not useful — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | **Green-lit** — the one worth building: the incremental-index / watcher oracle CodeCompass currently cannot verify. | ✅ **NEXT** — build it. Gated on the death-run finishing so its result folds into the design. |
-| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). | Park. | 🔜 **NEXT after oracle v1** — the "not urgent" call is now stale (real-repo carving imminent). The C indirect-edge oracle (v1, above) is being built first; the C++ vtable/override/template set is the **manifest v2** trigger and follows. |
+| **mutate / churn** | Not useful — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | **Green-lit** — the one worth building: the incremental-index / watcher oracle CodeCompass currently cannot verify. | ✅ **SHIPPED** v1.0.4; diff-delta mode for CodeDiffer followed in v1.1.0. |
+| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). | Park. | 🔜 **NEXT** — oracle v1 (the C indirect-edge oracle, above) has shipped, so this is the next big item. The C++ vtable/override/template set is the **manifest v2** trigger. Not started; needs a design pass with CodeCarver + CodeCompass first. |
 | **dup-near** | Not useful — content similarity is irrelevant to reachability. | Park. | ⏸ **PARKED**. |
 
 **C++ profile — CodeCarver-side plan when green-lit (small):** extend `carver-groundtruth-oracle.ps1` to
