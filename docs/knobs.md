@@ -29,6 +29,7 @@ Out-of-range values are refused (exit 2) rather than clamped or ignored (since 1
 | `--unresolved-includes <n>` | `0` | `.c` TUs that `#include` a vendor header absent from the tree, with a reference gated behind a macro only that header defines — the honest **negative** case (see manifest-schema.md). |
 | `--compile-db none\|partial\|full` | `none` | Presence of `compile_commands.json`. `none` is the firmware norm (best-effort-clang trigger); `partial`/`full` are A/B controls. |
 | `--build-output true\|false` | `true` | `.o`/`.lst`/`.bak` committed **beside** sources — exclusion rules & lexical noise. |
+| `--source-bodies same\|varied` | `same` | `varied`: each `src_i.c` body line gets its own constants, so no two sources share their ~600 body lines. `same` repeats one filler line (any two sources ~98.5% line-similar), which makes a rename indistinguishable from a near-copy — use `varied` for rename fixtures. Recorded in `_meta.gen` only when `varied`; symbol truth is identical either way. |
 | `--dirs <n>` | `5700` | Approximate directory count — path handling. |
 | `--depth <n>` | `8` | Approximate max path depth — long/deep paths. |
 | `--linked-roots <n>` | `1` | Split output across N sibling trees — multi-root / federation. |
@@ -71,7 +72,7 @@ Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the thresho
 | `--giant-min-mb <n>` | `100` | Size floor for `--target giant`, and above which a `content` edit uses the giant-file path. |
 | `--giant-edit strided\|single` | `strided` | Giant `content` edit: every stride-th line (one run-rule hunk), or one inserted line mid-file. |
 | `--edit-kind <k>` | `content` | `content`, `line-insert`, `line-delete`, `whitespace`, `eol`, `encoding`, `binary`, `metadata`, `mixed` (one kind per file, cycling the six reasons), `rename`. |
-| `--decoy-fraction <f>` | `0` | `rename` only: fraction of files copied as near-duplicate ADD decoys instead of renamed. |
+| `--decoy-fraction <f>` | `0` | `rename` only: fraction of files copied as near-duplicate ADD decoys instead of renamed. A decoy scoring within 20 milli of any recorded rename's similarity (against its `from`) is dropped, so the recorded pair stays the unique best match. |
 | `--shard-size <n>` | `0` | `0` = one `<corpus>-delta.json`; `>0` = an index + shards of ≤ n modified records each. |
 | `--three-way` | off | Leave the base pristine; emit `<corpus>_v1/` + `<corpus>_v2/`, their deltas and `<corpus>-conflict.json`. |
 | `--overlap-fraction <f>` | `0.5` | 3-way: fraction of V2's edits that land on V1's lines (conflicts). |

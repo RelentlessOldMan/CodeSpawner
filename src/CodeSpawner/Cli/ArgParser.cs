@@ -43,6 +43,7 @@ public static class ArgParser
                 case "max-header-mb": o.MaxHeaderMB = I(); break;
                 case "compile-db": o.Explicit.Add("compile-db"); o.CompileDb = ParseCompileDb(Val()); break;
                 case "build-output": o.BuildOutput = B(); break;
+                case "source-bodies": o.VariedSourceBodies = ParseSourceBodies(Val()); break;
                 case "dirs": o.Dirs = I(); break;
                 case "depth": o.Depth = I(); break;
                 case "linked-roots": o.LinkedRoots = I(); break;
@@ -359,6 +360,13 @@ public static class ArgParser
         "true" or "1" or "yes" or "on" => true,
         "false" or "0" or "no" or "off" => false,
         _ => throw new ArgException($"expected a boolean, got '{s}'"),
+    };
+
+    private static bool ParseSourceBodies(string s) => s.ToLowerInvariant() switch
+    {
+        "same" => false,
+        "varied" => true,
+        _ => throw new ArgException($"--source-bodies must be same|varied, got '{s}'"),
     };
 
     private static CompileDbMode ParseCompileDb(string s) => s.ToLowerInvariant() switch

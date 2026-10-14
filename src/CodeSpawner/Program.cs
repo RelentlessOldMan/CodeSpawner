@@ -239,6 +239,7 @@ public static class Program
                                       mixed        one kind/file  (cycles the six reasons; ≥6 content-bearing files ⇒ all)
                                       rename       move files     (graded renamed[] + rename+edit hunks)
               --decoy-fraction <f>  (rename only) fraction of files emitted as near-duplicate ADD decoys
+                                    (a decoy within 20 milli of a recorded rename is dropped)
                                     (original kept) — rename false-positive traps, 0..1 (default 0)
               --shard-size <n>      0 = one monolithic <corpus>-delta.json (default); >0 = paged transport:
                                     a <corpus>-delta.index.json + <corpus>-delta.shard-NNN.json files of <= n
@@ -290,6 +291,7 @@ public static class Program
               --unresolved-includes <n>   TUs referencing a missing vendor header (negative oracle)
               --compile-db none|partial|full
               --build-output [true|false]  .o/.lst/.bak beside sources (default true)
+              --source-bodies same|varied  varied: each src_i.c gets its own body lines (for rename fixtures; default same)
               --dirs <n>             approximate directory count
               --depth <n>            approximate max path depth (default 8)
               --linked-roots <n>     split output across N sibling trees

@@ -296,6 +296,8 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("noNewline", _o.NoNewline));
         g.Add(GenKnob.Of("compileDb", _o.CompileDb.ToString().ToLowerInvariant()));
         g.Add(GenKnob.Of("buildOutput", _o.BuildOutput));
+        // Only when varied: recording the default would change every existing manifest's bytes (and baseManifestSha).
+        if (_o.VariedSourceBodies) g.Add(GenKnob.Of("sourceBodies", "varied"));
         // oracle overlay
         g.Add(GenKnob.Of("withOracle", _o.WithOracle));
         g.Add(GenKnob.Of("oracleScale", _o.OracleScale));
