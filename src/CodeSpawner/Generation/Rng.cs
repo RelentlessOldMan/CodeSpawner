@@ -118,4 +118,6 @@ public enum Category
     ProfileGen,
     ProfileDir,
     ProfileOracle,
+    // C++ profile (appended):
+    CppGen,
 }

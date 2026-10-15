@@ -63,7 +63,7 @@ public class ProgramTests
         Assert.Equal(0, Cli("mutate", "--corpus", "x", "-h"));
         Assert.Equal(2, Cli());                       // no args ⇒ usage + usage-error exit
         Assert.Equal(2, Cli("bogus-command"));        // unknown command
-        Assert.Equal(0, Cli("digest-selftest"));      // the four golden vectors reproduce
+        Assert.Equal(0, Cli("digest-selftest"));      // the five golden vectors reproduce
         Assert.Equal(2, Cli("gen"));                  // ArgException (missing --out) ⇒ exit 2
     }
 

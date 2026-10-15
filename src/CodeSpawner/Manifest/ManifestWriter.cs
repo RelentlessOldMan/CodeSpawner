@@ -3,7 +3,8 @@ using System.Text.Json;
 namespace CodeSpawner.Manifest;
 
 /// <summary>
-/// Serializes a <see cref="ManifestModel"/> to the v1 schema with a streaming
+/// Serializes a <see cref="ManifestModel"/> to the v1 schema (v2 for a C++ corpus, whose fields are written only
+/// when present, so a C manifest's bytes are unchanged) with a streaming
 /// <see cref="Utf8JsonWriter"/> — AOT-safe (no reflection) and cheap even for tens of thousands of
 /// symbols. Shape: <c>{ "_meta": {...}, "symbols": { name: { def, refs, edges, unreachableRefs? } } }</c>.
 /// </summary>
@@ -23,6 +24,7 @@ public static class ManifestWriter
         w.WriteString("generatorVersion", m.GeneratorVersion);
         w.WriteNumber("seed", m.Seed);
         w.WriteString("corpusRoot", m.CorpusRoot);
+        if (m.Lang is not null) w.WriteString("lang", m.Lang);
         if (m.Gen.Count > 0)
         {
             // Effective generation knobs — the recipe to regen this corpus byte-identically. Additive, v1.
@@ -57,10 +59,31 @@ public static class ManifestWriter
             foreach (var r in m.Roots) w.WriteStringValue(r);
             w.WriteEndArray();
         }
+        if (m.StaticInitRoots.Count > 0)
+        {
+            // C++ (v2): ctors/dtors of static-storage objects, entry points beside roots (D6).
+            w.WriteStartArray("staticInitRoots");
+            foreach (var r in m.StaticInitRoots) w.WriteStringValue(r);
+            w.WriteEndArray();
+        }
+        if (m.Classes.Count > 0)
+        {
+            // C++ (v2): class -> direct bases, the hierarchy cha/rta are drawn from.
+            w.WriteStartObject("classes");
+            foreach (var (cls, bases) in m.Classes)
+            {
+                w.WriteStartArray(cls);
+                foreach (var b in bases) w.WriteStringValue(b);
+                w.WriteEndArray();
+            }
+            w.WriteEndObject();
+        }
         // Component digest over indirect edges + roots — present only when indirect edges exist. Catches
         // indirect-edge / root drift without touching the frozen primary prevTruthSha. Additive, v1.
         if (IndirectDigest.Any(m.Symbols))
             w.WriteString("indirectTruthSha", IndirectDigest.Compute(m.Symbols, m.Roots));
+        if (m.ManifestVersion >= 2)
+            w.WriteString("cppTruthSha", CppDigest.Compute(m.Symbols, m.StaticInitRoots));
         if (m.TotalOracleBytes > 0)
             w.WriteNumber("totalOracleBytes", m.TotalOracleBytes); // byte-mass ground truth (--oracle-bytes)
         w.WriteEndObject();
@@ -71,6 +94,10 @@ public static class ManifestWriter
             w.Spill();
             w.WriteStartObject(name);
             w.WriteString("def", s.Def);
+            if (s.Kind is not null) w.WriteString("kind", s.Kind);
+            if (s.SimpleName is not null) w.WriteString("simpleName", s.SimpleName);
+            if (s.InstanceOf is not null) w.WriteString("instanceOf", s.InstanceOf);
+            if (s.Pure) w.WriteBoolean("pure", true);
 
             w.WriteStartArray("refs");
             foreach (var r in s.Refs) w.WriteStringValue(r);
@@ -79,6 +106,43 @@ public static class ManifestWriter
             w.WriteStartArray("edges");
             foreach (var e in s.Edges) w.WriteStringValue(e);
             w.WriteEndArray();
+
+            if (s.ImplicitEdges.Count > 0)
+            {
+                w.WriteStartArray("implicitEdges");
+                foreach (var e in s.ImplicitEdges) w.WriteStringValue(e);
+                w.WriteEndArray();
+            }
+            if (s.VirtualEdges.Count > 0)
+            {
+                w.WriteStartArray("virtualEdges");
+                foreach (var ve in s.VirtualEdges)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("static", ve.Static);
+                    w.WriteStartArray("cha");
+                    foreach (var t in ve.Cha) w.WriteStringValue(t);
+                    w.WriteEndArray();
+                    w.WriteStartArray("rta");
+                    foreach (var t in ve.Rta) w.WriteStringValue(t);
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+            }
+            if (s.MemberPtrEdges.Count > 0)
+            {
+                w.WriteStartArray("memberPtrEdges");
+                foreach (var me in s.MemberPtrEdges)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("target", me.Target);
+                    w.WriteString("via", me.Via.Label());
+                    w.WriteBoolean("dispatched", me.Dispatched);
+                    w.WriteEndObject();
+                }
+                w.WriteEndArray();
+            }
 
             WriteIndirectEdges(w, s.IndirectEdges);
 

@@ -79,7 +79,7 @@ Run `codespawner --help` for the full knob list, or see [`docs/knobs.md`](docs/k
 | `verify --corpus <dir> [--manifest <file>]` | Assert the manifest accurately describes the emitted files: def/ref sites exist at `path:line` with the expected token, `unreachableRef` files carry the `VENDOR_OK` gate with no vendor header present, and every edge target is a declared symbol. Exit 0 = pass, 1 = fail, 2 = bad input. |
 | `scan <tree> --out <profile>` | Measure a real tree into a numbers-only shape profile (no names or content); `gen --from-profile` regenerates a look-alike. |
 | `mutate --corpus <dir> [opts]` | Edit a corpus in place and emit a delta manifest: symbol deltas for incremental indexers, diff/3-way deltas for diff tools. |
-| `digest-selftest` | Recompute the four golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`, `conflictTruthSha`); exit 1 on any drift. |
+| `digest-selftest` | Recompute the five golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`, `conflictTruthSha`, `cppTruthSha`); exit 1 on any drift. |
 | `version` | Print the generator version. |
 
 ## How consumers couple to it

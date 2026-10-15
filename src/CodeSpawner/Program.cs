@@ -33,7 +33,8 @@ public static class Program
             {
                 case "gen":
                     var genOpts = ArgParser.ParseGen(Presets.Expand(rest, out int presetTokens), presetTokens);
-                    if (genOpts.FromProfile is not null) new ProfileGenerator(genOpts).Run();
+                    if (genOpts.Lang == SourceLang.Cpp) new CppGenerator(genOpts).Run();
+                    else if (genOpts.FromProfile is not null) new ProfileGenerator(genOpts).Run();
                     else new CorpusGenerator(genOpts).Run();
                     return 0;
 
@@ -162,8 +163,39 @@ public static class Program
         bool okConflict = gotC == goldenConflict;
         if (!okConflict) Console.Error.WriteLine($"digest self-test: FAIL conflict\n  expected {goldenConflict}\n  got      {gotC}");
 
-        if (okPrimary && okIndirect && okDiff && okConflict)
-        { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI}, diff {gotD}, conflict {gotC})"); return 0; }
+        // Fifth golden vector: cppTruthSha (docs/cpp-profile-design.md D7). All five sections populated, a cha set
+        // given out of order (proves the inner sort), an instance — frozen the same way; CodeCarver/CodeCompass reproduce.
+        const string goldenCpp = "28b4e1de981d282a6918de91846e990955f5b8220c88efc993d2a984c0bfed08";
+        var csyms = new Dictionary<string, SymbolEntry>(StringComparer.Ordinal)
+        {
+            ["ns::f"] = new()
+            {
+                Def = "a:1", Kind = "function",
+                VirtualEdges = { new() { Static = "ns::A::m_0", Cha = { "ns::B::m_0", "ns::A::m_0" }, Rta = { "ns::A::m_0" } } },
+                ImplicitEdges = { "ns::A::~A" },
+                MemberPtrEdges = { new() { Target = "ns::A::m_1", Via = MemberPtrVia.Arg, Dispatched = false } },
+            },
+            ["ns::g"] = new()
+            {
+                Def = "a:2", Kind = "function",
+                MemberPtrEdges = { new() { Target = "ns::B::m_1", Via = MemberPtrVia.Table, Dispatched = true } },
+            },
+            ["ns::A::m_0"] = new() { Def = "b:1", Kind = "method" },
+            ["ns::B::m_0"] = new() { Def = "b:2", Kind = "method" },
+            ["ns::A::m_1"] = new() { Def = "b:3", Kind = "method" },
+            ["ns::B::m_1"] = new() { Def = "b:4", Kind = "method" },
+            ["ns::A::A"] = new() { Def = "b:5", Kind = "ctor" },
+            ["ns::A::~A"] = new() { Def = "b:6", Kind = "dtor" },
+            ["ns::B::B"] = new() { Def = "b:7", Kind = "ctor", ImplicitEdges = { "ns::A::A" } },
+            ["ns::tf"] = new() { Def = "c:1", Kind = "template" },
+            ["ns::tf<int>"] = new() { Def = "c:1", Kind = "instance", InstanceOf = "ns::tf" },
+        };
+        string gotP = CppDigest.Compute(csyms, new[] { "ns::A::A", "ns::A::~A" });
+        bool okCpp = gotP == goldenCpp;
+        if (!okCpp) Console.Error.WriteLine($"digest self-test: FAIL cpp\n  expected {goldenCpp}\n  got      {gotP}");
+
+        if (okPrimary && okIndirect && okDiff && okConflict && okCpp)
+        { Console.WriteLine($"digest self-test: OK (primary {got}, indirect {gotI}, diff {gotD}, conflict {gotC}, cpp {gotP})"); return 0; }
         return 1;
     }
 
@@ -185,7 +217,8 @@ public static class Program
               codespawner gen --from-profile <p> --out <dir>   regenerate a look-alike from a profile
               codespawner verify --corpus <dir> [--manifest <path>]   self-check a corpus against its manifest
               codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest
-              codespawner digest-selftest                reproduce the four golden digest vectors (exit 1 on drift)
+              codespawner gen --lang cpp --out <dir> [cpp knobs]   a C++ program + manifest v2 (call-graph truth)
+              codespawner digest-selftest                reproduce the five golden digest vectors (exit 1 on drift)
               codespawner version
 
             SCAN (privacy-preserving characterize -> regenerate; see docs/scan-design.md):
@@ -208,6 +241,20 @@ public static class Program
                                            graph; per-symbol indirectEdges + a _meta.indirectTruthSha digest
               --oracle-bytes               emit per-symbol byte mass + _meta.totalOracleBytes (byte-based
                                            reduction ground truth; most useful with --oracle-scale)
+
+            C++ PROFILE (gen --lang cpp; see docs/cpp-profile-design.md). Writes only a self-contained C++ program
+            (cpp/) + a manifest v2: edges, implicitEdges (ctor/dtor), virtualEdges (static + cha + rta sets),
+            memberPtrEdges, kinds, staticInitRoots, _meta.cppTruthSha. Takes --out/--seed/--force, the
+            --oracle-chain/-fanout/-depth/-shared-leaves/-reachable-frac free-function graph knobs, and:
+              --cpp-classes <n>             classes (default 12)
+              --cpp-depth <n>               max inheritance depth (default 3; 0 = every class a root)
+              --cpp-multi-inherit <f>       fraction also inheriting a mixin interface (default 0.25)
+              --cpp-virtual-frac <f>        chance a derived class overrides each inherited virtual (default 0.6)
+              --cpp-instantiated-frac <f>   fraction of concrete classes constructed live (default 0.5;
+                                            the rest are cha-only targets: cha minus rta)
+              --cpp-templates <n>           function/class templates, alternating (default 4)
+              --cpp-instances <n>           max type arguments per used template, 1..5 (default 2)
+              --cpp-static-init <n>         static-storage objects; ctor+dtor are staticInitRoots (default 2)
 
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)

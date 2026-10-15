@@ -11,6 +11,26 @@ reads it.
 
 ## [Unreleased]
 
+### Added
+- **C++ language profile + manifest v2** (`gen --lang cpp`; design in `docs/cpp-profile-design.md`, agreed with
+  CodeCarver and CodeCompass). It writes a self-contained C++ program with namespaces, single and multiple
+  inheritance, virtual / pure / final methods, ctors and dtors, static-storage objects, function and class
+  templates, and member-function pointers. The program compiles and links with
+  `clang++ -std=c++17 -Wall -Wextra -Werror`. Its manifest is `manifestVersion: 2` and adds:
+  - per symbol: `kind`, `simpleName`, `instanceOf`, `pure`, `implicitEdges`, `virtualEdges` (`static` plus the
+    sound `cha` and precise `rta` sets), and `memberPtrEdges`;
+  - in `_meta`: `lang`, `staticInitRoots`, `classes`, and `cppTruthSha`.
+- Knobs `--lang`, `--cpp-classes`, `--cpp-depth`, `--cpp-multi-inherit`, `--cpp-virtual-frac`,
+  `--cpp-instantiated-frac`, `--cpp-templates`, `--cpp-instances`, `--cpp-static-init`. The `--oracle-*` graph
+  knobs shape its free-function graph.
+- `digest-selftest` checks a fifth golden vector, `cppTruthSha` `28b4e1de…`.
+- `verify` accepts v2 and checks the C++ facts: whole-word simpleName sites, kinds, instances, `pure`, implicit
+  and member-pointer targets, that each `cha` target overrides `static` from at or below its class, that
+  `rta ⊆ cha`, and that `cppTruthSha` recomputes.
+
+### Unchanged
+- C corpora and their manifests are byte-identical to 1.1.13 (still v1). `mutate` refuses a v2 manifest.
+
 ## [1.1.13] - 2026-10-14
 
 ### Corpus bytes change (regenerate and re-freeze)

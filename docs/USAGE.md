@@ -90,6 +90,20 @@ Every run prints per-phase timings and the detected disk / concurrency, e.g.:
 Done: 51,203 files, 89.74 GB, 5,721 dirs, 1 root(s) in 71.3s.
 ```
 
+### `gen --lang cpp --out <dir> [--cpp-* knobs…]`
+Writes a self-contained C++ program (`<dir>/cpp/`: namespaces, single and multiple inheritance, virtual / pure
+/ final methods, ctors/dtors, static objects, function and class templates, member-function pointers) and a
+**manifest v2** with its call-graph truth: `edges`, `implicitEdges`, `virtualEdges` (sound `cha` and precise
+`rta` target sets), `memberPtrEdges`, `kind`s, `staticInitRoots` and `_meta.cppTruthSha`. The program
+compiles and links (`clang++ -std=c++17 -Wall -Wextra -Werror`, all `.cpp` under `cpp/`); it is not meant to
+run. Knobs: [knobs.md](knobs.md); contract: [cpp-profile-design.md](cpp-profile-design.md). `verify` checks it;
+`mutate` refuses it.
+
+```powershell
+codespawner gen --lang cpp --out C:\corpora\cpp --cpp-classes 40 --cpp-depth 4
+codespawner verify --corpus C:\corpora\cpp
+```
+
 ### `verify --corpus <dir> [--manifest <file>]`
 Tool-independent self-check: asserts the manifest accurately describes the emitted files — every
 `def`/`ref` site exists at `path:line` and contains the expected token; every `unreachableRef` site holds
@@ -101,7 +115,9 @@ the same manifest). Exit 0 = pass, 1 = fail, 2 = bad input. Manifest defaults to
 sibling. A manifest path that goes through a junction or symlink inside the corpus fails as escaping it, and
 a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright. A manifest
 with no `_meta` or `symbols` object, or one that declares nothing to check (no symbol sites, dup groups or
-indirect edges), is bad input (exit 2); before 1.1.11 the latter passed.
+indirect edges), is bad input (exit 2); before 1.1.11 the latter passed. A v2 (C++) manifest is checked
+against its own rules: whole-word simpleName def/ref lines, kinds, `instanceOf`, `pure`, implicit and
+member-pointer targets, `cha` overrides below `static` with `rta ⊆ cha`, and a recomputed `cppTruthSha`.
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
@@ -132,8 +148,8 @@ base and records nothing for it, but records each `_v1`/`_v2` variant, so a vari
 Regenerating clears the record, the variants' included; a corpus mutated by 1.1.8 or earlier has none.
 
 ### `digest-selftest`
-Recomputes the four golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`,
-`conflictTruthSha`) from their frozen fixtures and prints them; exit 1 if any drifted. Consumers reproduce
+Recomputes the five golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`,
+`conflictTruthSha`, `cppTruthSha`) from their frozen fixtures and prints them; exit 1 if any drifted. Consumers reproduce
 the same vectors to prove their own recompute matches (see [manifest-schema.md](manifest-schema.md) and
 [diff-delta-design.md](diff-delta-design.md)).
 

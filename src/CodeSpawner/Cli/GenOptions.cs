@@ -2,6 +2,9 @@ namespace CodeSpawner.Cli;
 
 public enum CompileDbMode { None, Partial, Full }
 
+/// <summary><c>--lang</c>: the classic C corpus (manifest v1), or a self-contained C++ program (manifest v2).</summary>
+public enum SourceLang { C, Cpp }
+
 /// <summary>
 /// All generation knobs. Defaults are full-repo targets; <see cref="Scale"/> multiplies the COUNT
 /// knobs (never per-file sizes). A knob passed explicitly on the command line is taken literally
@@ -99,6 +102,26 @@ public sealed class GenOptions
     public int OracleIndirect { get; set; } = 0;
     /// <summary>Emit per-symbol byte-mass + _meta.totalOracleBytes (byte-based reduction ground truth). Off by default.</summary>
     public bool OracleBytes { get; set; } = false;
+
+    // --- C++ profile (gen --lang cpp; docs/cpp-profile-design.md D8). ---
+
+    public SourceLang Lang { get; set; } = SourceLang.C;
+    /// <summary>Count of concrete-or-abstract classes (mixins come on top, from --cpp-multi-inherit).</summary>
+    public int CppClasses { get; set; } = 12;
+    /// <summary>Max inheritance depth below a root class. 0 = every class is a root.</summary>
+    public int CppDepth { get; set; } = 3;
+    /// <summary>Fraction of classes that also inherit a mixin interface (multiple inheritance).</summary>
+    public double CppMultiInherit { get; set; } = 0.25;
+    /// <summary>Chance a derived class overrides each inherited virtual method.</summary>
+    public double CppVirtualFrac { get; set; } = 0.6;
+    /// <summary>Fraction of concrete classes constructed in reachable code (the rest drive cha minus rta).</summary>
+    public double CppInstantiatedFrac { get; set; } = 0.5;
+    /// <summary>Count of templates (function and class templates alternate).</summary>
+    public int CppTemplates { get; set; } = 4;
+    /// <summary>Max instances (distinct type arguments) per used template, 1..5.</summary>
+    public int CppInstances { get; set; } = 2;
+    /// <summary>Count of static-storage objects (their ctors/dtors are staticInitRoots).</summary>
+    public int CppStaticInit { get; set; } = 2;
 
     /// <summary>Overwrite <see cref="Out"/> even if it exists and was not created by CodeSpawner.</summary>
     public bool Force { get; set; } = false;
