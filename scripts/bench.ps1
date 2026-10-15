@@ -218,7 +218,7 @@ $cppDet = ((StripRoot2 "$cppA-manifest.json") -eq (StripRoot2 "$(Join-Path $Work
 Check "cpp deterministic (same seed -> identical program + manifest)" $cppDet
 # The default program's truth digest, pinned (CppProfileTests.TruthSha_IsPinned holds the same value): a change
 # here is a truth change, so it ships with a CHANGELOG note and a new pin, never by accident.
-$cppPin = "d3a38e31f260177f36337a7b475eba0fb266008cf56e22e620ced14a36f40ad5"
+$cppPin = "2cf4070df906e79da20248902e948ebb3b76fe289f1baee186fc5f0d9f2c4e99"
 $cppSha = ((Get-Content "$(Join-Path $Work 'cpp_default')-manifest.json" -Raw) | ConvertFrom-Json)._meta.cppTruthSha
 Check "cpp truth digest pinned (seed 1337)" ($cppSha -eq $cppPin) "(got $cppSha)"
 

@@ -11,6 +11,19 @@ reads it.
 
 ## [Unreleased]
 
+**`gen --lang cpp` output changes for most seeds** (program bytes and manifest truth; the new default-seed
+`cppTruthSha` is pinned as `2cf4070d…`). C corpora are byte-identical.
+
+### Changed
+- One class is now live only as a member of a base subobject: an abstract class with a constructed subclass
+  holds a member of a never-constructed class, so a carver whose RTA counts only a class's own members drops
+  it. 1.2.1 fixed that rule in the truth, but no generated program exercised it
+  (`docs/cpp-profile-design.md`, "Members").
+
+### Tests
+- A test that the shape exists (seeds 2, 3, 1337); dropping the base-member rule from the solve now fails the
+  independent recompute on 5 of its 9 shapes.
+
 ## [1.2.1] - 2026-10-15
 
 Review round 6 of the C++ profile. **`gen --lang cpp` output changes for every seed** (program bytes and

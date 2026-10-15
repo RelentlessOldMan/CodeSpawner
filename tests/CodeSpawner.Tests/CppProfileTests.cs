@@ -212,7 +212,7 @@ public class CppProfileTests
     {
         var (_, t) = Model(Opts("x"));
         var m = t.ToManifest(Opts("x"), "r");
-        Assert.Equal("d3a38e31f260177f36337a7b475eba0fb266008cf56e22e620ced14a36f40ad5", CppDigest.Compute(m.Symbols, m.StaticInitRoots));
+        Assert.Equal("2cf4070df906e79da20248902e948ebb3b76fe289f1baee186fc5f0d9f2c4e99", CppDigest.Compute(m.Symbols, m.StaticInitRoots));
     }
 
     // --cpp-classes 1: the lone class is concrete (it is constructed, statically too) and takes no mixin.

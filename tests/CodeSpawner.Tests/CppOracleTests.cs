@@ -477,6 +477,25 @@ public class CppOracleTests
         Assert.Equal(or.Live.Order(StringComparer.Ordinal), t.Live.Select(c => c.Q).Order(StringComparer.Ordinal));
     }
 
+    // A class live only as a member of a base subobject: an abstract class (never a complete object) holds it, nothing
+    // constructs it, and it is still live because a constructed subclass contains the base's members. Without this
+    // shape the base-member rule of the RTA solve went untested (dropping it changed no generated corpus).
+    [Theory]
+    [InlineData(2)] [InlineData(3)] [InlineData(1337)]
+    public void Rta_ClassLiveOnlyThroughABaseSubobjectsMember(int seed)
+    {
+        using var tmp = new TempDir();
+        var (corpus, _) = Gen(tmp, Opts(Path.Combine(tmp.Path, "c"), seed));
+        var or = new Oracle(corpus);
+        var constructed = or.Precise.Where(or.All.ContainsKey).SelectMany(k => or.All[k].Cons).ToHashSet(StringComparer.Ordinal);
+        // Every class that holds it is itself not live, so only the base-subobject rule can make it live.
+        var viaBase = or.Live.Where(q => !constructed.Contains(q) && !or.Statics.Contains(q))
+            .Where(q => or.Classes.Where(kv => kv.Value.Members.Contains(q)) is var holders
+                        && holders.Any() && holders.All(kv => !or.Live.Contains(kv.Key)))
+            .ToList();
+        Assert.True(viaBase.Count > 0, $"seed {seed}: no class is live only through a base subobject's member");
+    }
+
     // Every whole-word occurrence of a symbol's simple name is a def or ref of some symbol with that name, and every
     // def/ref site names it. Excluded: #include lines, bodiless in-class declarations (not = 0), the prototypes in
     // rt/free.hpp and rt/helpers.hpp, and the Tmpl_k class-template name (not a symbol).
