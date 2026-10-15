@@ -160,15 +160,21 @@ pointers that are null, and method↔free-function cycles exist. All truth is st
 3. `staticInitRoots` lists BOTH the ctor and the dtor of each static-storage object (the dtor runs at exit;
    D6 named only the ctor). The `ns::Cls_4 g_static_0;` line is a ref site of the ctor.
 4. `lang: "cpp"` in `_meta`, and the `--cpp-*` / oracle knobs in `_meta.gen`.
+5. **Class symbols** (`kind: "class"`, every class and mixin; agreed with CodeCompass and CodeCarver, 2026-10-14).
+   Key `ns_1::Cls_4`, simpleName `Cls_4`, `def` = the `class Cls_4 … {` line. Its `refs` are EVERY other line
+   where the name appears as a whole word outside strings and `#include`s: forward declarations, base lists,
+   receiver-pointer and member declarations, `Cls_4::` qualifiers on out-of-class bodies, ctor and dtor
+   declarations and bodies (`~` is not a word character, so `Cls_4::~Cls_4() {` is one), constructions,
+   super-calls, member-pointer types and `&Cls_4::m` lines. So the def + refs of everything with simpleName
+   `Cls_4` (the class and its ctor) is exactly what a whole-word name search returns. A class symbol has no
+   edges of any kind and is outside reachability: graders skip `kind: class` the way they skip `template`
+   (CodeCarver excludes both from its denominators). It is in `cppTruthSha` through the kinds section.
 
 **Narrowed for the first cut:**
 - Member-function pointers target NON-virtual methods only. The D10 rule for a pointer to a virtual method
   (dispatch over its `cha`/`rta`) stays reserved and is not generated yet.
 - `new Cls_4()` assigns a receiver pointer and is never deleted, so a `new` adds no dtor edge. A local
   `Cls_4 obj;` adds the implicit dtor edge at scope exit. The generator writes no explicit `~Cls_4()` call.
-- Class symbols are not in the manifest. A class's own `class Cls_4 … {` line, and other type-name uses
-  (base lists, member and pointer declarations, the `Cls_4::` qualifier on an out-of-class body), are outside
-  the truth; only the ctor's sites carry the simpleName `Cls_4`.
 - Declarations are neither def nor ref (as in v1): an in-class declaration of an out-of-class body, and the
   `cpp/rt/free.hpp` prototypes.
 
@@ -197,6 +203,7 @@ more classes, so the generator iterates to a fixpoint.
 
 **Verify (v2):** accepts versions 1 and 2. On v2 it checks:
 - each symbol has a known `kind` and a `simpleName`, and def/ref lines contain the simpleName as a whole word;
+- a `class` symbol is in `_meta.classes` and has no edges;
 - `instanceOf` is a `template`, and only an instance has one;
 - `pure` is only on a method whose def line ends in `= 0;`;
 - implicit and memberPtr targets and `staticInitRoots` are symbols, and `via` is `table` or `arg`;

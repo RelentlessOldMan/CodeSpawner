@@ -209,6 +209,35 @@ public class CppProfileTests
         Assert.Equal(0, Verify(c, m));
     }
 
+    // A class symbol's def + refs are exactly the lines where its name is a whole word (CodeCompass's name search),
+    // checked here by an independent scan of the emitted program; every class and mixin has one.
+    [Theory]
+    [InlineData(1337)]
+    [InlineData(3)]
+    [InlineData(11)]
+    public void ClassSymbols_AreEveryWholeWordLine(int seed)
+    {
+        using var tmp = new TempDir();
+        var (c, mp) = Gen(tmp, Opts(Path.Combine(tmp.Path, "c"), seed));
+        var root = JsonNode.Parse(File.ReadAllText(mp))!.AsObject();
+        var syms = root["symbols"]!.AsObject();
+        var classes = syms.Where(kv => (string?)kv.Value!["kind"] == "class").ToList();
+        Assert.Equal(root["_meta"]!["classes"]!.AsObject().Select(kv => kv.Key).OrderBy(x => x, StringComparer.Ordinal),
+                     classes.Select(kv => kv.Key).OrderBy(x => x, StringComparer.Ordinal));
+        var files = Directory.GetFiles(Path.Combine(c, "cpp"), "*", SearchOption.AllDirectories)
+            .Select(f => (Rel: Path.GetRelativePath(c, f).Replace('\\', '/'), Lines: File.ReadAllLines(f))).ToList();
+        foreach (var (name, sym) in classes)
+        {
+            string simple = (string)sym!["simpleName"]!;
+            var word = new System.Text.RegularExpressions.Regex($@"\b{simple}\b");
+            var expect = files.SelectMany(f => f.Lines.Select((l, i) => (l, site: $"{f.Rel}:{i + 1}")))
+                .Where(x => !x.l.TrimStart().StartsWith("#") && word.IsMatch(x.l)).Select(x => x.site).ToHashSet();
+            var got = sym["refs"]!.AsArray().Select(x => (string)x!).Append((string)sym["def"]!).ToHashSet();
+            Assert.True(expect.SetEquals(got), $"{name}: missing {string.Join(",", expect.Except(got))}; extra {string.Join(",", got.Except(expect))}");
+            Assert.Empty(sym["edges"]!.AsArray());
+        }
+    }
+
     private static string FirstWith(JsonObject syms, Func<JsonObject, bool> pred) =>
         syms.First(kv => pred(kv.Value!.AsObject())).Key;
 
@@ -230,6 +259,9 @@ public class CppProfileTests
     [InlineData("rtaDropped")]        // only the digest catches a quietly shrunk rta
     [InlineData("pureOnBody")]        // pure claimed for a method that has a body
     [InlineData("pureOnFunction")]
+    [InlineData("classWithEdge")]     // a class symbol is a def + refs only
+    [InlineData("classNotInMeta")]
+    [InlineData("classRefWrongLine")]
     public void Verify_FailsTampering(string how)
     {
         using var tmp = new TempDir();
@@ -271,6 +303,15 @@ public class CppProfileTests
             case "rtaDropped": Ve()["rta"]!.AsArray().RemoveAt(0); break;
             case "pureOnBody": syms[FirstWith(syms, s => (string?)s["kind"] == "method" && s["pure"] is null)]!["pure"] = true; break;
             case "pureOnFunction": syms[FirstWith(syms, s => (string?)s["kind"] == "function")]!["pure"] = true; break;
+            case "classWithEdge": syms[FirstWith(syms, s => (string?)s["kind"] == "class")]!["edges"]!.AsArray().Add(FirstWith(syms, s => (string?)s["kind"] == "function")); break;
+            case "classNotInMeta": meta["classes"]!.AsObject().Remove(FirstWith(syms, s => (string?)s["kind"] == "class")); break;
+            case "classRefWrongLine":
+            {
+                var s = syms[FirstWith(syms, s => (string?)s["kind"] == "class" && s["refs"]!.AsArray().Count > 0)]!;
+                string r = (string)s["refs"]![0]!;
+                s["refs"]![0] = r[..(r.LastIndexOf(':') + 1)] + "1";
+                break;
+            }
         }
         var jo = new JsonSerializerOptions { WriteIndented = true, TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver() };
         File.WriteAllText(mp, root.ToJsonString(jo));

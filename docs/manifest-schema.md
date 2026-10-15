@@ -247,7 +247,7 @@ is [cpp-profile-design.md](cpp-profile-design.md) (D1–D10 plus "As built"). A 
 
 | Field | Where | Meaning |
 |---|---|---|
-| `kind` | symbol | `function` \| `method` \| `ctor` \| `dtor` \| `template` \| `instance` |
+| `kind` | symbol | `function` \| `method` \| `ctor` \| `dtor` \| `template` \| `instance` \| `class` |
 | `simpleName` | symbol | the unqualified name the source spells (`m_2`, `Cls_4` for a ctor, `~Cls_4`); def/ref lines contain it as a whole word |
 | `instanceOf` | instance | its `template` symbol; an instance shares the template's `def` line |
 | `pure` | method | `true` for a pure virtual (def = its `= 0;` declaration line); absent otherwise |
@@ -257,6 +257,11 @@ is [cpp-profile-design.md](cpp-profile-design.md) (D1–D10 plus "As built"). A 
 | `_meta.staticInitRoots` | meta | ctor + dtor of each static-storage object; roots alongside `_meta.roots` |
 | `_meta.classes` | meta | `{class: [direct bases]}` for every class and mixin |
 | `_meta.cppTruthSha` | meta | the canonical digest below |
+
+**Class symbols** (`kind: class`, key `ns_1::Cls_4`): `def` is the `class Cls_4 … {` line and `refs` are every
+other line where the name is a whole word outside strings and `#include`s (type uses, qualifiers, ctor/dtor
+lines, constructions). They have no edges. **Skip `kind` in {`class`, `template`} when counting symbols for
+reachability or a reduction ratio**: neither can ever be reachable, so counting them dilutes the fraction.
 
 Symbols are keyed by qualified name (`ns_1::Cls_4::m_2`, `ns_0::tf_2<int>`, `ns_1::Tmpl_3<long>::m_0`).
 Reachability: `BFS(roots ∪ staticInitRoots)` over `edges ∪ implicitEdges ∪ cha ∪ memberPtrEdges` (sound) or

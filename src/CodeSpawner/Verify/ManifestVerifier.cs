@@ -222,7 +222,7 @@ public static class ManifestVerifier
         return 1;
     }
 
-    private static readonly HashSet<string> CppKinds = new(StringComparer.Ordinal) { "function", "method", "ctor", "dtor", "template", "instance" };
+    private static readonly HashSet<string> CppKinds = new(StringComparer.Ordinal) { "function", "method", "ctor", "dtor", "template", "instance", "class" };
 
     /// <summary>
     /// The C++ (v2) facts, D9 of docs/cpp-profile-design.md: every kind is known; an instance's instanceOf is a
@@ -273,6 +273,15 @@ public static class ManifestVerifier
                 else ok++;
             }
             else if (inst is not null) Fail($"{name}: only an instance has instanceOf");
+            if (k == "class")
+            {
+                // A class symbol is a def + type-use refs only: no calls, and it is a class _meta.classes knows.
+                if (!bases.ContainsKey(name)) Fail($"class {name}: not in _meta.classes");
+                else if (new[] { "edges", "implicitEdges", "virtualEdges", "memberPtrEdges" }.Any(p =>
+                             e.TryGetProperty(p, out var a) && a.ValueKind == JsonValueKind.Array && a.GetArrayLength() > 0))
+                    Fail($"class {name}: a class symbol has no edges");
+                else ok++;
+            }
             if (e.TryGetProperty("pure", out var pu) && pu.ValueKind == JsonValueKind.True)
             {
                 if (k != "method") Fail($"{name}: only a method can be pure");

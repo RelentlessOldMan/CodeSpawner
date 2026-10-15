@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using CodeSpawner.Cli;
 using CodeSpawner.Manifest;
 
@@ -95,6 +96,8 @@ internal sealed class CppClass
     public List<CppClass> Members { get; } = new();
     public List<CppClass> Children { get; } = new();
     public CppFn? Ctor, Dtor;
+    /// <summary>The <c>class Name … {</c> line: the def of the class symbol.</summary>
+    public string DefSite = "";
     public string Q => $"{Ns}::{Name}";
     public string Stem => IsMixin ? $"mix_{Index}" : $"cls_{Index}";
     public string Header => $"cpp/{Ns}/{Stem}.hpp";
@@ -193,6 +196,8 @@ internal sealed class CppProgram
     public List<CppClass> StaticObjs { get; } = new();
     /// <summary>Filled by the emitter: the line of each static object in static_init.cpp, and main's call to the root.</summary>
     public List<int> StaticInitLines { get; } = new();
+    /// <summary>The emitted files (set by <see cref="CppEmitter.Emit"/>); class refs are read from them.</summary>
+    public List<(string Rel, string Text)> Files = new();
     public int MainLine;
 
     private Rng _rng;
@@ -489,7 +494,7 @@ internal static class CppEmitter
             var b = new Buf();
             b.W("#pragma once");
             b.W($"namespace {mx.Ns} {{");
-            b.W($"class {mx.Name} {{");
+            mx.DefSite = Site(mx.Header, b.W($"class {mx.Name} {{"));
             b.W("public:");
             var hook = mx.Methods[0];
             hook.DefSite = Site(mx.Header, b.W($"    virtual void {hook.Name}() = 0;"));
@@ -573,6 +578,7 @@ internal static class CppEmitter
             b.W("}");
             files.Add((rel, b.ToString()));
         }
+        p.Files = files;
         return files;
     }
 
@@ -587,7 +593,7 @@ internal static class CppEmitter
             if (dep is not null) h.W($"#include \"../{dep.Ns}/{dep.Stem}.hpp\"");
         h.W($"namespace {c.Ns} {{");
         var bases = new[] { c.Base, c.Mixin }.Where(b => b is not null).Select(b => $"public {b!.Q}").ToList();
-        h.W($"class {c.Name}{(c.Final ? " final" : "")}{(bases.Count > 0 ? " : " + string.Join(", ", bases) : "")} {{");
+        c.DefSite = Site(c.Header, h.W($"class {c.Name}{(c.Final ? " final" : "")}{(bases.Count > 0 ? " : " + string.Join(", ", bases) : "")} {{"));
         h.W("public:");
 
         string Sig(CppFn m) => m.Override ? $"void {m.Name}(){(m.Final ? " override final" : " override")}" : m.Virtual ? $"virtual void {m.Name}()" : $"void {m.Name}()";
@@ -787,6 +793,8 @@ internal sealed class CppTruth
             foreach (var x in CppProgram.TypeArgs.Where(xs.Contains)) Declare(t.Body, t.InstanceName(x), t.SymbolName);
         }
         foreach (var h in _p.Helpers) Declare(h);
+        foreach (var c in _p.Classes.Concat(_p.Mixins))
+            _syms[c.Q] = new SymbolEntry { Def = c.DefSite, Kind = "class", SimpleName = c.Name };
 
         // Bodies.
         foreach (var f in bodies) Apply(f.Symbol, f, null);
@@ -815,11 +823,37 @@ internal sealed class CppTruth
             Ref(c.Ctor!.Symbol, CppEmitter.Site("cpp/rt/static_init.cpp", lines[k]));
         }
         Ref(_p.Root.Symbol, CppEmitter.Site("cpp/rt/main.cpp", _p.MainLine));
+        ClassRefs();
 
         foreach (var s in _syms.Values) Dedup(s);
     }
 
     private void Ref(string sym, string site) => Sym(sym).Refs.Add(site);
+
+    private static readonly Regex StringLit = new("\"[^\"]*\"", RegexOptions.Compiled);
+    private static readonly Regex Ident = new(@"[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
+
+    /// <summary>
+    /// A class symbol's refs are every line, other than its def, where its name appears as a whole word outside
+    /// strings: forward declarations, base lists, pointer and member declarations, <c>Cls::</c> qualifiers, ctor and
+    /// dtor declarations and bodies, constructions, member-pointer types. That is exactly what a name search returns,
+    /// which is the truth CodeCompass grades a class name against (agreed 2026-10-14).
+    /// </summary>
+    private void ClassRefs()
+    {
+        var byName = _p.Classes.Concat(_p.Mixins).ToDictionary(c => c.Name, StringComparer.Ordinal);
+        foreach (var (rel, text) in _p.Files)
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+                foreach (Match m in Ident.Matches(StringLit.Replace(lines[i], "\"\"")))
+                    if (byName.TryGetValue(m.Value, out var c))
+                    {
+                        string site = CppEmitter.Site(rel, i + 1);
+                        if (site != c.DefSite) Ref(c.Q, site);
+                    }
+        }
+    }
 
     private void Apply(string src, CppFn f, string? typeArg)
     {
