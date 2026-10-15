@@ -16,6 +16,8 @@ public sealed class BaseManifest
     public required Dictionary<string, SymbolEntry> Symbols { get; init; }
     /// <summary>Declared entry-point symbol names (oracle overlay); empty when absent.</summary>
     public List<string> Roots { get; init; } = new();
+    /// <summary>C++ (v2) static-storage ctors/dtors; empty when absent.</summary>
+    public List<string> StaticInitRoots { get; init; } = new();
 }
 
 /// <summary>Reads a v1 manifest (produced by <see cref="ManifestWriter"/>) back into a symbol table.</summary>
@@ -90,7 +92,9 @@ public static class ManifestReader
     internal static string Str(JsonElement e) =>
         e.ValueKind == JsonValueKind.String ? e.GetString()! : throw new FormatException($"expected a string, got {e.GetRawText()}");
 
-    public static BaseManifest Load(string path)
+    /// <param name="maxVersion">Highest manifestVersion accepted. 1 (the default) for every v1-only reader, mutate
+    /// included, so a C++ (v2) manifest is refused rather than misread; verify passes 2.</param>
+    public static BaseManifest Load(string path, int maxVersion = 1)
     {
         byte[] bytes = File.ReadAllBytes(path);
         string sha = IdentitySha(bytes);
@@ -99,7 +103,8 @@ public static class ManifestReader
 
         if (!root.TryGetProperty("_meta", out var meta)) throw new FormatException($"{path}: no _meta block");
         int ver = meta.TryGetProperty("manifestVersion", out var v) ? v.GetInt32() : -1;
-        if (ver != 1) throw new InvalidOperationException($"manifest version {ver} != 1");
+        if (ver < 1 || ver > maxVersion)
+            throw new InvalidOperationException(maxVersion == 1 ? $"manifest version {ver} != 1" : $"manifest version {ver} is not 1..{maxVersion}");
 
         var symbols = new Dictionary<string, SymbolEntry>(StringComparer.Ordinal);
         if (root.TryGetProperty("symbols", out var syms) && syms.ValueKind == JsonValueKind.Object)
@@ -132,12 +137,16 @@ public static class ManifestReader
                     e.ExpectedMiss = true;
                 if (p.Value.TryGetProperty("bytes", out var by) && by.ValueKind == JsonValueKind.Number)
                     e.Bytes = by.GetInt64();
+                if (ver >= 2) ReadV2(p.Value, e);
                 symbols[p.Name] = e;
             }
 
         var roots = new List<string>();
         if (meta.TryGetProperty("roots", out var rootsEl) && rootsEl.ValueKind == JsonValueKind.Array)
             foreach (var x in rootsEl.EnumerateArray()) roots.Add(Str(x));
+        var staticInit = new List<string>();
+        if (meta.TryGetProperty("staticInitRoots", out var siEl) && siEl.ValueKind == JsonValueKind.Array)
+            foreach (var x in siEl.EnumerateArray()) staticInit.Add(Str(x));
 
         return new BaseManifest
         {
@@ -148,6 +157,39 @@ public static class ManifestReader
             Sha256 = sha,
             Symbols = symbols,
             Roots = roots,
+            StaticInitRoots = staticInit,
         };
+    }
+
+    /// <summary>The C++ fields of a v2 symbol (docs/cpp-profile-design.md).</summary>
+    private static void ReadV2(JsonElement sym, SymbolEntry e)
+    {
+        if (sym.TryGetProperty("kind", out var k)) e.Kind = Str(k);
+        if (sym.TryGetProperty("simpleName", out var sn)) e.SimpleName = Str(sn);
+        if (sym.TryGetProperty("instanceOf", out var io)) e.InstanceOf = Str(io);
+        if (sym.TryGetProperty("pure", out var pu) && pu.ValueKind == JsonValueKind.True) e.Pure = true;
+        if (sym.TryGetProperty("implicitEdges", out var ie) && ie.ValueKind == JsonValueKind.Array)
+            foreach (var x in ie.EnumerateArray()) e.ImplicitEdges.Add(Str(x));
+        if (sym.TryGetProperty("virtualEdges", out var ve) && ve.ValueKind == JsonValueKind.Array)
+            foreach (var x in ve.EnumerateArray())
+            {
+                var v = new VirtualEdge { Static = Str(x.GetProperty("static")) };
+                if (x.TryGetProperty("cha", out var c) && c.ValueKind == JsonValueKind.Array)
+                    foreach (var t in c.EnumerateArray()) v.Cha.Add(Str(t));
+                if (x.TryGetProperty("rta", out var r) && r.ValueKind == JsonValueKind.Array)
+                    foreach (var t in r.EnumerateArray()) v.Rta.Add(Str(t));
+                e.VirtualEdges.Add(v);
+            }
+        if (sym.TryGetProperty("memberPtrEdges", out var me) && me.ValueKind == JsonValueKind.Array)
+            foreach (var x in me.EnumerateArray())
+            {
+                MemberPtrViaExtensions.TryParse(x.TryGetProperty("via", out var vv) ? vv.GetString() ?? "" : "", out var via);
+                e.MemberPtrEdges.Add(new MemberPtrEdge
+                {
+                    Target = Str(x.GetProperty("target")),
+                    Via = via,
+                    Dispatched = x.TryGetProperty("dispatched", out var d) && d.ValueKind == JsonValueKind.True,
+                });
+            }
     }
 }

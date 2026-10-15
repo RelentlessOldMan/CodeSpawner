@@ -1,6 +1,7 @@
 # C++ language profile + manifest v2 — design proposal
 
-**Status:** LOCKED 2026-10-14 (every consumer question answered). Being built for 1.2.0.
+**Status:** LOCKED 2026-10-14 (every consumer question answered). Built for 1.2.0; see "As built" below for
+the additions and the few places the build narrows a decision.
 
 ## Why
 
@@ -122,6 +123,91 @@ exactly like v1. A pointer to a virtual method dispatches over that method's `ch
 The `&Cls_4::m_2` token names the method, so that line is recorded in `m_2`'s `refs` (as an address-taken
 function name is in v1). The `->*` / `.*` call has no name token: no ref site, an expected miss for a
 name-based indexer that `dispatched` lets it classify.
+
+## As built (1.2.0)
+
+`gen --lang cpp --out <dir>` writes ONLY a self-contained C++ program under `<dir>/cpp/` plus
+`<dir>-manifest.json` (v2). The C population knobs (`--scale`, `--with-oracle`, `--preset`, …) are refused with
+`--lang cpp`, as is any `--cpp-*` knob without it. It takes `--out/--seed/--force`, the `--cpp-*` knobs (D8),
+and `--oracle-chain/-fanout/-depth/-shared-leaves/-reachable-frac`, which shape the free-function graph.
+
+**The program.** The program is checked to compile and link (`clang++ -std=c++17 -Wall -Wextra -Werror`) across
+seeds and knob extremes. It is NOT meant to run: virtual and member calls go through `gp_Cls_N` receiver
+pointers that are null, and method↔free-function cycles exist. All truth is static.
+- Layout: `cpp/ns_k/free.cpp` holds the free functions `ns_k::free_i`. `cpp/ns_k/cls_i.hpp` holds a class, and
+  `cls_i.cpp` its out-of-class bodies (every third class is all-inline in its header). `cpp/ns_k/mix_j.hpp`
+  holds a mixin. `cpp/tmpl/tmpl_t.hpp` holds a template. `cpp/rt/` holds the prototypes, receiver pointers,
+  member-pointer helpers (`cs_rt::mp_run_*` / `mp_keep_*`), `static_init.cpp` and `main.cpp` (which calls the
+  root). File names are lowercase, so an `#include` line never contains a symbol's whole-word name.
+- Free functions: the oracle graph (linear chain, or a DAG with `--oracle-fanout`) is the live part. A dead
+  block follows: by default a quarter of the live count (at least 2); `--oracle-reachable-frac` sizes it, and
+  1 means none. Method/ctor/dtor/template bodies call only live free functions, so the dead block stays dead.
+- Hierarchy: the first `--cpp-depth` classes form one guaranteed chain. Class 0 is always abstract (a pure
+  virtual). Class 1 always takes a mixin (`Mix_j`, one pure `hook_j`), so multiple inheritance always exists.
+  `final` classes are concrete leaves that add no new virtual. Every class has a user ctor and dtor; mixins
+  have neither.
+- Templates alternate: a function template `tf_t` (symbol `ns::tf_t`, instance `ns::tf_t<int>`) and a class
+  template `Tmpl_t` with one method (symbol `ns::Tmpl_t::m_0`, instance `ns::Tmpl_t<int>::m_0`). An instance's
+  `def` is its template's body line. The last template is never used. Template 0 always has one instance
+  (`<bool>`) called only from dead code: instantiated but unreachable.
+
+**Additions to the contract** (all additive, v2 only):
+1. `pure: true` on a pure virtual method (absent otherwise). It has no body, so its `def` is the
+   `virtual void m_0() = 0;` declaration line: the one exception to the D2 def rule. (A body-only extractor
+   finds no def for it; `pure` lets it classify that as a known gap. Asked for by CodeCompass, 2026-10-14.)
+2. `_meta.classes`: `{ "ns::Cls_4": ["ns::Cls_1", "ns::Mix_0"], … }`, every class and mixin with its direct
+   bases. `verify` uses it to check that each `cha` target sits at or below `static`'s class.
+3. `staticInitRoots` lists BOTH the ctor and the dtor of each static-storage object (the dtor runs at exit;
+   D6 named only the ctor). The `ns::Cls_4 g_static_0;` line is a ref site of the ctor.
+4. `lang: "cpp"` in `_meta`, and the `--cpp-*` / oracle knobs in `_meta.gen`.
+
+**Narrowed for the first cut:**
+- Member-function pointers target NON-virtual methods only. The D10 rule for a pointer to a virtual method
+  (dispatch over its `cha`/`rta`) stays reserved and is not generated yet.
+- `new Cls_4()` assigns a receiver pointer and is never deleted, so a `new` adds no dtor edge. A local
+  `Cls_4 obj;` adds the implicit dtor edge at scope exit. The generator writes no explicit `~Cls_4()` call.
+- Class symbols are not in the manifest. A class's own `class Cls_4 … {` line, and other type-name uses
+  (base lists, member and pointer declarations, the `Cls_4::` qualifier on an out-of-class body), are outside
+  the truth; only the ctor's sites carry the simpleName `Cls_4`.
+- Declarations are neither def nor ref (as in v1): an in-class declaration of an out-of-class body, and the
+  `cpp/rt/free.hpp` prototypes.
+
+**Statement forms and what each records** (on the enclosing body's symbol):
+
+| Source line | Records |
+|---|---|
+| `ns_1::free_3();` | `edges` + a ref of `ns_1::free_3` |
+| `gp_Cls_4->m_7();` (non-virtual) | `edges` + ref |
+| `gp_Cls_1->m_0();` (virtual) | a `virtualEdges` record + a ref of `static` |
+| `ns_0::Cls_0::m_0();` (in an override) | `edges` to the named implementation + ref |
+| `ns_0::Cls_4 obj_3;` | `edges` → ctor, `implicitEdges` → dtor, ref of the ctor |
+| `gp_Cls_4 = new ns_0::Cls_4();` | `edges` → ctor, ref of the ctor |
+| `ns_0::tf_2<int>();` / `tv_5.m_0();` | `edges` → the instance + ref (the class-template ref is the `.m_0()` line) |
+| `&ns_0::Cls_1::m_3,` in a `static … tbl_N[]` | `memberPtrEdges {via: table}` + a ref of the target; `dispatched` iff a `for (auto f : tbl_N) (gp->*f)();` follows |
+| `cs_rt::mp_run_Cls_1(&ns_0::Cls_1::m_3);` | `edges` + ref of the helper, `memberPtrEdges {via: arg}` + ref of `m_3`; `mp_run` dispatches, `mp_keep` only stores |
+
+A ref line inside a template body counts once for each instance that reaches it, as a ref of that instance's
+substituted target (`tf_0<T>()` in `Tmpl_1<int>::m_0` is a ref of `tf_0<int>`). A `template` symbol itself has
+no edges and no refs.
+
+**RTA.** A class is live when a static object, or a body reachable on the precise graph, constructs it as a
+complete object; members of a live class are live too, and base subobjects do not count. `rta` = the `cha`
+targets that some live class in the receiver's subtree dispatches to. Reachability over `rta` can construct
+more classes, so the generator iterates to a fixpoint.
+
+**Verify (v2):** accepts versions 1 and 2. On v2 it checks:
+- each symbol has a known `kind` and a `simpleName`, and def/ref lines contain the simpleName as a whole word;
+- `instanceOf` is a `template`, and only an instance has one;
+- `pure` is only on a method whose def line ends in `= 0;`;
+- implicit and memberPtr targets and `staticInitRoots` are symbols, and `via` is `table` or `arg`;
+- every `cha` target is a method with `static`'s simpleName, in a class at or below `static`'s, and `rta ⊆ cha`;
+- `cppTruthSha` is present and recomputes.
+
+`mutate` refuses a v2 manifest (it edits C corpora only).
+
+**Golden vector** (`digest-selftest`, fifth line, cross-checked by an independent Python implementation of the
+D7 text): `cppTruthSha = 28b4e1de981d282a6918de91846e990955f5b8220c88efc993d2a984c0bfed08` over the symbol set
+in `CppDigestTests.GoldenSyms` with `staticInitRoots = ["ns::A::A", "ns::A::~A"]`.
 
 ## Consumer answers so far
 

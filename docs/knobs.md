@@ -107,6 +107,29 @@ default value one is accepted, because a `_meta.gen` replay passes every recorde
 | `--oracle-indirect <n>` | `0` | Indirect edges (fnptr / vector-table / init_array) with `_meta.indirectTruthSha`. |
 | `--oracle-bytes` | off | Per-symbol byte mass and `_meta.totalOracleBytes`. |
 
+## `gen --lang cpp` (C++ program + manifest v2)
+
+See [cpp-profile-design.md](cpp-profile-design.md). `--lang cpp` writes only a self-contained C++ program under
+`<out>/cpp/` and a v2 manifest. It reads `--out`, `--seed`, `--force`, the knobs below, and the oracle graph
+knobs `--oracle-chain/-fanout/-depth/-shared-leaves/-reachable-frac` (which shape its free-function graph;
+`--oracle-depth` and `--oracle-shared-leaves` need `--oracle-fanout`). Any other knob, a preset's included, is
+refused, and a `--cpp-*` knob without `--lang cpp` is refused.
+
+| Knob | Default | What it does |
+|---|---|---|
+| `--lang <c\|cpp>` | `c` | `cpp` (or `c++`) switches to the C++ profile. |
+| `--cpp-classes <n>` | `12` | Classes (1..100000). Mixin interfaces come on top. |
+| `--cpp-depth <n>` | `3` | Max inheritance depth (0..16; 0 = every class a root). |
+| `--cpp-multi-inherit <f>` | `0.25` | Fraction of classes that also inherit a mixin (multiple inheritance); 0 = no mixins. |
+| `--cpp-virtual-frac <f>` | `0.6` | Chance a derived class overrides each inherited virtual. |
+| `--cpp-instantiated-frac <f>` | `0.5` | Fraction of concrete classes constructed in live code; the rest are `cha`-only targets (`cha − rta`). |
+| `--cpp-templates <n>` | `4` | Templates, alternating function / class template (0..10000). The last is never used. |
+| `--cpp-instances <n>` | `2` | Max type arguments per used template (1..5). |
+| `--cpp-static-init <n>` | `2` | Static-storage objects; their ctor + dtor are `_meta.staticInitRoots` (0..10000). |
+
+Free-function dead block: by default a quarter of the live graph (at least 2); `--oracle-reachable-frac f`
+sizes it so the live part is about `f` of the free functions, and `1` means none.
+
 ## Presets
 
 | Preset | Expands to | Use |

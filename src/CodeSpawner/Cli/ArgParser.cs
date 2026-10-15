@@ -76,6 +76,16 @@ public static class ArgParser
                 case "oracle-reachable-frac": o.OracleReachableFrac = D(); break;
                 case "oracle-indirect": o.OracleIndirect = I(); break;
                 case "oracle-bytes": o.OracleBytes = B(); break;
+                // C++ profile:
+                case "lang": o.Lang = ParseLang(Val()); break;
+                case "cpp-classes": o.CppClasses = I(); break;
+                case "cpp-depth": o.CppDepth = I(); break;
+                case "cpp-multi-inherit": o.CppMultiInherit = D(); break;
+                case "cpp-virtual-frac": o.CppVirtualFrac = D(); break;
+                case "cpp-instantiated-frac": o.CppInstantiatedFrac = D(); break;
+                case "cpp-templates": o.CppTemplates = I(); break;
+                case "cpp-instances": o.CppInstances = I(); break;
+                case "cpp-static-init": o.CppStaticInit = I(); break;
                 default: throw new ArgException($"unknown knob --{key}");
             }
         }
@@ -86,10 +96,43 @@ public static class ArgParser
     }
 
     // Knobs gen --from-profile reads; every other knob would be ignored, so it is refused rather than recorded.
-    private static readonly HashSet<string> ProfileKnobs = new(StringComparer.Ordinal) { "out", "seed", "force", "from-profile", "with-oracle" };
+    private static readonly HashSet<string> ProfileKnobs = new(StringComparer.Ordinal) { "out", "seed", "force", "lang", "from-profile", "with-oracle" };
+
+    // Knobs gen --lang cpp reads (besides --cpp-*): it writes only the C++ program, so the C population knobs are refused.
+    private static readonly HashSet<string> CppKnobs = new(StringComparer.Ordinal)
+    {
+        "out", "seed", "force", "lang", "oracle-chain", "oracle-fanout", "oracle-depth", "oracle-shared-leaves", "oracle-reachable-frac",
+    };
 
     private static void CheckGen(GenOptions o, HashSet<string> given)
     {
+        var cppKnob = given.Where(k => k.StartsWith("cpp-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
+        if (o.Lang == SourceLang.Cpp)
+        {
+            var ignored = given.Where(k => !CppKnobs.Contains(k) && !k.StartsWith("cpp-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+            if (ignored.Count > 0)
+                throw new ArgException($"--lang cpp writes only the C++ program and ignores {string.Join(", ", ignored.Select(k => "--" + k))}; drop them (a --preset counts too)");
+            if (o.OracleFanout <= 0 && (o.OracleDepth != 0 || o.OracleSharedLeaves != 0))
+                throw new ArgException($"--{(o.OracleDepth != 0 ? "oracle-depth" : "oracle-shared-leaves")} shapes the --oracle-fanout DAG and is ignored by the default linear chain; add --oracle-fanout <n>");
+            if (o.CppClasses is < 1 or > 100_000) throw new ArgException($"--cpp-classes must be in 1..100000, got {o.CppClasses}");
+            if (o.CppDepth is < 0 or > 16) throw new ArgException($"--cpp-depth must be in 0..16, got {o.CppDepth}");
+            if (o.CppTemplates is < 0 or > 10_000) throw new ArgException($"--cpp-templates must be in 0..10000, got {o.CppTemplates}");
+            if (o.CppInstances is < 1 or > 5) throw new ArgException($"--cpp-instances must be in 1..5, got {o.CppInstances}");
+            if (o.CppStaticInit is < 0 or > 10_000) throw new ArgException($"--cpp-static-init must be in 0..10000, got {o.CppStaticInit}");
+            foreach (var (k, v) in new (string, double)[]
+            {
+                ("cpp-multi-inherit", o.CppMultiInherit), ("cpp-virtual-frac", o.CppVirtualFrac), ("cpp-instantiated-frac", o.CppInstantiatedFrac),
+            })
+                if (v is < 0 or > 1) throw new ArgException($"--{k} must be in [0, 1], got {v.ToString(CultureInfo.InvariantCulture)}");
+            if (o.OracleChain is < 2 or > 1_000_000) throw new ArgException($"--oracle-chain must be in 2..1000000, got {o.OracleChain}");
+            if (o.OracleFanout < 0 || o.OracleDepth < 0 || o.OracleSharedLeaves < 0)
+                throw new ArgException("--oracle-fanout, --oracle-depth and --oracle-shared-leaves must be >= 0");
+            if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
+                throw new ArgException("--oracle-reachable-frac must be 0 (default dead block) or in [0.01, 1]");
+            return;
+        }
+        if (cppKnob is not null) throw new ArgException($"--{cppKnob} requires --lang cpp");
+
         if (o.FromProfile is not null)
         {
             var ignored = given.Where(k => !ProfileKnobs.Contains(k) && !k.StartsWith("oracle-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
@@ -149,6 +192,13 @@ public static class ArgParser
         if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
             throw new ArgException("--oracle-reachable-frac must be 0 (all reachable) or in [0.01, 1]");
     }
+
+    private static SourceLang ParseLang(string v) => v.ToLowerInvariant() switch
+    {
+        "c" => SourceLang.C,
+        "cpp" or "c++" => SourceLang.Cpp,
+        _ => throw new ArgException($"--lang must be c or cpp, got '{v}'"),
+    };
 
     public static VerifyOptions ParseVerify(string[] args)
     {

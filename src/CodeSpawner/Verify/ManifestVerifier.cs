@@ -50,8 +50,9 @@ public static class ManifestVerifier
         // Not a manifest at all (no _meta or no symbols object) is bad input, like invalid JSON: exit 2.
         if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("error: manifest has no _meta block"); return 2; }
         int ver = meta.TryGetProperty("manifestVersion", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi : -1;
-        if (ver != 1) { Console.Error.WriteLine($"FAIL: manifestVersion {ver} != 1"); fail++; }
-        else Console.WriteLine("  OK  _meta.manifestVersion == 1");
+        if (ver is not (1 or 2)) { Console.Error.WriteLine($"FAIL: manifestVersion {ver} is not 1 or 2"); fail++; }
+        else Console.WriteLine($"  OK  _meta.manifestVersion == {ver}");
+        bool v2 = ver == 2;
 
         if (!root.TryGetProperty("symbols", out var symbols) || symbols.ValueKind != JsonValueKind.Object)
         { Console.Error.WriteLine("error: manifest has no symbols object"); return 2; }
@@ -75,7 +76,8 @@ public static class ManifestVerifier
 
         var lineCache = new Dictionary<string, string[]>();
         var paths = new Generation.Containment(corpus);
-        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0;
+        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0, cppOk = 0;
+        if (v2) fail += CheckCpp(meta, symbols, names, ref cppOk, paths, lineCache);
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree, its linked roots included (the
         // unresolved-include premise: an include path may span every root).
@@ -99,17 +101,25 @@ public static class ManifestVerifier
             }
 
             // def site contains the symbol token. A symbol without a string def is a FAIL, not a skip: a truncated
-            // or hand-edited manifest must not pass by dropping its def sites.
+            // or hand-edited manifest must not pass by dropping its def sites. A v2 (C++) symbol is named in the source
+            // by its simpleName (a whole word: `m_2`, `Cls_4` for a construction, `~Cls_4`), not by its qualified key.
+            string? simple = null;
+            if (v2)
+            {
+                if (entry.TryGetProperty("simpleName", out var snEl) && snEl.ValueKind == JsonValueKind.String && snEl.GetString()!.Length > 0)
+                    simple = snEl.GetString()!;
+                else { Console.Error.WriteLine($"FAIL {name}: a v2 symbol needs a simpleName"); fail++; continue; }
+            }
             if (!entry.TryGetProperty("def", out var defEl) || defEl.ValueKind != JsonValueKind.String)
             { Console.Error.WriteLine($"FAIL def {name}: no def site"); fail++; }
-            else if (SiteHasToken(paths, lineCache, defEl.GetString()!, name, out string why)) defsOk++;
+            else if (SiteHasToken(paths, lineCache, defEl.GetString()!, simple ?? name, out string why, wholeWord: v2)) defsOk++;
             else { Console.Error.WriteLine($"FAIL def {name}: {why}"); fail++; }
 
             // each ref site contains the symbol token.
             if (entry.TryGetProperty("refs", out var refsEl))
                 foreach (var r in refsEl.EnumerateArray())
                 {
-                    if (SiteHasToken(paths, lineCache, ManifestReader.Str(r), name, out string why)) refsOk++;
+                    if (SiteHasToken(paths, lineCache, ManifestReader.Str(r), simple ?? name, out string why, wholeWord: v2)) refsOk++;
                     else { Console.Error.WriteLine($"FAIL ref {name} @ {r.GetString()}: {why}"); fail++; }
                 }
 
@@ -183,19 +193,126 @@ public static class ManifestVerifier
         // a third independent reader (generator, this verifier, and the consumer) of the locked canonical form.
         if (meta.TryGetProperty("indirectTruthSha", out var itsEl) && itsEl.GetString() is { } declaredIts)
         {
-            var parsed = ManifestReader.Load(manifestPath);
+            var parsed = ManifestReader.Load(manifestPath, maxVersion: 2);
             string got = IndirectDigest.Compute(parsed.Symbols, parsed.Roots);
             if (got == declaredIts) Console.WriteLine("  OK  _meta.indirectTruthSha reproduces");
             else { Console.Error.WriteLine($"FAIL indirectTruthSha: manifest {declaredIts}, recomputed {got}"); fail++; }
         }
 
-        Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges");
+        // cppTruthSha (v2): required, and recomputed from the manifest like indirectTruthSha.
+        if (v2)
+        {
+            if (meta.TryGetProperty("cppTruthSha", out var ctsEl) && ctsEl.GetString() is { } declaredCts)
+            {
+                var parsed = ManifestReader.Load(manifestPath, maxVersion: 2);
+                string got = CppDigest.Compute(parsed.Symbols, parsed.StaticInitRoots);
+                if (got == declaredCts) Console.WriteLine("  OK  _meta.cppTruthSha reproduces");
+                else { Console.Error.WriteLine($"FAIL cppTruthSha: manifest {declaredCts}, recomputed {got}"); fail++; }
+            }
+            else { Console.Error.WriteLine("FAIL cppTruthSha: a v2 manifest must carry _meta.cppTruthSha"); fail++; }
+        }
+
+        Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges" +
+                          (v2 ? $", {cppOk} C++ facts" : ""));
         // A manifest that declares nothing checkable used to PASS, having proved nothing.
-        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk == 0)
+        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk + cppOk == 0)
         { Console.Error.WriteLine("error: the manifest declares nothing to check (no symbol sites, dup groups or indirect edges)"); return 2; }
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
         Console.Error.WriteLine($"verify: FAIL ({fail} problem(s))");
         return 1;
+    }
+
+    private static readonly HashSet<string> CppKinds = new(StringComparer.Ordinal) { "function", "method", "ctor", "dtor", "template", "instance" };
+
+    /// <summary>
+    /// The C++ (v2) facts, D9 of docs/cpp-profile-design.md: every kind is known; an instance's instanceOf is a
+    /// template; implicit and member-pointer targets and staticInitRoots are symbols; each virtual record's static is a
+    /// method, every cha target is a method of the same simpleName in a class at or below static's class (per
+    /// _meta.classes), and rta is within cha. Returns the failure count.
+    /// </summary>
+    private static int CheckCpp(JsonElement meta, JsonElement symbols, HashSet<string> names, ref int ok,
+        Generation.Containment paths, Dictionary<string, string[]> cache)
+    {
+        int fail = 0;
+        bool DeclaresPure(string site) => TryReadLine(paths, cache, site, out string t, out _, out _) && t.TrimEnd().EndsWith("= 0;", StringComparison.Ordinal);
+        void Fail(string m) { Console.Error.WriteLine("FAIL " + m); fail++; }
+
+        // class -> direct bases; below(a, b) = a is b or derives from it.
+        var bases = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        if (meta.TryGetProperty("classes", out var clsEl) && clsEl.ValueKind == JsonValueKind.Object)
+            foreach (var c in clsEl.EnumerateObject())
+                bases[c.Name] = c.Value.ValueKind == JsonValueKind.Array ? c.Value.EnumerateArray().Select(ManifestReader.Str).ToList() : new();
+        bool Below(string a, string b, int depth = 0) =>
+            a == b || (depth < 64 && bases.TryGetValue(a, out var bs) && bs.Any(x => Below(x, b, depth + 1)));
+        static string Owner(string sym) => sym[..Math.Max(0, sym.LastIndexOf("::", StringComparison.Ordinal))];
+
+        string? Prop(JsonElement e, string key) =>
+            e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        var kind = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var simple = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var s in symbols.EnumerateObject()) { kind[s.Name] = Prop(s.Value, "kind"); simple[s.Name] = Prop(s.Value, "simpleName"); }
+
+        if (meta.TryGetProperty("staticInitRoots", out var siEl) && siEl.ValueKind == JsonValueKind.Array)
+            foreach (var r in siEl.EnumerateArray())
+            {
+                string rn = ManifestReader.Str(r);
+                if (names.Contains(rn)) ok++; else Fail($"staticInitRoot '{rn}': not a declared symbol");
+            }
+
+        foreach (var s in symbols.EnumerateObject())
+        {
+            string name = s.Name;
+            var e = s.Value;
+            string? k = kind[name];
+            if (k is null || !CppKinds.Contains(k)) { Fail($"{name}: kind '{k}' is not one of {string.Join("|", CppKinds)}"); continue; }
+            ok++;
+            string? inst = Prop(e, "instanceOf");
+            if (k == "instance")
+            {
+                if (inst is null || !names.Contains(inst) || kind[inst] != "template") Fail($"instance {name}: instanceOf '{inst}' is not a declared template");
+                else ok++;
+            }
+            else if (inst is not null) Fail($"{name}: only an instance has instanceOf");
+            if (e.TryGetProperty("pure", out var pu) && pu.ValueKind == JsonValueKind.True)
+            {
+                if (k != "method") Fail($"{name}: only a method can be pure");
+                else if (Prop(e, "def") is { } d && !DeclaresPure(d)) Fail($"{name}: pure, but its def line {d} is not a '= 0;' declaration");
+                else ok++;
+            }
+
+            if (e.TryGetProperty("implicitEdges", out var ie) && ie.ValueKind == JsonValueKind.Array)
+                foreach (var t in ie.EnumerateArray())
+                {
+                    string tn = ManifestReader.Str(t);
+                    if (names.Contains(tn)) ok++; else Fail($"implicit {name} -> {tn}: target symbol missing");
+                }
+            if (e.TryGetProperty("memberPtrEdges", out var me) && me.ValueKind == JsonValueKind.Array)
+                foreach (var m in me.EnumerateArray())
+                {
+                    string tn = Prop(m, "target") ?? "";
+                    string via = Prop(m, "via") ?? "";
+                    if (!names.Contains(tn)) Fail($"memberPtr {name} -> {tn}: target symbol missing");
+                    else if (via is not ("table" or "arg")) Fail($"memberPtr {name} -> {tn}: via '{via}' is not table|arg");
+                    else ok++;
+                }
+            if (e.TryGetProperty("virtualEdges", out var ve) && ve.ValueKind == JsonValueKind.Array)
+                foreach (var v in ve.EnumerateArray())
+                {
+                    string st = Prop(v, "static") ?? "";
+                    if (!names.Contains(st) || kind[st] != "method") { Fail($"virtual {name}: static '{st}' is not a declared method"); continue; }
+                    var cha = v.TryGetProperty("cha", out var c) && c.ValueKind == JsonValueKind.Array ? c.EnumerateArray().Select(ManifestReader.Str).ToList() : new();
+                    var rta = v.TryGetProperty("rta", out var r) && r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(ManifestReader.Str).ToList() : new();
+                    foreach (var t in cha)
+                    {
+                        if (!names.Contains(t) || kind[t] != "method") Fail($"virtual {name} [{st}]: cha target '{t}' is not a declared method");
+                        else if (simple[t] != simple[st] || !Below(Owner(t), Owner(st)))
+                            Fail($"virtual {name} [{st}]: cha target '{t}' does not override it from a class at or below {Owner(st)}");
+                        else ok++;
+                    }
+                    foreach (var t in rta.Where(t => !cha.Contains(t))) Fail($"virtual {name} [{st}]: rta target '{t}' is not in cha");
+                }
+        }
+        return fail;
     }
 
     /// <summary>Honest-miss check: the symbol name must NOT appear at the def line and the token-paste
@@ -234,14 +351,27 @@ public static class ManifestVerifier
         return true;
     }
 
-    /// <summary>Assert the line named by "<rel>:<line>" exists and contains "<symbol>(".</summary>
+    /// <summary>Assert the line named by "<rel>:<line>" exists and contains "<symbol>(" (v1), or, with
+    /// <paramref name="wholeWord"/> (v2), <paramref name="symbol"/> as a whole word.</summary>
     private static bool SiteHasToken(Generation.Containment paths, Dictionary<string, string[]> cache, string site,
-        string symbol, out string why)
+        string symbol, out string why, bool wholeWord = false)
     {
+        if (!TryReadLine(paths, cache, site, out string text, out int line, out why)) return false;
+        if (wholeWord ? !HasWord(text, symbol) : !text.Contains(symbol + "("))
+        { why = wholeWord ? $"line {line} lacks the word '{symbol}'" : $"line {line} lacks '{symbol}('"; return false; }
+        return true;
+    }
+
+    /// <summary>The text of the line named by "<rel>:<line>", inside the corpus root.</summary>
+    private static bool TryReadLine(Generation.Containment paths, Dictionary<string, string[]> cache, string site,
+        out string text, out int line, out string why)
+    {
+        text = "";
+        line = 0;
         int c = site.LastIndexOf(':');
         if (c < 0) { why = "malformed site (no :line)"; return false; }
         string rel = site[..c];
-        if (!int.TryParse(site[(c + 1)..], out int line)) { why = "malformed line number"; return false; }
+        if (!int.TryParse(site[(c + 1)..], out line)) { why = "malformed line number"; return false; }
 
         // Refuse paths that escape the corpus root (a malformed/hostile manifest with '..'); --linked-roots
         // siblings (../<corpus>_rootN/...) are part of the corpus.
@@ -258,10 +388,23 @@ public static class ManifestVerifier
             cache[full] = lines;
         }
         if (line < 1 || line > lines.Length) { why = $"line {line} out of range (file has {lines.Length})"; return false; }
-
-        if (!lines[line - 1].Contains(symbol + "(")) { why = $"line {line} lacks '{symbol}('"; return false; }
+        text = lines[line - 1];
         why = "";
         return true;
+    }
+
+    /// <summary>True when <paramref name="word"/> occurs in <paramref name="text"/> with no identifier character on
+    /// either side (a leading '~' already bounds a dtor name on the left).</summary>
+    internal static bool HasWord(string text, string word)
+    {
+        static bool Ident(char ch) => char.IsAsciiLetterOrDigit(ch) || ch == '_';
+        for (int i = text.IndexOf(word, StringComparison.Ordinal); i >= 0; i = text.IndexOf(word, i + 1, StringComparison.Ordinal))
+        {
+            int end = i + word.Length;
+            bool left = i == 0 || !Ident(word[0]) || !Ident(text[i - 1]);
+            if (left && (end == text.Length || !Ident(text[end]))) return true;
+        }
+        return false;
     }
 
     /// <summary>The corpus and its linked roots: the real (non-link) sibling dirs named <c>&lt;corpus&gt;_root&lt;N&gt;</c>.</summary>
