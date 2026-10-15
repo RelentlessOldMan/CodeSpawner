@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-15
+
 Review round 6 of the C++ profile. **`gen --lang cpp` output changes for every seed** (program bytes and
 manifest truth; the new default-seed `cppTruthSha` is pinned as `d3a38e31…`). C corpora are byte-identical.
 
@@ -715,7 +717,9 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.13...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.13...v1.2.0
 [1.1.13]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.12...v1.1.13
 [1.1.12]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.11...v1.1.12
 [1.1.11]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.10...v1.1.11
