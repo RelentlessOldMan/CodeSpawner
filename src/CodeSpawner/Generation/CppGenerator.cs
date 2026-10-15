@@ -334,12 +334,48 @@ internal sealed class CppProgram
         if (o.CppInstantiatedFrac < 1 && concrete.Count >= 2 && concrete.All(c => c.Instantiated)
             && concrete.LastOrDefault(c => !memberTypes.Contains(c)) is { } spare)
             spare.Instantiated = false;
+        BaseOnlyMember(memberTypes);
 
         // final classes: concrete leaves (nothing derives from them) that add no virtual of their own, 30% each, at least
         // one when any qualifies. (An abstract final class, or a new virtual in one, is legal C++ that compilers flag.)
         bool CanBeFinal(CppClass c) => c.Children.Count == 0 && !c.Abstract && c.Methods.All(m => !m.Virtual || m.Override);
         foreach (var c in Classes) if (CanBeFinal(c) && U() < 0.3) c.Final = true;
         if (!Classes.Any(c => c.Final) && Classes.LastOrDefault(CanBeFinal) is { } leaf) leaf.Final = true;
+    }
+
+    /// <summary>
+    /// One class live only as a member of a base subobject: an abstract class B (never a complete object) with a
+    /// constructed class below it gets a member of a concrete, never-constructed class M. M is live only because a
+    /// complete object of B's subclass contains B's members. M is not related to B and its header does not include
+    /// B's (no cycle). The first of the first 8 such B with an M is used, and only when two never-constructed
+    /// classes stay besides M for the dispatch-only construction. Draws no random numbers.
+    /// </summary>
+    private void BaseOnlyMember(HashSet<CppClass> memberTypes)
+    {
+        bool Below(CppClass c, CppClass b) => c.Ancestors().Contains(b);
+        var spares = Classes.Where(m => !m.Abstract && !m.Instantiated && !memberTypes.Contains(m)).ToList();
+        if (spares.Count < 3) return;
+        var aboveBuilt = Classes.Where(d => d.Instantiated).SelectMany(d => d.Ancestors()).ToHashSet();
+        bool Needs(CppClass c, CppClass target)
+        {
+            var seen = new HashSet<CppClass>();
+            var st = new Stack<CppClass>(new[] { c });
+            while (st.Count > 0)
+            {
+                var x = st.Pop();
+                if (x == target) return true;
+                if (!seen.Add(x)) continue;
+                foreach (var d in new[] { x.Base, x.Mixin }.Concat(x.Members)) if (d is not null) st.Push(d);
+            }
+            return false;
+        }
+        foreach (var host in Classes.Where(b => b.Abstract && aboveBuilt.Contains(b)).Take(8))
+            if (spares.FirstOrDefault(m => !Below(m, host) && !Below(host, m) && !Needs(m, host)) is { } m)
+            {
+                host.Members.Add(m);
+                memberTypes.Add(m);
+                return;
+            }
     }
 
     private static List<string> VirtualNamesOf(CppClass c)
@@ -475,7 +511,8 @@ internal sealed class CppProgram
         var above = start.SelectMany(c => c.Ancestors().Prepend(c)).ToHashSet();    // classes with a start class below
         var hosts = Classes.Where(c => c.Instantiated && !c.Inline && !above.Contains(c)
                                        && c.Methods.Any(m => m.Virtual && !m.Pure)).ToList();
-        var spare = Classes.Where(c => !c.Abstract && !c.Instantiated && !start.Contains(c)).ToList();
+        var memberTypes = Classes.SelectMany(c => c.Members).ToHashSet();
+        var spare = Classes.Where(c => !c.Abstract && !c.Instantiated && !start.Contains(c) && !memberTypes.Contains(c)).ToList();
         if (hosts.Count == 0 || spare.Count < 2) return;
         var host = Pick(hosts);
         var impl = Pick(host.Methods.Where(m => m.Virtual && !m.Pure).ToList());
