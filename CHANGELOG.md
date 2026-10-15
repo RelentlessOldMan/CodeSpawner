@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-14
+
 ### Added
 - **C++ language profile + manifest v2** (`gen --lang cpp`; design in `docs/cpp-profile-design.md`, agreed with
   CodeCarver and CodeCompass). It writes a self-contained C++ program with namespaces, single and multiple
