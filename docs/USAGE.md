@@ -3,7 +3,8 @@
 A deterministic generator of synthetic code corpora for stress-testing code indexing / search / carving
 tools at extreme scale (100 GB+ trees, individual headers over 1 GB), with a machine-checkable
 **ground-truth manifest**. This is the complete guide; see also [`knobs.md`](knobs.md) (every knob) and
-[`manifest-schema.md`](manifest-schema.md) (the v1 contract).
+[`manifest-schema.md`](manifest-schema.md) (the v1 contract, and v2 for C++), and
+[`cpp-profile-design.md`](cpp-profile-design.md) (the C++ profile, `gen --lang cpp`).
 
 ---
 
@@ -97,7 +98,7 @@ Writes a self-contained C++ program (`<dir>/cpp/`: namespaces, single and multip
 `rta` target sets), `memberPtrEdges`, `kind`s, `staticInitRoots` and `_meta.cppTruthSha`. The program
 compiles and links (`clang++ -std=c++17 -Wall -Wextra -Werror`, all `.cpp` under `cpp/`); it is not meant to
 run. Knobs: [knobs.md](knobs.md); contract: [cpp-profile-design.md](cpp-profile-design.md). `verify` checks it;
-`mutate` refuses it.
+`mutate` refuses it (exit 2: mutate edits C corpora only).
 
 ```powershell
 codespawner gen --lang cpp --out C:\corpora\cpp --cpp-classes 40 --cpp-depth 4
@@ -115,9 +116,13 @@ the same manifest). Exit 0 = pass, 1 = fail, 2 = bad input. Manifest defaults to
 sibling. A manifest path that goes through a junction or symlink inside the corpus fails as escaping it, and
 a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright. A manifest
 with no `_meta` or `symbols` object, or one that declares nothing to check (no symbol sites, dup groups or
-indirect edges), is bad input (exit 2); before 1.1.11 the latter passed. A v2 (C++) manifest is checked
-against its own rules: whole-word simpleName def/ref lines, kinds, edge-free class symbols, `instanceOf`, `pure`, implicit and
-member-pointer targets, `cha` overrides below `static` with `rta ⊆ cha`, and a recomputed `cppTruthSha`.
+indirect edges), is bad input (exit 2); before 1.1.11 the latter passed. A `manifestVersion` other than 1 or
+2 is bad input (exit 2). A v2 (C++) manifest of the wrong shape (a field of the wrong JSON type, a duplicate
+key, a v1-only field) is bad input too; otherwise it is checked against its own rules: whole-word simpleName
+def/ref lines, canonical and unique sites, kinds that fit their keys, the `_meta.classes` hierarchy against
+the `class` lines, edge-free class symbols, `instanceOf`, `pure`, implicit / member-pointer / static-init
+targets of the right kind, `cha` exactly the override set below a receiver with `rta ⊆ cha`, and a recomputed
+`cppTruthSha`. The full list is in [cpp-profile-design.md](cpp-profile-design.md) "As built".
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
@@ -275,9 +280,10 @@ contract, versioned in [`manifest-schema.md`](manifest-schema.md)).
 ```
 
 This copies `codespawner.exe` and the contract docs (`manifest-schema.md`, `mutate-design.md`,
-`diff-delta-design.md`, `oracle-v1-design.md`) into `<repo>\tools\codespawner\` and writes a
-`GENERATOR_VERSION` stamp. Each consumer keeps its own thin verify adapter and **asserts
-`_meta.manifestVersion == 1`** before trusting a manifest:
+`diff-delta-design.md`, `oracle-v1-design.md`, `cpp-profile-design.md`) into `<repo>\tools\codespawner\` and
+writes a `GENERATOR_VERSION` stamp. Each consumer keeps its own thin verify adapter and **asserts
+`_meta.manifestVersion`** before trusting a manifest (`1` for a C corpus; a consumer that reads C++ corpora
+adds a separate `2` path):
 
 - **CodeCompass** — `verify-corpus-codecompass.ps1`: indexes the corpus, runs `find_references`, and
   asserts against the manifest's `refs` + the unresolved-include disclosure + `doctor`'s scan.

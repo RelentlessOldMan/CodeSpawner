@@ -27,8 +27,9 @@ $destDir = Join-Path $Target "tools\codespawner"
 New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 
 Copy-Item $Exe (Join-Path $destDir "codespawner.exe") -Force
-# The contract docs: the manifest, the symbol/diff/conflict deltas, and the oracle overlay they cite.
-$docs = "manifest-schema.md", "mutate-design.md", "diff-delta-design.md", "oracle-v1-design.md"
+# The contract docs: the manifest, the symbol/diff/conflict deltas, the oracle overlay they cite, and the C++
+# profile (manifest v2).
+$docs = "manifest-schema.md", "mutate-design.md", "diff-delta-design.md", "oracle-v1-design.md", "cpp-profile-design.md"
 foreach ($d in $docs) { Copy-Item (Join-Path $root "docs\$d") (Join-Path $destDir $d) -Force }
 
 $stamp = @"

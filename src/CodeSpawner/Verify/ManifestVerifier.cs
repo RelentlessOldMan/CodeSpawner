@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CodeSpawner.Cli;
 using CodeSpawner.Manifest;
 
@@ -50,12 +51,14 @@ public static class ManifestVerifier
         // Not a manifest at all (no _meta or no symbols object) is bad input, like invalid JSON: exit 2.
         if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("error: manifest has no _meta block"); return 2; }
         int ver = meta.TryGetProperty("manifestVersion", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi : -1;
-        if (ver is not (1 or 2)) { Console.Error.WriteLine($"FAIL: manifestVersion {ver} is not 1 or 2"); fail++; }
-        else Console.WriteLine($"  OK  _meta.manifestVersion == {ver}");
+        // An unknown version is no manifest this verifier can read: bad input, before any check runs on a guess.
+        if (ver is not (1 or 2)) { Console.Error.WriteLine($"error: manifestVersion {(v.ValueKind == JsonValueKind.Undefined ? "missing" : v.GetRawText())} is not 1 or 2"); return 2; }
+        Console.WriteLine($"  OK  _meta.manifestVersion == {ver}");
         bool v2 = ver == 2;
 
         if (!root.TryGetProperty("symbols", out var symbols) || symbols.ValueKind != JsonValueKind.Object)
         { Console.Error.WriteLine("error: manifest has no symbols object"); return 2; }
+        if (v2 && CppShapeError(meta, symbols) is { } shape) { Console.Error.WriteLine($"error: malformed v2 manifest: {shape}"); return 2; }
 
         // Collect symbol names for the edge-chain check.
         var names = new HashSet<string>();
@@ -110,16 +113,18 @@ public static class ManifestVerifier
                     simple = snEl.GetString()!;
                 else { Console.Error.WriteLine($"FAIL {name}: a v2 symbol needs a simpleName"); fail++; continue; }
             }
+            // A ctor shares its class's name, so its sites must name it outside a dtor's `~Cls`.
+            bool ctor = v2 && entry.TryGetProperty("kind", out var kEl) && kEl.GetString() == "ctor";
             if (!entry.TryGetProperty("def", out var defEl) || defEl.ValueKind != JsonValueKind.String)
             { Console.Error.WriteLine($"FAIL def {name}: no def site"); fail++; }
-            else if (SiteHasToken(paths, lineCache, defEl.GetString()!, simple ?? name, out string why, wholeWord: v2)) defsOk++;
+            else if (SiteHasToken(paths, lineCache, defEl.GetString()!, simple ?? name, out string why, wholeWord: v2, notAfterTilde: ctor)) defsOk++;
             else { Console.Error.WriteLine($"FAIL def {name}: {why}"); fail++; }
 
             // each ref site contains the symbol token.
             if (entry.TryGetProperty("refs", out var refsEl))
                 foreach (var r in refsEl.EnumerateArray())
                 {
-                    if (SiteHasToken(paths, lineCache, ManifestReader.Str(r), simple ?? name, out string why, wholeWord: v2)) refsOk++;
+                    if (SiteHasToken(paths, lineCache, ManifestReader.Str(r), simple ?? name, out string why, wholeWord: v2, notAfterTilde: ctor)) refsOk++;
                     else { Console.Error.WriteLine($"FAIL ref {name} @ {r.GetString()}: {why}"); fail++; }
                 }
 
@@ -225,40 +230,132 @@ public static class ManifestVerifier
     private static readonly HashSet<string> CppKinds = new(StringComparer.Ordinal) { "function", "method", "ctor", "dtor", "template", "instance", "class" };
 
     /// <summary>
-    /// The C++ (v2) facts, D9 of docs/cpp-profile-design.md: every kind is known; an instance's instanceOf is a
-    /// template; implicit and member-pointer targets and staticInitRoots are symbols; each virtual record's static is a
-    /// method, every cha target is a method of the same simpleName in a class at or below static's class (per
-    /// _meta.classes), and rta is within cha. Returns the failure count.
+    /// The shape of a v2 manifest: every field the C++ checks read has the type the schema gives it, symbol and class
+    /// names are unique, and the v1-only C fields are absent. A wrong shape is bad input (exit 2), like invalid JSON:
+    /// a string where an array belongs must not be skipped as if the field were empty.
+    /// </summary>
+    internal static string? CppShapeError(JsonElement meta, JsonElement symbols)
+    {
+        static bool Strs(JsonElement e) => e.ValueKind == JsonValueKind.Array && e.EnumerateArray().All(x => x.ValueKind == JsonValueKind.String);
+        static bool Bool(JsonElement e) => e.ValueKind is JsonValueKind.True or JsonValueKind.False;
+        static string? Dup(JsonElement obj, string what)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in obj.EnumerateObject()) if (!seen.Add(p.Name)) return $"{what} '{p.Name}' appears twice";
+            return null;
+        }
+
+        if (!meta.TryGetProperty("classes", out var cls) || cls.ValueKind != JsonValueKind.Object) return "_meta.classes must be an object";
+        if (Dup(cls, "_meta.classes key") is { } d1) return d1;
+        foreach (var c in cls.EnumerateObject()) if (!Strs(c.Value)) return $"_meta.classes['{c.Name}'] must be an array of strings";
+        foreach (var k in new[] { "roots", "staticInitRoots" })
+            if (meta.TryGetProperty(k, out var a) && !Strs(a)) return $"_meta.{k} must be an array of strings";
+        foreach (var k in new[] { "lang", "cppTruthSha" })
+            if (meta.TryGetProperty(k, out var a) && a.ValueKind != JsonValueKind.String) return $"_meta.{k} must be a string";
+        if (Dup(symbols, "symbol") is { } d2) return d2;
+
+        foreach (var s in symbols.EnumerateObject())
+        {
+            var e = s.Value;
+            string at = $"symbol '{s.Name}'";
+            if (e.ValueKind != JsonValueKind.Object) return $"{at} must be an object";
+            foreach (var k in new[] { "unreachableRefs", "indirectEdges", "expectedMiss", "bytes" })
+                if (e.TryGetProperty(k, out _)) return $"{at}: '{k}' is a v1 (C) field";
+            foreach (var k in new[] { "def", "kind", "simpleName", "instanceOf" })
+                if (e.TryGetProperty(k, out var v) && v.ValueKind != JsonValueKind.String) return $"{at}: '{k}' must be a string";
+            if (e.TryGetProperty("pure", out var pu) && !Bool(pu)) return $"{at}: 'pure' must be a boolean";
+            foreach (var k in new[] { "refs", "edges", "implicitEdges" })
+                if (e.TryGetProperty(k, out var v) && !Strs(v)) return $"{at}: '{k}' must be an array of strings";
+            if (e.TryGetProperty("virtualEdges", out var ve))
+            {
+                if (ve.ValueKind != JsonValueKind.Array) return $"{at}: 'virtualEdges' must be an array";
+                foreach (var v in ve.EnumerateArray())
+                    if (v.ValueKind != JsonValueKind.Object || !v.TryGetProperty("static", out var st) || st.ValueKind != JsonValueKind.String
+                        || !v.TryGetProperty("cha", out var c) || !Strs(c) || !v.TryGetProperty("rta", out var r) || !Strs(r))
+                        return $"{at}: each virtualEdges record needs a string 'static' and string arrays 'cha' and 'rta'";
+            }
+            if (e.TryGetProperty("memberPtrEdges", out var me))
+            {
+                if (me.ValueKind != JsonValueKind.Array) return $"{at}: 'memberPtrEdges' must be an array";
+                foreach (var m in me.EnumerateArray())
+                    if (m.ValueKind != JsonValueKind.Object || !m.TryGetProperty("target", out var t) || t.ValueKind != JsonValueKind.String
+                        || !m.TryGetProperty("via", out var v) || v.ValueKind != JsonValueKind.String
+                        || !m.TryGetProperty("dispatched", out var dp) || !Bool(dp))
+                        return $"{at}: each memberPtrEdges record needs string 'target' and 'via' and a boolean 'dispatched'";
+            }
+        }
+        return null;
+    }
+
+    // A site as the generator writes it: a forward-slash relative path (no '.' or '..' segment, no drive, no
+    // backslash) and a positive line number with nothing else around it.
+    private static readonly Regex CanonicalSite = new(@"^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*:[1-9][0-9]*$", RegexOptions.Compiled);
+    private static readonly Regex ClassLine = new(@"^class (\w+)( final)?(?: : (public [\w:]+(?:, public [\w:]+)*))? \{$", RegexOptions.Compiled);
+    private static readonly Regex TemplateArgs = new("<[^<>]*>", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The C++ (v2) facts, D9 of docs/cpp-profile-design.md, checked against the manifest and the source (the shape is
+    /// already known good). The hierarchy: _meta.classes is exactly the class symbols, acyclic, and each class's bases
+    /// are the ones its `class` line names. Each symbol: simpleName is the key's last name, kind fits the key (and a
+    /// template's def is under cpp/tmpl/), `pure` is set exactly on the `= 0;` declarations, defs are unique (an
+    /// instance shares its template's), sites are canonical, refs hold no duplicate and not the def. Each edge kind
+    /// points at the right kind (implicit: ctor/dtor, member pointer: method, staticInitRoots: ctor/dtor, instanceOf:
+    /// template). Each virtual record: static is a method, cha is exactly the non-pure overrides below some receiver
+    /// class at or below static's class that resolves the call to static, and rta is within cha (rta's own exactness
+    /// needs the program's constructions, so the digest and the tests carry it). Returns the failure count.
     /// </summary>
     private static int CheckCpp(JsonElement meta, JsonElement symbols, HashSet<string> names, ref int ok,
         Generation.Containment paths, Dictionary<string, string[]> cache)
     {
         int fail = 0;
-        bool DeclaresPure(string site) => TryReadLine(paths, cache, site, out string t, out _, out _) && t.TrimEnd().EndsWith("= 0;", StringComparison.Ordinal);
         void Fail(string m) { Console.Error.WriteLine("FAIL " + m); fail++; }
+        string? LineAt(string site) => TryReadLine(paths, cache, site, out string t, out _, out _) ? t.Trim() : null;
+        static string Strip(string key) => TemplateArgs.Replace(key, "");
+        static string Owner(string key) { key = Strip(key); int i = key.LastIndexOf("::", StringComparison.Ordinal); return i < 0 ? "" : key[..i]; }
+        static string Last(string key) { key = Strip(key); int i = key.LastIndexOf("::", StringComparison.Ordinal); return i < 0 ? key : key[(i + 2)..]; }
+        string? Prop(JsonElement e, string key) => e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        static List<string> Arr(JsonElement e, string key) =>
+            e.TryGetProperty(key, out var a) ? a.EnumerateArray().Select(x => x.GetString()!).ToList() : new();
 
-        // class -> direct bases; below(a, b) = a is b or derives from it.
+        if (Prop(meta, "lang") != "cpp") Fail($"_meta.lang '{Prop(meta, "lang")}': a v2 manifest is lang \"cpp\"");
+
+        // --- the hierarchy ---
         var bases = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        if (meta.TryGetProperty("classes", out var clsEl) && clsEl.ValueKind == JsonValueKind.Object)
-            foreach (var c in clsEl.EnumerateObject())
-                bases[c.Name] = c.Value.ValueKind == JsonValueKind.Array ? c.Value.EnumerateArray().Select(ManifestReader.Str).ToList() : new();
-        bool Below(string a, string b, int depth = 0) =>
-            a == b || (depth < 64 && bases.TryGetValue(a, out var bs) && bs.Any(x => Below(x, b, depth + 1)));
-        static string Owner(string sym) => sym[..Math.Max(0, sym.LastIndexOf("::", StringComparison.Ordinal))];
+        foreach (var c in meta.GetProperty("classes").EnumerateObject()) bases[c.Name] = c.Value.EnumerateArray().Select(x => x.GetString()!).ToList();
+        bool hierarchyOk = true;
+        foreach (var (c, bs) in bases)
+            foreach (var b in bs.Where(b => !bases.ContainsKey(b))) { Fail($"_meta.classes: {c}'s base {b} is not a class"); hierarchyOk = false; }
+        // Topological order (Kahn), bases first; whatever is left over sits on a cycle.
+        var children = bases.Keys.ToDictionary(c => c, _ => new List<string>(), StringComparer.Ordinal);
+        var pending = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (c, bs) in bases)
+        {
+            pending[c] = bs.Count(bases.ContainsKey);
+            foreach (var b in bs.Where(bases.ContainsKey)) children[b].Add(c);
+        }
+        var topo = new List<string>();
+        var ready = new Queue<string>(bases.Keys.Where(c => pending[c] == 0));
+        while (ready.Count > 0)
+        {
+            var c = ready.Dequeue();
+            topo.Add(c);
+            foreach (var d in children[c]) if (--pending[d] == 0) ready.Enqueue(d);
+        }
+        if (topo.Count < bases.Count)
+        {
+            Fail($"_meta.classes: an inheritance cycle through {bases.Keys.First(c => pending[c] > 0)}");
+            hierarchyOk = false;
+        }
+        else ok++;
 
-        string? Prop(JsonElement e, string key) =>
-            e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         var kind = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var simple = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var s in symbols.EnumerateObject()) { kind[s.Name] = Prop(s.Value, "kind"); simple[s.Name] = Prop(s.Value, "simpleName"); }
+        foreach (var s in symbols.EnumerateObject()) kind[s.Name] = Prop(s.Value, "kind");
+        foreach (var c in bases.Keys.Where(c => !names.Contains(c) || kind[c] != "class")) Fail($"_meta.classes: {c} is not a class symbol");
 
-        if (meta.TryGetProperty("staticInitRoots", out var siEl) && siEl.ValueKind == JsonValueKind.Array)
-            foreach (var r in siEl.EnumerateArray())
-            {
-                string rn = ManifestReader.Str(r);
-                if (names.Contains(rn)) ok++; else Fail($"staticInitRoot '{rn}': not a declared symbol");
-            }
-
+        // --- per symbol ---
+        var defOwner = new Dictionary<string, string>(StringComparer.Ordinal);
+        var methodsOf = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        var pure = new HashSet<string>(StringComparer.Ordinal);
         foreach (var s in symbols.EnumerateObject())
         {
             string name = s.Name;
@@ -266,60 +363,159 @@ public static class ManifestVerifier
             string? k = kind[name];
             if (k is null || !CppKinds.Contains(k)) { Fail($"{name}: kind '{k}' is not one of {string.Join("|", CppKinds)}"); continue; }
             ok++;
+            string? def = Prop(e, "def");
+            string? sn = Prop(e, "simpleName");
+            if (sn is not null && sn != Last(name)) Fail($"{name}: simpleName '{sn}' is not the key's last name '{Last(name)}'");
+
+            // kind against the key's shape: a template argument makes an instance; a key under a class is a member
+            // (ctor / dtor by name); otherwise a function, or a template when defined in a template file.
+            string own = Owner(name), last = Last(name);
+            string ownSimple = Last(own);
+            string want = name.Contains('<') ? "instance"
+                : bases.ContainsKey(name) ? "class"
+                : bases.ContainsKey(own) ? (last == ownSimple ? "ctor" : last == "~" + ownSimple ? "dtor" : "method")
+                : def is not null && def.StartsWith("cpp/tmpl/", StringComparison.Ordinal) ? "template" : "function";
+            if (k != want) Fail($"{name}: kind '{k}' does not fit its key and def (expected '{want}')");
+            if (k == "method" && bases.ContainsKey(own))
+            {
+                if (!methodsOf.TryGetValue(own, out var ms)) methodsOf[own] = ms = new(StringComparer.Ordinal);
+                ms[last] = name;
+            }
+
             string? inst = Prop(e, "instanceOf");
             if (k == "instance")
             {
                 if (inst is null || !names.Contains(inst) || kind[inst] != "template") Fail($"instance {name}: instanceOf '{inst}' is not a declared template");
+                else if (Prop(symbols.GetProperty(inst), "def") != def) Fail($"instance {name}: def {def} is not its template's def");
                 else ok++;
             }
             else if (inst is not null) Fail($"{name}: only an instance has instanceOf");
+
+            // Sites: canonical, unique defs (an instance shares its template's), no duplicate ref, the def not a ref.
+            var refs = Arr(e, "refs");
+            foreach (var site in refs.Prepend(def).OfType<string>().Where(x => !CanonicalSite.IsMatch(x)))
+                Fail($"{name}: site '{site}' is not canonical (a/b/file.ext:line)");
+            if (def is not null && k != "instance")
+            {
+                if (defOwner.TryGetValue(def, out var other)) Fail($"{name}: def {def} is also the def of {other}");
+                else defOwner[def] = name;
+            }
+            if (def is not null && refs.Contains(def)) Fail($"{name}: its def {def} is listed as a ref");
+            if (refs.Count != refs.Distinct().Count()) Fail($"{name}: a ref is listed twice");
+
+            // pure: exactly the methods declared `= 0;`.
+            bool isPure = e.TryGetProperty("pure", out var pu) && pu.ValueKind == JsonValueKind.True;
+            bool declaresPure = def is not null && LineAt(def) is { } dl && dl.EndsWith("= 0;", StringComparison.Ordinal);
+            if (isPure && k != "method") Fail($"{name}: only a method can be pure");
+            else if (isPure != declaresPure && k == "method")
+                Fail(isPure ? $"{name}: pure, but its def line {def} is not a '= 0;' declaration" : $"{name}: its def {def} declares it '= 0;' but it is not marked pure");
+            else ok++;
+            if (isPure) pure.Add(name);
+
             if (k == "class")
             {
-                // A class symbol is a def + type-use refs only: no calls, and it is a class _meta.classes knows.
-                if (!bases.ContainsKey(name)) Fail($"class {name}: not in _meta.classes");
-                else if (new[] { "edges", "implicitEdges", "virtualEdges", "memberPtrEdges" }.Any(p =>
-                             e.TryGetProperty(p, out var a) && a.ValueKind == JsonValueKind.Array && a.GetArrayLength() > 0))
+                // A class symbol is a def + type-use refs only, and its `class` line names exactly its _meta.classes bases.
+                if (new[] { "edges", "implicitEdges", "virtualEdges", "memberPtrEdges" }.Any(p => e.TryGetProperty(p, out var a) && a.GetArrayLength() > 0))
                     Fail($"class {name}: a class symbol has no edges");
-                else ok++;
-            }
-            if (e.TryGetProperty("pure", out var pu) && pu.ValueKind == JsonValueKind.True)
-            {
-                if (k != "method") Fail($"{name}: only a method can be pure");
-                else if (Prop(e, "def") is { } d && !DeclaresPure(d)) Fail($"{name}: pure, but its def line {d} is not a '= 0;' declaration");
-                else ok++;
+                if (def is not null && LineAt(def) is { } cl && bases.TryGetValue(name, out var bs))
+                {
+                    var m = ClassLine.Match(cl);
+                    var named = m.Success && m.Groups[3].Success ? m.Groups[3].Value.Split(", ").Select(x => x["public ".Length..]).ToList() : new List<string>();
+                    if (!m.Success || m.Groups[1].Value != last) Fail($"class {name}: def {def} is not its `class {last}` line");
+                    else if (!named.SequenceEqual(bs)) Fail($"class {name}: _meta.classes bases [{string.Join(", ", bs)}] are not the ones its class line names [{string.Join(", ", named)}]");
+                    else ok++;
+                }
             }
 
-            if (e.TryGetProperty("implicitEdges", out var ie) && ie.ValueKind == JsonValueKind.Array)
-                foreach (var t in ie.EnumerateArray())
-                {
-                    string tn = ManifestReader.Str(t);
-                    if (names.Contains(tn)) ok++; else Fail($"implicit {name} -> {tn}: target symbol missing");
-                }
-            if (e.TryGetProperty("memberPtrEdges", out var me) && me.ValueKind == JsonValueKind.Array)
+            foreach (var t in Arr(e, "implicitEdges"))
+            {
+                if (!names.Contains(t)) Fail($"implicit {name} -> {t}: target symbol missing");
+                else if (kind[t] is not ("ctor" or "dtor")) Fail($"implicit {name} -> {t}: an implicit call targets a ctor or dtor, not a {kind[t]}");
+                else ok++;
+            }
+            if (e.TryGetProperty("memberPtrEdges", out var me))
                 foreach (var m in me.EnumerateArray())
                 {
-                    string tn = Prop(m, "target") ?? "";
-                    string via = Prop(m, "via") ?? "";
+                    string tn = Prop(m, "target")!, via = Prop(m, "via")!;
                     if (!names.Contains(tn)) Fail($"memberPtr {name} -> {tn}: target symbol missing");
+                    else if (kind[tn] != "method") Fail($"memberPtr {name} -> {tn}: a member pointer targets a method, not a {kind[tn]}");
                     else if (via is not ("table" or "arg")) Fail($"memberPtr {name} -> {tn}: via '{via}' is not table|arg");
                     else ok++;
                 }
-            if (e.TryGetProperty("virtualEdges", out var ve) && ve.ValueKind == JsonValueKind.Array)
-                foreach (var v in ve.EnumerateArray())
+        }
+
+        foreach (var r in Arr(meta, "staticInitRoots"))
+        {
+            if (!names.Contains(r)) Fail($"staticInitRoot '{r}': not a declared symbol");
+            else if (kind[r] is not ("ctor" or "dtor")) Fail($"staticInitRoot '{r}': a static object's root is its ctor or dtor, not a {kind[r]}");
+            else ok++;
+        }
+
+        // --- virtual records ---
+        // Resolve(c, n): the method a call of n through class c reaches: c's own, else the first base (in order, depth
+        // first) that has one; a class's bases never share a name, so the order is unambiguous. Walked with a stack,
+        // so a tall (hand-made) chain cannot overflow. Overrides(r, n): what cha is for a receiver r.
+        var resolved = new Dictionary<(string, string), string?>();
+        string? Resolve(string c, string n)
+        {
+            if (resolved.TryGetValue((c, n), out var hit)) return hit;
+            string? got = null;
+            var stack = new Stack<string>();
+            stack.Push(c);
+            while (stack.Count > 0 && got is null)
+            {
+                var x = stack.Pop();
+                if (methodsOf.TryGetValue(x, out var ms) && ms.TryGetValue(n, out var own)) got = own;
+                else for (int i = bases[x].Count - 1; i >= 0; i--) stack.Push(bases[x][i]);
+            }
+            return resolved[(c, n)] = got;
+        }
+        IEnumerable<string> Subtree(string c)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal) { c };
+            var stack = new Stack<string>();
+            stack.Push(c);
+            while (stack.Count > 0)
+            {
+                var x = stack.Pop();
+                yield return x;
+                foreach (var d in children[x]) if (seen.Add(d)) stack.Push(d);
+            }
+        }
+        var overrides = new Dictionary<(string, string), HashSet<string>>();
+        HashSet<string> Overrides(string r, string n)
+        {
+            if (!overrides.TryGetValue((r, n), out var set))
+                overrides[(r, n)] = set = Subtree(r).Select(c => Resolve(c, n)).OfType<string>().Where(x => !pure.Contains(x)).ToHashSet(StringComparer.Ordinal);
+            return set;
+        }
+        foreach (var s in symbols.EnumerateObject())
+        {
+            if (!s.Value.TryGetProperty("virtualEdges", out var ve)) continue;
+            foreach (var v in ve.EnumerateArray())
+            {
+                string st = Prop(v, "static")!;
+                string at = $"virtual {s.Name} [{st}]";
+                if (!names.Contains(st) || kind[st] != "method") { Fail($"{at}: static is not a declared method"); continue; }
+                var cha = Arr(v, "cha");
+                var rta = Arr(v, "rta");
+                bool good = true;
+                foreach (var t in cha)
                 {
-                    string st = Prop(v, "static") ?? "";
-                    if (!names.Contains(st) || kind[st] != "method") { Fail($"virtual {name}: static '{st}' is not a declared method"); continue; }
-                    var cha = v.TryGetProperty("cha", out var c) && c.ValueKind == JsonValueKind.Array ? c.EnumerateArray().Select(ManifestReader.Str).ToList() : new();
-                    var rta = v.TryGetProperty("rta", out var r) && r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(ManifestReader.Str).ToList() : new();
-                    foreach (var t in cha)
-                    {
-                        if (!names.Contains(t) || kind[t] != "method") Fail($"virtual {name} [{st}]: cha target '{t}' is not a declared method");
-                        else if (simple[t] != simple[st] || !Below(Owner(t), Owner(st)))
-                            Fail($"virtual {name} [{st}]: cha target '{t}' does not override it from a class at or below {Owner(st)}");
-                        else ok++;
-                    }
-                    foreach (var t in rta.Where(t => !cha.Contains(t))) Fail($"virtual {name} [{st}]: rta target '{t}' is not in cha");
+                    if (!names.Contains(t) || kind[t] != "method") { Fail($"{at}: cha target '{t}' is not a declared method"); good = false; }
+                    else if (pure.Contains(t)) { Fail($"{at}: cha target '{t}' is pure (no body to dispatch to)"); good = false; }
                 }
+                if (cha.Count != cha.Distinct().Count()) { Fail($"{at}: a cha target is listed twice"); good = false; }
+                foreach (var t in rta.Where(t => !cha.Contains(t))) { Fail($"{at}: rta target '{t}' is not in cha"); good = false; }
+                if (rta.Count != rta.Distinct().Count()) { Fail($"{at}: an rta target is listed twice"); good = false; }
+                string o = Owner(st), n = Last(st);
+                if (!good || !hierarchyOk || !bases.ContainsKey(o)) continue;
+                // The receiver is not recorded: any class at or below static's class that resolves the call to static
+                // could be it. cha must be exactly the override set of one of them (static's own class first).
+                var want = cha.ToHashSet(StringComparer.Ordinal);
+                if (Overrides(o, n).SetEquals(want) || Subtree(o).Any(r => r != o && Resolve(r, n) == st && Overrides(r, n).SetEquals(want))) ok++;
+                else Fail($"{at}: cha is not the set of non-pure overrides below any receiver at or below {o} (static's class gives [{string.Join(", ", Overrides(o, n).Order(StringComparer.Ordinal))}])");
+            }
         }
         return fail;
     }
@@ -363,10 +559,10 @@ public static class ManifestVerifier
     /// <summary>Assert the line named by "<rel>:<line>" exists and contains "<symbol>(" (v1), or, with
     /// <paramref name="wholeWord"/> (v2), <paramref name="symbol"/> as a whole word.</summary>
     private static bool SiteHasToken(Generation.Containment paths, Dictionary<string, string[]> cache, string site,
-        string symbol, out string why, bool wholeWord = false)
+        string symbol, out string why, bool wholeWord = false, bool notAfterTilde = false)
     {
         if (!TryReadLine(paths, cache, site, out string text, out int line, out why)) return false;
-        if (wholeWord ? !HasWord(text, symbol) : !text.Contains(symbol + "("))
+        if (wholeWord ? !HasWord(text, symbol, notAfterTilde) : !text.Contains(symbol + "("))
         { why = wholeWord ? $"line {line} lacks the word '{symbol}'" : $"line {line} lacks '{symbol}('"; return false; }
         return true;
     }
@@ -403,14 +599,15 @@ public static class ManifestVerifier
     }
 
     /// <summary>True when <paramref name="word"/> occurs in <paramref name="text"/> with no identifier character on
-    /// either side (a leading '~' already bounds a dtor name on the left).</summary>
-    internal static bool HasWord(string text, string word)
+    /// either side (a leading '~' already bounds a dtor name on the left). With <paramref name="notAfterTilde"/>, an
+    /// occurrence right after a '~' (the dtor of a class named <paramref name="word"/>) does not count.</summary>
+    internal static bool HasWord(string text, string word, bool notAfterTilde = false)
     {
         static bool Ident(char ch) => char.IsAsciiLetterOrDigit(ch) || ch == '_';
         for (int i = text.IndexOf(word, StringComparison.Ordinal); i >= 0; i = text.IndexOf(word, i + 1, StringComparison.Ordinal))
         {
             int end = i + word.Length;
-            bool left = i == 0 || !Ident(word[0]) || !Ident(text[i - 1]);
+            bool left = i == 0 || !Ident(word[0]) || (!Ident(text[i - 1]) && !(notAfterTilde && text[i - 1] == '~'));
             if (left && (end == text.Length || !Ident(text[end]))) return true;
         }
         return false;

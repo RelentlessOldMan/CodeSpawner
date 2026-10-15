@@ -66,8 +66,31 @@ public class CppProfileTests
     [InlineData("--lang", "cpp", "--oracle-chain", "1")]
     [InlineData("--lang", "cpp", "--oracle-depth", "3")]                // shapes the fanout DAG only
     [InlineData("--lang", "cpp", "--oracle-reachable-frac", "0.001")]
+    [InlineData("--lang", "cpp", "--cpp-instantiated-frac", "1.5")]
+    [InlineData("--lang", "cpp", "--cpp-static-init", "-1")]
+    [InlineData("--lang", "cpp", "--cpp-depth", "-1")]
+    [InlineData("--lang", "cpp", "--cpp-classes", "100001")]
+    [InlineData("--lang", "cpp", "--cpp-templates", "10001")]
+    [InlineData("--lang", "cpp", "--oracle-fanout", "2", "--oracle-shared-leaves", "1000001")]
+    [InlineData("--lang", "cpp", "--oracle-chain", "1000000", "--oracle-reachable-frac", "0.01")]   // ~100M free functions
+    [InlineData("--lang", "cpp", "--oracle-chain", "1900000")]                                     // over the range, and the cap
     public void BadKnobs_AreRefused(params string[] args)
         => Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "x" }.Concat(args).ToArray()));
+
+    // The edges of each range are accepted.
+    [Theory]
+    [InlineData("--cpp-depth", "0")]
+    [InlineData("--cpp-depth", "16")]
+    [InlineData("--cpp-instances", "5")]
+    [InlineData("--cpp-classes", "1")]
+    [InlineData("--cpp-classes", "100000")]
+    [InlineData("--cpp-instantiated-frac", "0")]
+    [InlineData("--cpp-static-init", "0")]
+    [InlineData("--oracle-fanout", "3", "--oracle-shared-leaves", "10")]
+    [InlineData("--oracle-chain", "1000000")]
+    [InlineData("--oracle-chain", "1000000", "--oracle-reachable-frac", "0.5")]
+    public void EdgeKnobs_AreAccepted(params string[] args)
+        => ArgParser.ParseGen(new[] { "--out", "x", "--lang", "cpp" }.Concat(args).ToArray());
 
     // ---------- determinism ----------
 
@@ -179,7 +202,47 @@ public class CppProfileTests
         Assert.Equal("cpp", (string)meta["lang"]!);
         var parsed = ManifestReader.Load(mp, maxVersion: 2);
         Assert.Equal((string)meta["cppTruthSha"]!, CppDigest.Compute(parsed.Symbols, parsed.StaticInitRoots));
-        Assert.Throws<InvalidOperationException>(() => ManifestReader.Load(mp));      // a v1-only reader refuses it
+        Assert.Throws<ManifestVersionException>(() => ManifestReader.Load(mp));      // a v1-only reader refuses it
+    }
+
+    // The default program's truth, pinned (bench 4h holds the same value). A generator change that moves any
+    // C++ fact moves this: update it on purpose, with a CHANGELOG note, never to make the test pass.
+    [Fact]
+    public void TruthSha_IsPinned()
+    {
+        var (_, t) = Model(Opts("x"));
+        var m = t.ToManifest(Opts("x"), "r");
+        Assert.Equal("d3a38e31f260177f36337a7b475eba0fb266008cf56e22e620ced14a36f40ad5", CppDigest.Compute(m.Symbols, m.StaticInitRoots));
+    }
+
+    // --cpp-classes 1: the lone class is concrete (it is constructed, statically too) and takes no mixin.
+    [Theory]
+    [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)] [InlineData(5)]
+    public void OneClass_IsConcrete_WithStaticObjects_AndNoMixin(int seed)
+    {
+        var o = Opts("x", seed);
+        o.CppClasses = 1;
+        o.CppStaticInit = 5;
+        var (p, t) = Model(o);
+        var c = Assert.Single(p.Classes);
+        Assert.False(c.Abstract);
+        Assert.Null(c.Mixin);
+        Assert.Empty(p.Mixins);
+        Assert.Equal(5, p.StaticObjs.Count);
+        Assert.Contains(c, t.Live);
+    }
+
+    // With two or more classes, class 0 is abstract and class 1 (when multiple inheritance is on) takes a mixin.
+    [Theory]
+    [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)]
+    public void TwoClasses_FirstIsAbstract_SecondTakesTheMixin(int seed)
+    {
+        var o = Opts("x", seed);
+        o.CppClasses = 2;
+        o.CppMultiInherit = 0.01;
+        var (p, _) = Model(o);
+        Assert.True(p.Classes[0].Abstract);
+        Assert.NotNull(p.Classes[1].Mixin);
     }
 
     [Fact]
@@ -262,6 +325,21 @@ public class CppProfileTests
     [InlineData("classWithEdge")]     // a class symbol is a def + refs only
     [InlineData("classNotInMeta")]
     [InlineData("classRefWrongLine")]
+    [InlineData("chaPure")]           // a pure method has no body to dispatch to
+    [InlineData("chaIncomplete")]     // an override quietly dropped from cha (re-sealed: only the exact-cha check sees it)
+    [InlineData("chaSameName")]       // an unrelated class's method of the same simple name
+    [InlineData("classesFakeBase")]   // _meta.classes names a base the class line does not
+    [InlineData("classesCycle")]      // must FAIL, not hang
+    [InlineData("simpleNameRetarget")]
+    [InlineData("defInRefs")]
+    [InlineData("ctorDefAtClassLine")]
+    [InlineData("ctorRefAtDtor")]     // `~Cls_N` does not name the ctor
+    [InlineData("instanceOfOnFunction")]
+    [InlineData("pureMissing")]
+    [InlineData("staticInitMethod")]
+    [InlineData("implicitMethod")]
+    [InlineData("dupRef")]
+    [InlineData("siteNotCanonical")]
     public void Verify_FailsTampering(string how)
     {
         using var tmp = new TempDir();
@@ -312,6 +390,88 @@ public class CppProfileTests
                 s["refs"]![0] = r[..(r.LastIndexOf(':') + 1)] + "1";
                 break;
             }
+            case "chaPure": Ve()["cha"]!.AsArray().Add(FirstWith(syms, s => (bool?)s["pure"] == true)); break;
+            case "chaIncomplete":
+            {
+                var v = Ve();
+                var rta = v["rta"]!.AsArray().Select(x => (string)x!).ToHashSet();
+                var cha = v["cha"]!.AsArray();
+                cha.RemoveAt(cha.Select(x => (string)x!).ToList().FindIndex(x => !rta.Contains(x)));
+                break;
+            }
+            case "chaSameName":
+            {
+                // Some record, plus a non-pure method of the same simple name that is not in its cha.
+                var (v, other) = syms.Select(kv => kv.Value!["virtualEdges"]).OfType<JsonArray>().SelectMany(a => a).Select(r => r!.AsObject())
+                    .Select(r =>
+                    {
+                        string sn = (string)syms[(string)r["static"]!]!["simpleName"]!;
+                        var cha = r["cha"]!.AsArray().Select(x => (string)x!).ToHashSet();
+                        string? o = syms.Where(kv => (string?)kv.Value!["kind"] == "method" && (string?)kv.Value["simpleName"] == sn
+                                                     && (bool?)kv.Value["pure"] != true && !cha.Contains(kv.Key)).Select(kv => kv.Key).FirstOrDefault();
+                        return (r, o);
+                    })
+                    .First(x => x.o is not null);
+                v["cha"]!.AsArray().Add(other);
+                break;
+            }
+            case "classesFakeBase":
+            {
+                var cls = meta["classes"]!.AsObject();
+                var leaf = cls.First(kv => kv.Value!.AsArray().Count == 0 && kv.Key.Contains("Cls_"));
+                leaf.Value!.AsArray().Add(cls.First(kv => kv.Key != leaf.Key && kv.Key.Contains("Mix_")).Key);
+                break;
+            }
+            case "classesCycle":
+            {
+                var cls = meta["classes"]!.AsObject();
+                var child = cls.First(kv => kv.Value!.AsArray().Count > 0);
+                cls[(string)child.Value![0]!]!.AsArray().Add(child.Key);
+                break;
+            }
+            case "simpleNameRetarget":
+            {
+                // A function renamed to another function's simple name: the def line still names the old one.
+                var fns = syms.Where(kv => (string?)kv.Value!["kind"] == "function").Select(kv => kv.Value!).Take(2).ToList();
+                fns[0]["simpleName"] = (string)fns[1]["simpleName"]!;
+                break;
+            }
+            case "defInRefs":
+            {
+                var s = syms[FirstWith(syms, s => (string?)s["kind"] == "function")]!;
+                s["refs"]!.AsArray().Add((string)s["def"]!);
+                break;
+            }
+            case "ctorDefAtClassLine":
+            {
+                var cls = FirstWith(syms, s => (string?)s["kind"] == "class" && !((string)s["simpleName"]!).StartsWith("Mix_"));
+                string sn = (string)syms[cls]!["simpleName"]!;
+                syms[$"{cls}::{sn}"]!["def"] = (string)syms[cls]!["def"]!;
+                break;
+            }
+            case "ctorRefAtDtor":
+            {
+                var cls = FirstWith(syms, s => (string?)s["kind"] == "class" && !((string)s["simpleName"]!).StartsWith("Mix_"));
+                string sn = (string)syms[cls]!["simpleName"]!;
+                syms[$"{cls}::{sn}"]!["refs"]!.AsArray().Add((string)syms[$"{cls}::~{sn}"]!["def"]!);
+                break;
+            }
+            case "instanceOfOnFunction": syms[FirstWith(syms, s => (string?)s["kind"] == "function")]!["instanceOf"] = FirstWith(syms, s => (string?)s["kind"] == "template"); break;
+            case "pureMissing": syms[FirstWith(syms, s => (bool?)s["pure"] == true)]!.AsObject().Remove("pure"); break;
+            case "staticInitMethod": meta["staticInitRoots"]![0] = FirstWith(syms, s => (string?)s["kind"] == "method"); break;
+            case "implicitMethod": syms[FirstWith(syms, s => s["implicitEdges"] is JsonArray)]!["implicitEdges"]!.AsArray().Add(FirstWith(syms, s => (string?)s["kind"] == "method")); break;
+            case "dupRef":
+            {
+                var s = syms[FirstWith(syms, s => (string?)s["kind"] == "function" && s["refs"]!.AsArray().Count > 0)]!;
+                s["refs"]!.AsArray().Add((string)s["refs"]![0]!);
+                break;
+            }
+            case "siteNotCanonical":
+            {
+                var s = syms[FirstWith(syms, s => (string?)s["kind"] == "function" && s["refs"]!.AsArray().Count > 0)]!;
+                s["refs"]![0] = "./" + (string)s["refs"]![0]!;
+                break;
+            }
         }
         var jo = new JsonSerializerOptions { WriteIndented = true, TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver() };
         File.WriteAllText(mp, root.ToJsonString(jo));
@@ -324,6 +484,64 @@ public class CppProfileTests
         }
         Assert.NotEqual(0, Verify(c, mp));
     }
+
+    // A v2 manifest of the wrong shape is bad input (exit 2), never read as if the field were empty.
+    [Theory]
+    [InlineData("chaString")]
+    [InlineData("pureString")]
+    [InlineData("refsString")]
+    [InlineData("classesArray")]
+    [InlineData("classBasesString")]
+    [InlineData("v1Field")]
+    [InlineData("mpNoDispatched")]
+    [InlineData("staticInitString")]
+    [InlineData("dupSymbolKey")]
+    [InlineData("badVersion")]
+    public void Verify_MalformedV2_Exits2(string how)
+    {
+        using var tmp = new TempDir();
+        var (c, mp) = Gen(tmp);
+        var root = JsonNode.Parse(File.ReadAllText(mp))!.AsObject();
+        var meta = root["_meta"]!.AsObject();
+        var syms = root["symbols"]!.AsObject();
+        JsonObject First(Func<JsonObject, bool> pred) => syms.Select(kv => kv.Value!.AsObject()).First(pred);
+        switch (how)
+        {
+            case "chaString": First(s => s["virtualEdges"] is JsonArray)["virtualEdges"]![0]!["cha"] = "x"; break;
+            case "pureString": First(s => s["pure"] is not null)["pure"] = "true"; break;
+            case "refsString": First(s => (string?)s["kind"] == "function")["refs"] = "a.cpp:1"; break;
+            case "classesArray": meta["classes"] = new JsonArray(); break;
+            case "classBasesString": meta["classes"]![meta["classes"]!.AsObject().First().Key] = "Base"; break;
+            case "v1Field": First(s => (string?)s["kind"] == "function")["bytes"] = 1; break;
+            case "mpNoDispatched": First(s => s["memberPtrEdges"] is JsonArray)["memberPtrEdges"]![0]!.AsObject().Remove("dispatched"); break;
+            case "staticInitString": meta["staticInitRoots"] = "x"; break;
+            case "badVersion": meta["manifestVersion"] = 3; break;
+        }
+        string text = root.ToJsonString();
+        if (how == "dupSymbolKey")
+        {
+            // A second copy of the first symbol, same key (JsonNode cannot hold one, so splice the text).
+            var first = syms.First();
+            string entry = $"\"{first.Key}\":{first.Value!.ToJsonString()}";
+            int at = text.IndexOf(entry, StringComparison.Ordinal);
+            text = text.Insert(at, entry + ",");
+        }
+        File.WriteAllText(mp, text);
+        Assert.Equal(2, Verify(c, mp));
+    }
+
+    // Whole-word matching: m_1 is not in m_10, and with notAfterTilde a ctor's name is not found inside `~Cls`.
+    [Theory]
+    [InlineData("gp_x->m_10();", "m_1", false, false)]
+    [InlineData("gp_x->m_1();", "m_1", false, true)]
+    [InlineData("x_m_1 = 0;", "m_1", false, false)]
+    [InlineData("~Cls_3();", "~Cls_3", false, true)]
+    [InlineData("~Cls_3();", "Cls_3", false, true)]           // the class's name, as a type, is there
+    [InlineData("~Cls_3();", "Cls_3", true, false)]           // ... but not the ctor
+    [InlineData("Cls_3::~Cls_3() {", "Cls_3", true, true)]    // the qualifier names it
+    [InlineData("Cls_30 obj;", "Cls_3", true, false)]
+    public void HasWord_IsWholeWord(string text, string word, bool notAfterTilde, bool want)
+        => Assert.Equal(want, ManifestVerifier.HasWord(text, word, notAfterTilde));
 
     // mutate edits C corpora only: a v2 (C++) manifest is refused before anything is touched.
     [Fact]

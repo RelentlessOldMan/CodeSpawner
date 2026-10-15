@@ -119,16 +119,18 @@ refused, and a `--cpp-*` knob without `--lang cpp` is refused.
 |---|---|---|
 | `--lang <c\|cpp>` | `c` | `cpp` (or `c++`) switches to the C++ profile. |
 | `--cpp-classes <n>` | `12` | Classes (1..100000). Mixin interfaces come on top. |
-| `--cpp-depth <n>` | `3` | Max inheritance depth (0..16; 0 = every class a root). |
-| `--cpp-multi-inherit <f>` | `0.25` | Fraction of classes that also inherit a mixin (multiple inheritance); 0 = no mixins. |
+| `--cpp-depth <n>` | `3` | Max inheritance depth (0..16; 0 = every class a root). Classes 0..n form one chain. |
+| `--cpp-multi-inherit <f>` | `0.25` | Fraction of classes that also inherit a mixin (multiple inheritance); 0 = no mixins. Above 0 (with 2+ classes), class 1 always takes one. |
 | `--cpp-virtual-frac <f>` | `0.6` | Chance a derived class overrides each inherited virtual. |
-| `--cpp-instantiated-frac <f>` | `0.5` | Fraction of concrete classes constructed in live code; the rest are `cha`-only targets (`cha − rta`). |
-| `--cpp-templates <n>` | `4` | Templates, alternating function / class template (0..10000). The last is never used. |
-| `--cpp-instances <n>` | `2` | Max type arguments per used template (1..5). |
+| `--cpp-instantiated-frac <f>` | `0.5` | Fraction of concrete classes constructed in live code; the rest are `cha`-only targets (`cha − rta`). At 0 the static objects' classes are still constructed. |
+| `--cpp-templates <n>` | `4` | Templates, alternating function / class template (0..10000). With 2+, the last is never used. |
+| `--cpp-instances <n>` | `2` | Max type arguments per used template (1..5). Template 0 gets exactly n, plus a dead-only `<bool>` when there is dead code. |
 | `--cpp-static-init <n>` | `2` | Static-storage objects; their ctor + dtor are `_meta.staticInitRoots` (0..10000). |
 
-Free-function dead block: by default a quarter of the live graph (at least 2); `--oracle-reachable-frac f`
-sizes it so the live part is about `f` of the free functions, and `1` means none.
+Free-function dead block: by default (`--oracle-reachable-frac 0`) a quarter of the live graph (at least 2);
+`--oracle-reachable-frac f` (0.01..1) sizes it so the live part is about `f` of the free functions, and `1`
+means none. The live graph plus the dead block is capped at 2,000,000 free functions (`--oracle-chain` and
+`--oracle-shared-leaves` are each at most 1,000,000).
 
 ## Presets
 

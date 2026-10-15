@@ -99,6 +99,9 @@ public static class ArgParser
     private static readonly HashSet<string> ProfileKnobs = new(StringComparer.Ordinal) { "out", "seed", "force", "lang", "from-profile", "with-oracle" };
 
     // Knobs gen --lang cpp reads (besides --cpp-*): it writes only the C++ program, so the C population knobs are refused.
+    /// <summary>Most free functions gen --lang cpp writes (the live graph plus its dead block).</summary>
+    internal const long MaxCppFree = 2_000_000;
+
     private static readonly HashSet<string> CppKnobs = new(StringComparer.Ordinal)
     {
         "out", "seed", "force", "lang", "oracle-chain", "oracle-fanout", "oracle-depth", "oracle-shared-leaves", "oracle-reachable-frac",
@@ -125,10 +128,15 @@ public static class ArgParser
             })
                 if (v is < 0 or > 1) throw new ArgException($"--{k} must be in [0, 1], got {v.ToString(CultureInfo.InvariantCulture)}");
             if (o.OracleChain is < 2 or > 1_000_000) throw new ArgException($"--oracle-chain must be in 2..1000000, got {o.OracleChain}");
-            if (o.OracleFanout < 0 || o.OracleDepth < 0 || o.OracleSharedLeaves < 0)
-                throw new ArgException("--oracle-fanout, --oracle-depth and --oracle-shared-leaves must be >= 0");
+            if (o.OracleFanout is < 0 or > 1_000_000 || o.OracleDepth is < 0 or > 1_000_000 || o.OracleSharedLeaves is < 0 or > 1_000_000)
+                throw new ArgException("--oracle-fanout, --oracle-depth and --oracle-shared-leaves must be in 0..1000000");
             if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
                 throw new ArgException("--oracle-reachable-frac must be 0 (default dead block) or in [0.01, 1]");
+            // The free functions: the live graph (chain + shared leaves) plus the dead block --oracle-reachable-frac sizes.
+            long live = o.OracleChain + (o.OracleFanout > 0 ? o.OracleSharedLeaves : 0);
+            long total = o.OracleReachableFrac is 0 ? live + Math.Max(2, live / 4) : (long)Math.Ceiling(live / o.OracleReachableFrac);
+            if (total > MaxCppFree)
+                throw new ArgException($"--oracle-chain, --oracle-shared-leaves and --oracle-reachable-frac would make about {total} free functions; at most {MaxCppFree} (raise --oracle-reachable-frac or shrink the graph)");
             return;
         }
         if (cppKnob is not null) throw new ArgException($"--{cppKnob} requires --lang cpp");

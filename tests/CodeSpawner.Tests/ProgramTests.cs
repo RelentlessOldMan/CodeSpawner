@@ -49,9 +49,44 @@ public class ProgramTests
             .Select(f => f + " " + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(f)))));
         string before = Snapshot();
 
-        Assert.NotEqual(0, Cli(new[] { "mutate", "--corpus", corpus }.Concat(mode).ToArray()));
+        Assert.Equal(2, Cli(new[] { "mutate", "--corpus", corpus }.Concat(mode).ToArray()));    // bad input, not a failure
         Assert.Contains("manifest version 2", _lastErr);
         Assert.Equal(before, Snapshot());
+    }
+
+    // A real gen --lang cpp corpus: mutate says why (C corpora only) and touches nothing.
+    [Fact]
+    public void Mutate_CppCorpus_IsRefused_WithTheReason_CorpusUntouched()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c");
+        Assert.Equal(0, Cli("gen", "--lang", "cpp", "--out", corpus));
+        string Snapshot() => string.Join("\n", Directory.EnumerateFiles(tmp.Path, "*", SearchOption.AllDirectories)
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .Select(f => f + " " + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(f)))));
+        string before = Snapshot();
+        Assert.Equal(2, Cli("mutate", "--corpus", corpus));
+        Assert.Contains("manifest version 2 is a C++ (gen --lang cpp) manifest", _lastErr);
+        Assert.Equal(before, Snapshot());
+    }
+
+    // A directory where the manifest goes is refused before --out is wiped (it would only fail the final rename).
+    [Theory]
+    [InlineData("c")]
+    [InlineData("cpp")]
+    public void Gen_ManifestPathIsADirectory_IsRefusedBeforeTouchingOut(string lang)
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c");
+        Directory.CreateDirectory(corpus + "-manifest.json");
+        Directory.CreateDirectory(corpus);
+        File.WriteAllText(Path.Combine(corpus, ".codespawner"), "CodeSpawner test\n");
+        File.WriteAllText(Path.Combine(corpus, "keep.txt"), "x");
+        var args = new List<string> { "gen", "--lang", lang, "--out", corpus, "--force" };
+        if (lang == "c") args.AddRange(new[] { "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--cfiles", "2" });
+        Assert.Equal(2, Cli(args.ToArray()));
+        Assert.Contains("a directory is in the way", _lastErr);
+        Assert.True(File.Exists(Path.Combine(corpus, "keep.txt")));
     }
 
     [Fact]
@@ -419,7 +454,7 @@ public class ProgramTests
     // never a silent pass.
     [Theory]
     [InlineData("{\"symbols\":{}}", 2)]                                                              // no _meta
-    [InlineData("{\"_meta\":{\"manifestVersion\":1.5},\"symbols\":{}}", 1)]                        // non-integer version
+    [InlineData("{\"_meta\":{\"manifestVersion\":1.5},\"symbols\":{}}", 2)]                        // non-integer version
     [InlineData("{\"_meta\":{\"manifestVersion\":1,\"seed\":99999999999},\"symbols\":{}}", 2)]    // seed overflows int; nothing to check
     [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"refs\":[]}}}", 1)]      // symbol without def
     [InlineData("{\"_meta\":{\"manifestVersion\":1},\"symbols\":{\"f\":{\"def\":null}}}", 1)]     // null def

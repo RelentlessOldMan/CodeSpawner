@@ -102,7 +102,8 @@ design doc → loop CodeCompass + CodeCarver → build.
 - **Include fan-out** promoted to first-class: bounded 2-hop within-tree basename resolution,
   `unresolvedIncludeRate` (headline; the false-zero driver), `duplicateBasenameAmbiguity` (visible inflation).
 - **New content-classes**: `data-blob` entropy split (high vs repetitive), `minified-longline`,
-  `template-metaprogramming` (labeled now; gen degrades to inline-fn-heavy until C++ profile lands).
+  `template-metaprogramming` (labeled now; `gen --from-profile` degrades it to inline-fn-heavy. The C++
+  profile, `gen --lang cpp` in 1.2.0, is a separate classic generator and does not regenerate scanned trees).
 - **Privacy reframed to 3 postures**: `--structure-only` / **class-labeled (work-tree default)** /
   `--content-stats` (opt-in). Class enum is content-derived but content-free; survives everywhere but
   `--structure-only`.

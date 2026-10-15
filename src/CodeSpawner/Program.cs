@@ -59,7 +59,7 @@ public static class Program
                     return 2;
             }
         }
-        catch (ArgException ex)
+        catch (Exception ex) when (ex is ArgException or ManifestVersionException)
         {
             Console.Error.WriteLine($"error: {ex.Message}");
             return 2;
@@ -216,7 +216,7 @@ public static class Program
               codespawner scan <tree> --out <profile>    measure a real tree -> numbers-only shape profile
               codespawner gen --from-profile <p> --out <dir>   regenerate a look-alike from a profile
               codespawner verify --corpus <dir> [--manifest <path>]   self-check a corpus against its manifest
-              codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest
+              codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest (C corpora)
               codespawner gen --lang cpp --out <dir> [cpp knobs]   a C++ program + manifest v2 (call-graph truth)
               codespawner digest-selftest                reproduce the five golden digest vectors (exit 1 on drift)
               codespawner version
@@ -245,16 +245,20 @@ public static class Program
             C++ PROFILE (gen --lang cpp; see docs/cpp-profile-design.md). Writes only a self-contained C++ program
             (cpp/) + a manifest v2: edges, implicitEdges (ctor/dtor), virtualEdges (static + cha + rta sets),
             memberPtrEdges, kinds, staticInitRoots, _meta.cppTruthSha. Takes --out/--seed/--force, the
-            --oracle-chain/-fanout/-depth/-shared-leaves/-reachable-frac free-function graph knobs, and:
-              --cpp-classes <n>             classes (default 12)
-              --cpp-depth <n>               max inheritance depth (default 3; 0 = every class a root)
+            --oracle-chain/-fanout/-depth/-shared-leaves/-reachable-frac free-function graph knobs (here
+            --oracle-reachable-frac 0, the default, adds a dead block a quarter the live size; f in [0.01, 1]
+            sizes it so live/total ~ f; 1 = none; at most 2,000,000 free functions in all), and:
+              --lang <c|cpp>                c (default) or cpp (alias c++)
+              --cpp-classes <n>             classes, 1..100000 (default 12)
+              --cpp-depth <n>               max inheritance depth, 0..16 (default 3; 0 = every class a root)
               --cpp-multi-inherit <f>       fraction also inheriting a mixin interface (default 0.25)
               --cpp-virtual-frac <f>        chance a derived class overrides each inherited virtual (default 0.6)
               --cpp-instantiated-frac <f>   fraction of concrete classes constructed live (default 0.5;
                                             the rest are cha-only targets: cha minus rta)
-              --cpp-templates <n>           function/class templates, alternating (default 4)
+              --cpp-templates <n>           function/class templates, alternating, 0..10000 (default 4)
               --cpp-instances <n>           max type arguments per used template, 1..5 (default 2)
-              --cpp-static-init <n>         static-storage objects; ctor+dtor are staticInitRoots (default 2)
+              --cpp-static-init <n>         static-storage objects, 0..10000; ctor+dtor are staticInitRoots
+                                            (default 2)
 
             MUTATE (incremental/watcher oracle — emits delta manifests that compose: truth = base ⊕ delta):
               --corpus <dir>   an existing CodeSpawner corpus (guarded by the .codespawner marker)
