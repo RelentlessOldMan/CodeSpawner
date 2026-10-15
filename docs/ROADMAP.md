@@ -9,8 +9,9 @@ Catalogue of pathological corpus shapes, agreed with the CodeCompass session (20
 - **Knobs-primary, presets = pure bundles.** Every pathology is a set of knobs; the named preset just
   expands to those knob tokens (and your own knobs after a preset still override it).
 - **Manifest versioning rule**: *additive optional fields never bump `manifestVersion`; renames, removals,
-  or semantic changes do.* New optional fields ship at v1; the next real v2 bump is reserved for the C++
-  language profile, when the schema grows for real. Both consumers hard-assert `_meta.manifestVersion`.
+  or semantic changes do.* New optional fields ship at v1. The v2 bump came with the C++ language profile
+  (1.2.0) and applies only to `gen --lang cpp`; C corpora stay v1. Both consumers hard-assert
+  `_meta.manifestVersion`.
 
 ---
 
@@ -41,8 +42,7 @@ Frozen regression defaults (agreed): `dense-under-mb 127` (threshold is 128 MB c
 - ✅ **dup-content** (`--dup-groups <n> --dup-copies <n>`, preset `dup-content`) — N groups of byte-identical
   copies scattered across dirs + a near-identical control each. Top-level `dupGroups` map records each
   group's `sha256` + `paths` (must collapse) + `nearVariants` (must not). Additive, stayed v1.
-- ⏳ **C++ language profile** — nested templates, vtables/overrides, token-paste at C++ scale. Still the
-  deferred language seam; it is the trigger for the formal **manifestVersion 2** bump.
+- ✅ **C++ language profile** — shipped in v1.2.0 (see below); it brought **manifestVersion 2**.
 
 ### Batch 2.1 refinement (backlog)
 - Near-identical dedup currently ships one control per group. A `--dup-near <n>` knob for a tunable
@@ -139,6 +139,21 @@ indirect edge), all stay v1 (verifier/reader ignore unknown fields):
    from the counted indirection tax (reachable + undispatched).
 4. **byte-mass** (optional, last) — per-symbol size + `_meta` total for the GB-reduction goal.
 
+## C++ language profile + manifest v2 — SHIPPED (v1.2.0, 2026-10-14)
+
+`gen --lang cpp`: a self-contained C++ program (namespaces, single + multiple inheritance, virtual / pure /
+final, ctors/dtors, static objects, function and class templates, member-function pointers) with a v2
+manifest: `virtualEdges` {static, cha, rta}, `implicitEdges`, `memberPtrEdges`, template instances, `pure`,
+`kind: class` symbols, `staticInitRoots`, `_meta.classes`, `cppTruthSha`. Designed with and agreed by
+CodeCarver + CodeCompass ([cpp-profile-design.md](cpp-profile-design.md)). `bench.ps1` compiles and links a
+spread of cases under `clang++ -Werror`.
+
+Follow-ups (backlog; each is a contract change, so build only when a consumer asks):
+- Overloads on argument types (CodeCompass's first ask after 1.2.0), then operator overloading.
+- Member-function pointers to VIRTUAL methods (D10's dispatch rule is written but not generated).
+- Lambdas / `std::function` (CodeCarver: can wait).
+- `mutate` for a C++ corpus (mutate refuses v2 today).
+
 ## Consumer demand signals (2026-09-27)
 
 Recorded so we build on real need, not speculation. Nothing below is green-lit; no speculative builds.
@@ -146,10 +161,10 @@ Recorded so we build on real need, not speculation. Nothing below is green-lit; 
 | Item | CodeCarver | CodeCompass | Decision |
 |---|---|---|---|
 | **mutate / churn** | Not useful — stateless batch carver, no watcher/incremental mode; "small change → small carve" is already covered by the determinism test + re-running (no cached state to go stale). | **Green-lit** — the one worth building: the incremental-index / watcher oracle CodeCompass currently cannot verify. | ✅ **SHIPPED** v1.0.4; diff-delta mode for CodeDiffer followed in v1.1.0. |
-| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). | Park. | 🔜 **NEXT** — oracle v1 (the C indirect-edge oracle, above) has shipped, so this is the next big item. The C++ vtable/override/template set is the **manifest v2** trigger. Not started; needs a design pass with CodeCarver + CodeCompass first. |
+| **C++ profile** | **Would consume** — highest-leverage for it (vtable/override/template reachability is where carving is hardest; today only validated via ad-hoc real-repo build sweeps: tinyxml2/pugixml/fmt/simdjson, never a known C++ call graph). | Park (adopted 2026-10-14 when the design came round). | ✅ **SHIPPED** v1.2.0 (above). |
 | **dup-near** | Not useful — content similarity is irrelevant to reachability. | Park. | ⏸ **PARKED**. |
 
-**C++ profile — CodeCarver-side plan when green-lit (small):** extend `carver-groundtruth-oracle.ps1` to
+**C++ profile — CodeCarver-side plan (recorded 2026-09-27; v1.2.0 now provides it):** extend `carver-groundtruth-oracle.ps1` to
 carve `--lang cpp` and assert against the manifest's C++ `edges`, treating virtual/override targets as the
 **sound over-approximation** set (a soundness-first carver keeps all possible dispatch targets). The
 generator side would emit known vtable/override/template edges as ground truth, mirroring the C `func_i`

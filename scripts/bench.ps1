@@ -9,6 +9,7 @@
     2. DETERMINISM   two same-seed runs produce byte-identical manifests (path-normalized) and file hashes.
     3. SEED VARIANCE two different seeds produce DIFFERENT output (the seed actually does something).
     4. NEGATIVE      a tampered manifest must FAIL verify (the oracle isn't vacuous).
+       (4b-4h: pathology presets, mutate, scan, oracle v1, and the C++ profile.)
     5. THROUGHPUT    a header-heavy run must exceed a floor MB/s (regression guard, generous bound).
 
   Exit 0 only if every check passes. Intended for CI and for running by hand before a release:
@@ -17,11 +18,15 @@
 .PARAMETER Exe        codespawner.exe (default: dist, else the Release build output).
 .PARAMETER Work       Scratch dir (default: %TEMP%\cs-bench). Cleared each run.
 .PARAMETER MinMBps    Throughput floor in MB/s for the header run (default 150; SSD dev boxes far exceed this).
+.PARAMETER Clang      clang++ for the C++ compile check (default: PATH, else %ProgramFiles%\LLVM\bin). If none
+                      is found, the compile checks are SKIPPED (reported, not failed); -RequireClang fails them.
 #>
 param(
     [string]$Exe,
     [string]$Work = (Join-Path $env:TEMP "cs-bench"),
-    [double]$MinMBps = 150
+    [double]$MinMBps = 150,
+    [string]$Clang,
+    [switch]$RequireClang
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -166,6 +171,51 @@ $ov1Det = ((StripRoot2 "$ov1-manifest.json") -eq (StripRoot2 "$ov2-manifest.json
 Check "oracle-v1 DAG+indirect+bytes verify" $ov1Verify
 Check "oracle-v1 new _meta fields present" $ov1Fields
 Check "oracle-v1 deterministic" $ov1Det
+
+# 4h. C++ PROFILE (gen --lang cpp, manifest v2): each case verifies, carries the v2 fields, and compiles and
+# links under clang++ -std=c++17 -Wall -Wextra -Werror (the program is not run: its receivers are null by
+# design). The C++ truth is only meaningful for a program that compiles, and the unit tests have no compiler,
+# so this is the gate for it. Cases span seeds and the knob extremes that once broke the build.
+if (-not $Clang) {
+    $cmd = Get-Command clang++ -ErrorAction SilentlyContinue
+    if ($cmd) { $Clang = $cmd.Source }
+    elseif (Test-Path "$env:ProgramFiles\LLVM\bin\clang++.exe") { $Clang = "$env:ProgramFiles\LLVM\bin\clang++.exe" }
+}
+if (-not $Clang -or -not (Test-Path $Clang)) {
+    if ($RequireClang) { Check "C++ compile: clang++ found" $false "(pass -Clang <path>)" }
+    else { Write-Host "  SKIP  C++ compile checks: no clang++ (pass -Clang <path>, or -RequireClang to fail)" -ForegroundColor Yellow }
+    $Clang = $null
+}
+$cppCases = [ordered]@{
+    "default"  = @()
+    "seed14"   = @("--seed","14")
+    "deep"     = @("--seed","9","--cpp-classes","60","--cpp-depth","5","--cpp-templates","10","--cpp-instances","5","--cpp-static-init","5")
+    "flat"     = @("--cpp-depth","0")
+    "allvirt"  = @("--cpp-virtual-frac","1","--cpp-multi-inherit","1")
+    "novirt"   = @("--cpp-virtual-frac","0","--cpp-multi-inherit","0")
+    "one"      = @("--cpp-classes","1","--cpp-templates","0","--cpp-static-init","0")
+    "dag"      = @("--oracle-fanout","3","--oracle-chain","30","--oracle-shared-leaves","4","--oracle-reachable-frac","0.5")
+}
+foreach ($name in $cppCases.Keys) {
+    $d = Join-Path $Work "cpp_$name"
+    $cArgs = $cppCases[$name]
+    Gen --lang cpp --out $d @cArgs
+    & $Exe verify --corpus $d | Out-Null
+    $ok = ($LASTEXITCODE -eq 0)
+    $mf = Get-Content "$d-manifest.json" -Raw
+    $v2 = ($mf -match '"manifestVersion":\s*2') -and ($mf -match '"cppTruthSha"') -and ($mf -match '"kind":\s*"class"')
+    Check "cpp $name verify + v2 fields" ($ok -and $v2)
+    if ($Clang) {
+        $srcs = Get-ChildItem (Join-Path $d "cpp") -Recurse -Filter *.cpp | ForEach-Object FullName
+        $out = & $Clang -std=c++17 -Wall -Wextra -Werror -o (Join-Path $Work "cpp_$name.exe") @srcs 2>&1 | Out-String
+        Check "cpp $name compiles + links (-Werror)" ($LASTEXITCODE -eq 0) $(if ($LASTEXITCODE -ne 0) { "`n$($out.Trim())" })
+    }
+}
+$cppA = Join-Path $Work "cpp_det"
+Gen --lang cpp --out $cppA
+$cppDet = ((StripRoot2 "$cppA-manifest.json") -eq (StripRoot2 "$(Join-Path $Work 'cpp_default')-manifest.json")) -and `
+          ((HashTree $cppA) -eq (HashTree (Join-Path $Work "cpp_default")))
+Check "cpp deterministic (same seed -> identical program + manifest)" $cppDet
 
 # 5. THROUGHPUT (header-heavy)
 $p = Join-Path $Work "p"
