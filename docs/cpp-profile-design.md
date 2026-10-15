@@ -1,7 +1,7 @@
-# C++ language profile + manifest v2 — design proposal
+# C++ language profile + manifest v2 — design
 
-**Status:** LOCKED 2026-10-14 (every consumer question answered). Built for 1.2.0; see "As built" below for
-the additions and the few places the build narrows a decision.
+**Status:** LOCKED 2026-10-14 (every consumer question answered). Shipped in 1.2.0, corrected in 1.2.1; see
+"As built" below for the additions and the few places the build narrows a decision.
 
 ## Why
 
@@ -19,7 +19,7 @@ with explicit sets of instantiations, namespaces, member-function pointers (D10)
 what templates need, ADL, operator overloading, lambdas / `std::function`, RTTI / `dynamic_cast`,
 exceptions, the standard library (the corpus stays self-contained, no `#include <...>`).
 
-## Proposed decisions
+## Decisions
 
 ### D1. C corpora stay v1, byte-identical
 
@@ -53,13 +53,17 @@ A virtual call is recorded on the calling symbol as a `virtualEdges` record:
   "rta": ["ns_1::D_1::m_2"] }
 ```
 
-- `static`: the method named at the call site (the receiver's static type).
-- `cha`: every override reachable in the class hierarchy below the static type (class-hierarchy analysis).
-  This is the **sound** set; a carver that drops one fails soundness.
-- `rta`: the subset whose class is actually constructed somewhere reachable (true rapid type analysis, not
+- `static`: the method the call resolves to through the receiver's static type: the receiver class's own
+  implementation, or the one it inherits (then `static`'s class is an ancestor of the receiver's).
+- `cha`: every non-pure implementation that a class at or below the RECEIVER's class resolves the method to
+  (class-hierarchy analysis). This is the **sound** set; a carver that drops one fails soundness.
+- `rta`: the subset that a class constructed somewhere reachable resolves to (true rapid type analysis, not
   "constructed anywhere in the corpus"). This is the **precise** set. `cha − rta` is the C++ indirection tax: a counted over-keep, never a failure, just
   like `dispatched:false` in oracle v1.
-- A pure-virtual method is never in either set. A `final` class or method bounds `cha`.
+- A pure-virtual method is never in either set. A `final` class or method bounds `cha`. `cha` can be empty (a
+  call through an abstract class with nothing concrete below it).
+- The receiver class is not recorded (a consumer that wants it reads the call line). Two calls with the same
+  `static` through different receivers can have different sets; each keeps its own record.
 
 ### D4. Direct edges, and implicit ctor/dtor edges in their own list
 
@@ -109,9 +113,9 @@ quadrant at least once.
 
 ### D9. Verify
 
-`verify` checks every new field: each `cha` target overrides `static` and sits below it; `rta ⊆ cha`;
-each `instance` has an existing `instanceOf`; every def/ref line really contains the name; `cppTruthSha`
-recomputes.
+`verify` checks every new field: `cha` is exactly the override set of a receiver at or below `static`'s class;
+`rta ⊆ cha`; each `instance` has an existing `instanceOf`; every def/ref line really contains the name;
+`cppTruthSha` recomputes. (As built, below, lists every check.)
 
 ### D10. Member-function pointers
 
@@ -124,7 +128,7 @@ The `&Cls_4::m_2` token names the method, so that line is recorded in `m_2`'s `r
 function name is in v1). The `->*` / `.*` call has no name token: no ref site, an expected miss for a
 name-based indexer that `dispatched` lets it classify.
 
-## As built (1.2.0)
+## As built (1.2.0, corrected in 1.2.1)
 
 `gen --lang cpp --out <dir>` writes ONLY a self-contained C++ program under `<dir>/cpp/` plus
 `<dir>-manifest.json` (v2). The C population knobs (`--scale`, `--with-oracle`, `--preset`, …) are refused with
@@ -140,16 +144,31 @@ pointers that are null, and method↔free-function cycles exist. All truth is st
   member-pointer helpers (`cs_rt::mp_run_*` / `mp_keep_*`), `static_init.cpp` and `main.cpp` (which calls the
   root). File names are lowercase, so an `#include` line never contains a symbol's whole-word name.
 - Free functions: the oracle graph (linear chain, or a DAG with `--oracle-fanout`) is the live part. A dead
-  block follows: by default a quarter of the live count (at least 2); `--oracle-reachable-frac` sizes it, and
-  1 means none. Method/ctor/dtor/template bodies call only live free functions, so the dead block stays dead.
-- Hierarchy: the first `--cpp-depth` classes form one guaranteed chain. Class 0 is always abstract (a pure
-  virtual). Class 1 always takes a mixin (`Mix_j`, one pure `hook_j`), so multiple inheritance always exists.
-  `final` classes are concrete leaves that add no new virtual. Every class has a user ctor and dtor; mixins
-  have neither.
+  block follows: by default (`--oracle-reachable-frac 0`) a quarter of the live count, at least 2;
+  `--oracle-reachable-frac f` sizes it so live/total ≈ f, and 1 means none. Method/ctor/dtor/template bodies
+  call only live free functions, so the dead block stays dead. The live graph plus dead block is capped at
+  2,000,000 functions.
+- Hierarchy: classes 0..`--cpp-depth` form one guaranteed chain (`--cpp-depth` + 1 classes, `--cpp-depth`
+  inheritance edges); each later class takes a base 70% of the time, one shallow enough to keep within
+  `--cpp-depth` (so `--cpp-depth 0` makes every class a root). With two or more
+  classes, class 0 is abstract (a pure virtual) and, when `--cpp-multi-inherit` > 0, class 1 takes a mixin
+  (`Mix_j`, one pure `hook_j`), so multiple inheritance exists. With `--cpp-classes 1` the lone class is
+  concrete and there are no mixins. `final` classes are concrete leaves that add no new virtual. Every class
+  has a user ctor and dtor; mixins have neither.
+- Construction: each instantiated class is constructed in live code (`Cls obj;` for an even index, `new` for
+  an odd one); 60% of the other concrete classes are constructed in dead code. The static objects are drawn
+  from the instantiated classes, or from all concrete classes when none is (so `--cpp-instantiated-frac 0`
+  still constructs the static objects' classes). One more construction is reachable only through dispatch:
+  an instantiated class's own virtual implementation, called through that class from live code, constructs a
+  class nothing else reachable constructs, so the RTA solve below takes more than one round. (Skipped when the
+  program has no such class, or fewer than two never-constructed concrete classes.)
 - Templates alternate: a function template `tf_t` (symbol `ns::tf_t`, instance `ns::tf_t<int>`) and a class
   template `Tmpl_t` with one method (symbol `ns::Tmpl_t::m_0`, instance `ns::Tmpl_t<int>::m_0`). An instance's
-  `def` is its template's body line. The last template is never used. Template 0 always has one instance
-  (`<bool>`) called only from dead code: instantiated but unreachable.
+  `def` is its template's body line. With two or more templates, the last is never used. Template 0 gets
+  `--cpp-instances` type arguments (`int`, `long`, …, the first from live code) and, when there is dead code
+  (`--oracle-reachable-frac` < 1), one more instance (`<bool>`) called only from dead code: instantiated but
+  unreachable. Every other used template gets 1..`--cpp-instances`. The class-template name `Tmpl_t` itself
+  (its `struct` line, `Tmpl_t<int> tv_n;`) is not a symbol: out of scope.
 
 **Additions to the contract** (all additive, v2 only):
 1. `pure: true` on a pure virtual method (absent otherwise). It has no body, so its `def` is the
@@ -176,7 +195,8 @@ pointers that are null, and method↔free-function cycles exist. All truth is st
 - `new Cls_4()` assigns a receiver pointer and is never deleted, so a `new` adds no dtor edge. A local
   `Cls_4 obj;` adds the implicit dtor edge at scope exit. The generator writes no explicit `~Cls_4()` call.
 - Declarations are neither def nor ref (as in v1): an in-class declaration of an out-of-class body, and the
-  `cpp/rt/free.hpp` prototypes.
+  prototypes in `cpp/rt/free.hpp` and `cpp/rt/helpers.hpp`. (A class symbol is the exception: its name in
+  those lines is a type use, so they are among its refs.)
 
 **Statement forms and what each records** (on the enclosing body's symbol):
 
@@ -194,23 +214,38 @@ pointers that are null, and method↔free-function cycles exist. All truth is st
 
 A ref line inside a template body counts once for each instance that reaches it, as a ref of that instance's
 substituted target (`tf_0<T>()` in `Tmpl_1<int>::m_0` is a ref of `tf_0<int>`). A `template` symbol itself has
-no edges and no refs.
+no edges. The body of a template that is never instantiated still names things: there, a free-function call is
+a ref of the function, and `tf_0<T>()` / `tv_n.m_0()` (on a `Tmpl_1<T>`) are refs of the template symbols
+`ns::tf_0` / `ns::Tmpl_1::m_0`, with no edges. Those are the only refs a template symbol has (1.2.1; 1.2.0
+recorded none, so a whole-word search found lines no symbol owned).
 
 **RTA.** A class is live when a static object, or a body reachable on the precise graph, constructs it as a
-complete object; members of a live class are live too, and base subobjects do not count. `rta` = the `cha`
-targets that some live class in the receiver's subtree dispatches to. Reachability over `rta` can construct
-more classes, so the generator iterates to a fixpoint.
+complete object; the member objects of a live class, including those its base classes declare, are live too.
+A base subobject does not make its own class live. `rta` = the `cha` targets that some live class in the
+receiver's subtree dispatches to. Reachability over `rta` can construct more classes, so the generator iterates
+to a fixpoint, and the dispatch-only construction above makes it take more than one round.
 
-**Verify (v2):** accepts versions 1 and 2. On v2 it checks:
-- each symbol has a known `kind` and a `simpleName`, and def/ref lines contain the simpleName as a whole word;
-- a `class` symbol is in `_meta.classes` and has no edges;
-- `instanceOf` is a `template`, and only an instance has one;
-- `pure` is only on a method whose def line ends in `= 0;`;
-- implicit and memberPtr targets and `staticInitRoots` are symbols, and `via` is `table` or `arg`;
-- every `cha` target is a method with `static`'s simpleName, in a class at or below `static`'s, and `rta ⊆ cha`;
-- `cppTruthSha` is present and recomputes.
+**Verify (v2):** accepts versions 1 and 2; any other version exits 2. A v2 manifest of the wrong shape (a
+field of the wrong JSON type, a duplicate symbol or class key, a v1-only field such as `bytes`, a virtual or
+member-pointer record missing a field) exits 2 before any check runs. Then it checks:
+- `_meta.lang` is `cpp`; `_meta.classes` is acyclic, names only classes as bases, and holds exactly the
+  `kind: class` symbols; each class's bases are the ones its `class` line names, in order;
+- each symbol has a known `kind` that fits its key (a `<` makes an instance; a key under a class is a ctor,
+  dtor or method by name; a template's def is under `cpp/tmpl/`), and `simpleName` is the key's last name;
+- def/ref lines contain the simpleName as a whole word (a ctor's not right after a `~`); sites are canonical
+  `dir/file:line`; defs are unique (an instance shares its template's); no symbol lists its def or a site
+  twice in `refs`;
+- a `class` symbol has no edges; `instanceOf` is a `template`, only an instance has one, and an instance's def
+  is its template's;
+- `pure` is set exactly on the methods whose def line ends in `= 0;`;
+- implicit targets and `staticInitRoots` are ctors or dtors, member-pointer targets are methods, and `via` is
+  `table` or `arg`;
+- per virtual record: `static` is a method; `cha` holds no pure method and no duplicate, and is exactly the
+  override set of some receiver at or below `static`'s class that resolves the call to `static`; `rta ⊆ cha`;
+- `cppTruthSha` is present and recomputes. (Exact `rta` needs the program's constructions, so the digest and
+  the unit tests' independent recompute carry it.)
 
-`mutate` refuses a v2 manifest (it edits C corpora only).
+`mutate` refuses a v2 manifest (it edits C corpora only) with exit 2, before touching anything.
 
 **Golden vector** (`digest-selftest`, fifth line, cross-checked by an independent Python implementation of the
 D7 text): `cppTruthSha = 28b4e1de981d282a6918de91846e990955f5b8220c88efc993d2a984c0bfed08` over the symbol set
@@ -246,7 +281,7 @@ and carves per function and per file; a template is one source definition to it.
 - Q6: member-function pointers in the first cut, with a `dispatched` flag like v1 (now D10). Lambdas and
   `std::function` can wait.
 
-## Open questions for consumers
+## Consumer questions (all answered)
 
 All answered (2026-10-14): Q1–3, Q5, Q6 by CodeCarver; Q4–6 and the `implicitEdges` / `memberPtrEdges` fit by
 CodeCompass. The questions are kept below for the record.

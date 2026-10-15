@@ -11,6 +11,47 @@ reads it.
 
 ## [Unreleased]
 
+Review round 6 of the C++ profile. **`gen --lang cpp` output changes for every seed** (program bytes and
+manifest truth; the new default-seed `cppTruthSha` is pinned as `d3a38e31…`). C corpora are byte-identical.
+
+### Fixed
+- An unused template's body now records refs: a free-function call there is a ref of the function, and
+  `tf_k<T>()` / `tv_n.m_0()` are refs of the template symbol (`ns::tf_k` / `ns::Tmpl_k::m_0`). They were
+  missing, so a whole-word search found lines no symbol owned. Still no edges (the body is never instantiated).
+- RTA liveness: the member objects declared by a live class's base classes are live too (only the class's
+  own members counted).
+- `--cpp-classes 1`: the lone class is concrete, so it is constructed and `--cpp-static-init` objects exist
+  (it was abstract 30% of the time, which dropped both), and no mixin is made that nothing inherits.
+- `gen` refuses a directory at `<out>-manifest.json` before it touches `--out` (C and C++). It used to wipe
+  and regenerate `--out`, then fail on the final rename.
+- `mutate` on a C++ corpus exits 2 (bad input) and says it edits C corpora only; it exited 1 with
+  "manifest version 2 != 1". An unknown `manifestVersion` is exit 2 in `verify` too (was a FAIL, exit 1).
+
+### Changed
+- One construction is now reachable only through virtual dispatch, so the RTA solve really iterates
+  (`docs/cpp-profile-design.md`, "Construction").
+- `verify` on a v2 manifest is much stricter. A wrong JSON shape (wrong field type, duplicate key, a v1-only
+  field) is exit 2. New checks: `cha` is EXACTLY the override set below a receiver (it accepted a dropped
+  override), no pure method in `cha`, `_meta.classes` acyclic and matching the `class` lines and the class
+  symbols (a cycle used to hang it), `simpleName` is the key's last name, `kind` fits the key, an instance's
+  def is its template's, `pure` exactly on `= 0;` lines, defs unique, canonical sites, no def or duplicate in
+  `refs`, ctor sites not after a `~`, implicit and `staticInitRoots` targets are ctors/dtors and member-pointer
+  targets are methods.
+- Knob caps: `--oracle-fanout`, `--oracle-depth` and `--oracle-shared-leaves` at most 1,000,000 with
+  `--lang cpp`, and at most 2,000,000 free functions in all (chain + shared leaves + dead block).
+- Generation no longer goes quadratic in `--cpp-classes` (the same bytes, about a third faster at 3000).
+
+### Docs
+- The receiver semantics of a virtual record (`static` is the resolved method; `cha`/`rta` come from the
+  receiver's subtree; the receiver is not recorded; `cha` can be empty), the `cppTruthSha` golden fixture in
+  `manifest-schema.md`, and the knob-extreme behavior the "always" claims missed. Stale v1-only wording fixed;
+  `vendor-codespawner.ps1` now copies `cpp-profile-design.md`.
+
+### Tests
+- An independent recompute of the C++ truth from the emitted source alone (cha, rta, live classes, implicit
+  edges, refs, both closures) across 9 shapes, a ref-completeness check by name, the pinned digest, and 25 more
+  tampering / malformed-manifest cases. `bench.ps1` 4h also pins the default-seed `cppTruthSha`.
+
 ## [1.2.0] - 2026-10-14
 
 ### Added

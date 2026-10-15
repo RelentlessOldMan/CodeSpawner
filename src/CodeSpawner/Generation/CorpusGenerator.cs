@@ -427,6 +427,9 @@ public sealed class CorpusGenerator
     /// only ever appears complete (ManifestWriter writes then renames).</summary>
     internal static void ProbeManifestWritable(string mpath, string optOut = "pass --manifest=false")
     {
+        // A directory where the manifest goes would only fail the final rename, after --out was wiped and rewritten.
+        if (Directory.Exists(mpath))
+            throw new ArgException($"cannot write the manifest at '{mpath}': a directory is in the way; move it or choose another --out.");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(mpath)!);   // a new --out's parent; preparing --out makes it anyway

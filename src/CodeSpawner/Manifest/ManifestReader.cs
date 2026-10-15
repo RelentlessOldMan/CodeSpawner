@@ -21,6 +21,9 @@ public sealed class BaseManifest
 }
 
 /// <summary>Reads a v1 manifest (produced by <see cref="ManifestWriter"/>) back into a symbol table.</summary>
+/// <summary>A manifest whose version the reader does not take: bad input (exit 2), not a failure part-way.</summary>
+public sealed class ManifestVersionException(string message) : Exception(message);
+
 public static class ManifestReader
 {
     /// <summary>
@@ -104,7 +107,9 @@ public static class ManifestReader
         if (!root.TryGetProperty("_meta", out var meta)) throw new FormatException($"{path}: no _meta block");
         int ver = meta.TryGetProperty("manifestVersion", out var v) ? v.GetInt32() : -1;
         if (ver < 1 || ver > maxVersion)
-            throw new InvalidOperationException(maxVersion == 1 ? $"manifest version {ver} != 1" : $"manifest version {ver} is not 1..{maxVersion}");
+            throw new ManifestVersionException(ver == 2 && maxVersion == 1
+                ? "manifest version 2 is a C++ (gen --lang cpp) manifest; this command reads only C (version 1) manifests"
+                : $"manifest version {ver} is not {(maxVersion == 1 ? "1" : $"1..{maxVersion}")}");
 
         var symbols = new Dictionary<string, SymbolEntry>(StringComparer.Ordinal);
         if (root.TryGetProperty("symbols", out var syms) && syms.ValueKind == JsonValueKind.Object)

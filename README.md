@@ -84,9 +84,9 @@ Run `codespawner --help` for the full knob list, or see [`docs/knobs.md`](docs/k
 
 ## How consumers couple to it
 
-The stable coupling point is the **v1 manifest contract**, not the corpus bytes or this tool's language.
-Each consumer keeps its own thin *verify adapter* and asserts `_meta.manifestVersion` before trusting a
-manifest. See [`docs/manifest-schema.md`](docs/manifest-schema.md) for the schema and the dual semantics
+The stable coupling point is the **manifest contract** (v1 for a C corpus, v2 for a `gen --lang cpp`
+corpus), not the corpus bytes or this tool's language. Each consumer keeps its own thin *verify adapter* and
+asserts `_meta.manifestVersion` before trusting a manifest. See [`docs/manifest-schema.md`](docs/manifest-schema.md) for the schema and the dual semantics
 of `unreachableRefs` (indexer closed-world vs. carver open-world).
 
 ## Consumer integration

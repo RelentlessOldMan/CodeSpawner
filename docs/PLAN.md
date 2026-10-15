@@ -54,7 +54,8 @@ C:\Playground\CodeSpawner\
 ```
 
 Out of scope for v1: `make-megacorpus.ps1` (a robocopy *stacker* of real repos, not synthetic
-generation — a different tool). C++/C# language profiles (kept as a seam, not built; C-firmware only).
+generation — a different tool). C# language profile (kept as a seam, not built). (The C++ profile shipped
+later, in 1.2.0: `gen --lang cpp`, manifest v2; see cpp-profile-design.md.)
 
 ## 2. Subcommands
 

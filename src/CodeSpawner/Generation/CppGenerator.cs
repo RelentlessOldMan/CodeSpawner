@@ -245,7 +245,8 @@ internal sealed class CppProgram
 
     private void BuildClasses(GenOptions o)
     {
-        int nMix = o.CppMultiInherit > 0 ? Math.Max(1, (int)Math.Round(o.CppClasses * o.CppMultiInherit / 3)) : 0;
+        // Mixins need a second class to inherit them (class 0 never does), so one class gets none.
+        int nMix = o.CppMultiInherit > 0 && o.CppClasses >= 2 ? Math.Max(1, (int)Math.Round(o.CppClasses * o.CppMultiInherit / 3)) : 0;
         for (int j = 0; j < nMix; j++)
         {
             var mx = new CppClass { Index = j, Name = $"Mix_{j}", Ns = NsOf(j + 1), IsMixin = true, Abstract = true };
@@ -253,11 +254,15 @@ internal sealed class CppProgram
             Mixins.Add(mx);
         }
 
+        // Kept as the classes are made, in index order (what filtering Classes each time would give, without the
+        // quadratic cost at --cpp-classes 100000): possible bases, and possible member types with their positions.
+        var eligible = new List<CppClass>();
+        var instantiated = new List<CppClass>();
+        var instAt = new Dictionary<CppClass, int>();
         for (int i = 0; i < o.CppClasses; i++)
         {
             var c = new CppClass { Index = i, Name = $"Cls_{i}", Ns = NsOf(i), Inline = i % 3 == 0 };
             // Base: the first --cpp-depth classes form one guaranteed chain; the rest root 30% of the time.
-            var eligible = Classes.Where(x => x.Depth < o.CppDepth).ToList();
             if (eligible.Count > 0)
             {
                 if (i <= o.CppDepth) c.Base = Classes[i - 1];
@@ -289,7 +294,7 @@ internal sealed class CppProgram
             // New virtuals: a root introduces two (the first pure 30% of the time); a derived class one, 40% of the time.
             int fresh = c.Base is null ? 2 : U() < 0.4 ? 1 : 0;
             for (int k = 0; k < fresh; k++)
-                c.Methods.Add(new CppFn { Name = $"m_{++hi}", Kind = FnKind.Method, Owner = c, Virtual = true, Pure = c.Base is null && k == 0 && ((i == 0 && o.CppClasses > 1) || U() < 0.3) });   // class 0: always abstract
+                c.Methods.Add(new CppFn { Name = $"m_{++hi}", Kind = FnKind.Method, Owner = c, Virtual = true, Pure = c.Base is null && k == 0 && (i == 0 ? o.CppClasses > 1 : U() < 0.3) });   // class 0: abstract unless it is the only class
             // Non-virtual methods (one, sometimes two) from a small shared name pool, so unrelated classes reuse names.
             int nv = U() < 0.4 ? 2 : 1;
             for (int k = 0; k < nv; k++)
@@ -306,10 +311,20 @@ internal sealed class CppProgram
             c.Dtor = new CppFn { Name = "~" + c.Name, Kind = FnKind.Dtor, Owner = c };
             if (U() < 0.3)
             {
-                var mem = Classes.Where(x => x.Instantiated && !c.Ancestors().Contains(x)).ToList();
-                if (mem.Count > 0) c.Members.Add(Pick(mem));
+                // A member: an instantiated class that is not an ancestor. The j-th such class is the j-th of
+                // `instantiated` once the ancestors' positions at or before it are skipped.
+                var skip = c.Ancestors().Where(instAt.ContainsKey).Select(a => instAt[a]).Distinct().Order().ToList();
+                int count = instantiated.Count - skip.Count;
+                if (count > 0)
+                {
+                    int j = _rng.Next(count);
+                    foreach (int at in skip) if (at <= j) j++;
+                    c.Members.Add(instantiated[j]);
+                }
             }
             Classes.Add(c);
+            if (c.Depth < o.CppDepth) eligible.Add(c);
+            if (c.Instantiated) { instAt[c] = instantiated.Count; instantiated.Add(c); }
         }
 
         // Every quadrant at least once: one class constructed, and (below 1.0) one concrete class that is not.
@@ -363,7 +378,8 @@ internal sealed class CppProgram
         }
         void Add(CppFn? host, Stmt s) => host?.Body.Add(s);
 
-        // Construction: each instantiated class in live code (local or new/delete); half the others in dead code.
+        // Construction: each instantiated class in live code (a local, or new that is never deleted); 60% of the others
+        // in dead code.
         foreach (var c in Classes.Where(c => !c.Abstract))
         {
             var kind = c.Index % 2 == 0 ? StmtKind.ConstructLocal : StmtKind.ConstructNew;
@@ -440,13 +456,41 @@ internal sealed class CppProgram
         var pool = Classes.Where(c => c.Instantiated).ToList();
         if (pool.Count == 0) pool = Classes.Where(c => !c.Abstract).ToList();
         for (int k = 0; k < o.CppStaticInit && pool.Count > 0; k++) StaticObjs.Add(pool[k % pool.Count]);
+
+        DispatchOnlyConstruction(liveFree);
     }
+
+    /// <summary>
+    /// One construction reached only through dispatch, so the RTA solve needs more than one round: an instantiated
+    /// class C's own virtual implementation M, called through C from live code, constructs a class X nothing reachable
+    /// otherwise constructs. M joins rta only once C is live, and X only once M is reachable. Skipped when no C has an
+    /// out-of-line M with nothing below C live from the start (static objects and their members), or when fewer than
+    /// two never-constructed concrete classes exist (one stays a cha-only target).
+    /// </summary>
+    private void DispatchOnlyConstruction(List<CppFn> liveFree)
+    {
+        var start = new HashSet<CppClass>();
+        void Add(CppClass c) { if (start.Add(c)) foreach (var a in c.Ancestors().Prepend(c)) foreach (var m in a.Members) Add(m); }
+        foreach (var c in StaticObjs) Add(c);
+        var above = start.SelectMany(c => c.Ancestors().Prepend(c)).ToHashSet();    // classes with a start class below
+        var hosts = Classes.Where(c => c.Instantiated && !c.Inline && !above.Contains(c)
+                                       && c.Methods.Any(m => m.Virtual && !m.Pure)).ToList();
+        var spare = Classes.Where(c => !c.Abstract && !c.Instantiated && !start.Contains(c)).ToList();
+        if (hosts.Count == 0 || spare.Count < 2) return;
+        var host = Pick(hosts);
+        var impl = Pick(host.Methods.Where(m => m.Virtual && !m.Pure).ToList());
+        var x = spare[^1];
+        impl.Body.Add(new Stmt { Kind = x.Index % 2 == 0 ? StmtKind.ConstructLocal : StmtKind.ConstructNew, Cls = x });
+        Pick(liveFree).Body.Add(new Stmt { Kind = StmtKind.CallVirtual, Cls = host, Method = impl.Name });
+    }
+
+    private readonly Dictionary<string, CppFn> _helperByName = new(StringComparer.Ordinal);
 
     private CppFn HelperFor(CppClass c, bool run)
     {
         string name = $"{(run ? "mp_run" : "mp_keep")}_{c.Name}";
-        var h = Helpers.FirstOrDefault(x => x.Name == name);
-        if (h is null) Helpers.Add(h = new CppFn { Name = name, Kind = FnKind.Helper, Ns = "cs_rt", MpClass = c, MpRun = run });
+        if (!_helperByName.TryGetValue(name, out var h))
+            Helpers.Add(_helperByName[name] = h = new CppFn { Name = name, Kind = FnKind.Helper, Ns = "cs_rt", MpClass = c, MpRun = run });
         return h;
     }
 }
@@ -729,6 +773,8 @@ internal sealed class CppTruth
     public HashSet<string> SoundReach { get; private set; } = new();
     public HashSet<string> PreciseReach { get; private set; } = new();
     public HashSet<CppClass> Live { get; private set; } = new();
+    /// <summary>Passes the RTA solve took to reach its fixpoint (the last one adds nothing).</summary>
+    public int Rounds { get; private set; }
 
     private CppTruth(CppProgram p) => _p = p;
 
@@ -801,6 +847,12 @@ internal sealed class CppTruth
         foreach (var t in _p.Templates)
             if (inst.TryGetValue(t, out var xs))
                 foreach (var x in CppProgram.TypeArgs.Where(xs.Contains)) Apply(t.InstanceName(x), t.Body, x);
+            else
+                // A template nothing instantiates generates no code, so no edges, but its body still names what it
+                // calls: a free call is a ref of that function, a dependent call (tf_k<T>(), or tv_n.m_0() on a
+                // Tmpl_k<T>) a ref of the called template's own symbol, there being no instance to attribute it to.
+                foreach (var s in t.Body.Body)
+                    Ref(s.Kind == StmtKind.CallTmpl ? s.Tmpl!.SymbolName : s.Target!.Symbol, CppEmitter.Site(s.File, s.Line));
 
         // Compiler-added calls: ctor -> base ctor, member ctors; dtor -> member dtors (reverse), base dtor.
         foreach (var c in _p.Classes)
@@ -927,19 +979,21 @@ internal sealed class CppTruth
     }
 
     // RTA fixpoint: a class is live when a reachable body constructs it (or it is a static object, or a member of a
-    // live class); rta = what live receivers dispatch to; reachability over rta can construct more, so iterate.
+    // live object, base subobjects' members included); rta = what live receivers dispatch to; reachability over rta
+    // can construct more, so iterate.
     private void Solve()
     {
         var roots = new List<string> { _p.Root.Symbol };
         roots.AddRange(_staticInit);
 
         var live = new HashSet<CppClass>();
-        void MakeLive(CppClass c) { if (live.Add(c)) foreach (var m in c.Members) MakeLive(m); }
+        void MakeLive(CppClass c) { if (live.Add(c)) foreach (var a in c.Ancestors().Prepend(c)) foreach (var m in a.Members) MakeLive(m); }
         foreach (var c in _p.StaticObjs) MakeLive(c);
 
         HashSet<string> reach;
         while (true)
         {
+            Rounds++;
             foreach (var (_, ve, cls, method) in _sites)
             {
                 ve.Rta.Clear();
