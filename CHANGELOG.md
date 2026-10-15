@@ -17,6 +17,8 @@ reads it.
   inheritance, virtual / pure / final methods, ctors and dtors, static-storage objects, function and class
   templates, and member-function pointers. The program compiles and links with
   `clang++ -std=c++17 -Wall -Wextra -Werror`. Its manifest is `manifestVersion: 2` and adds:
+  - `kind: class` symbols for every class and mixin: def = the class line, refs = every other whole-word use of
+    the name; no edges, skipped by reachability;
   - per symbol: `kind`, `simpleName`, `instanceOf`, `pure`, `implicitEdges`, `virtualEdges` (`static` plus the
     sound `cha` and precise `rta` sets), and `memberPtrEdges`;
   - in `_meta`: `lang`, `staticInitRoots`, `classes`, and `cppTruthSha`.

@@ -116,7 +116,7 @@ sibling. A manifest path that goes through a junction or symlink inside the corp
 a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright. A manifest
 with no `_meta` or `symbols` object, or one that declares nothing to check (no symbol sites, dup groups or
 indirect edges), is bad input (exit 2); before 1.1.11 the latter passed. A v2 (C++) manifest is checked
-against its own rules: whole-word simpleName def/ref lines, kinds, `instanceOf`, `pure`, implicit and
+against its own rules: whole-word simpleName def/ref lines, kinds, edge-free class symbols, `instanceOf`, `pure`, implicit and
 member-pointer targets, `cha` overrides below `static` with `rta ⊆ cha`, and a recomputed `cppTruthSha`.
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
