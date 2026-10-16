@@ -117,12 +117,18 @@ sibling. A manifest path that goes through a junction or symlink inside the corp
 a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright. A manifest
 with no `_meta` or `symbols` object, or one that declares nothing to check (no symbol sites, dup groups or
 indirect edges), is bad input (exit 2); before 1.1.11 the latter passed. A `manifestVersion` other than 1 or
-2 is bad input (exit 2). A v2 (C++) manifest of the wrong shape (a field of the wrong JSON type, a duplicate
-key, a v1-only field) is bad input too; otherwise it is checked against its own rules: whole-word simpleName
-def/ref lines, canonical and unique sites, kinds that fit their keys, the `_meta.classes` hierarchy against
-the `class` lines, edge-free class symbols, `instanceOf`, `pure`, implicit / member-pointer / static-init
-targets of the right kind, `cha` exactly the override set below a receiver with `rta ⊆ cha`, and a recomputed
-`cppTruthSha`. The full list is in [cpp-profile-design.md](cpp-profile-design.md) "As built".
+2 is bad input (exit 2), as is a duplicate key anywhere in the manifest or a `_meta` value of the wrong JSON
+type (`seed` not an integer, `generatorVersion` not a string). A v2 (C++) manifest of the wrong shape (a field
+of the wrong JSON type, a symbol with no `def`, a v1-only field) is bad input too; otherwise it is checked
+against its own rules: whole-word simpleName def/ref lines, canonical and unique sites, defs on definition
+lines in their owner's files, no site on a declaration, no ref on a definition line, every definition line in
+the program some symbol's def (so a deleted symbol fails), kinds that fit their keys, the `_meta.classes`
+hierarchy against the `class` lines, edge-free class symbols, no edge into a class or template, `instanceOf`,
+`pure`, implicit / member-pointer / static-init targets of the right kind, `cha` exactly the override set below
+a receiver with `rta ⊆ cha`, and a recomputed `cppTruthSha`. **What it does not prove:** that `edges`, `rta`,
+`implicitEdges`, `staticInitRoots` and member-pointer `dispatched` match the program's calls (they are checked
+only for the right kind of target), and `cppTruthSha`, recomputed from the manifest itself, catches only an
+edit that was not re-signed. The full list is in [cpp-profile-design.md](cpp-profile-design.md) "As built".
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a

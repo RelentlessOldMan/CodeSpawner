@@ -98,10 +98,10 @@ public static class ArgParser
     // Knobs gen --from-profile reads; every other knob would be ignored, so it is refused rather than recorded.
     private static readonly HashSet<string> ProfileKnobs = new(StringComparer.Ordinal) { "out", "seed", "force", "lang", "from-profile", "with-oracle" };
 
-    // Knobs gen --lang cpp reads (besides --cpp-*): it writes only the C++ program, so the C population knobs are refused.
     /// <summary>Most free functions gen --lang cpp writes (the live graph plus its dead block).</summary>
     internal const long MaxCppFree = 2_000_000;
 
+    // Knobs gen --lang cpp reads (besides --cpp-*): it writes only the C++ program, so the C population knobs are refused.
     private static readonly HashSet<string> CppKnobs = new(StringComparer.Ordinal)
     {
         "out", "seed", "force", "lang", "oracle-chain", "oracle-fanout", "oracle-depth", "oracle-shared-leaves", "oracle-reachable-frac",
@@ -136,7 +136,10 @@ public static class ArgParser
             long live = o.OracleChain + (o.OracleFanout > 0 ? o.OracleSharedLeaves : 0);
             long total = o.OracleReachableFrac is 0 ? live + Math.Max(2, live / 4) : (long)Math.Ceiling(live / o.OracleReachableFrac);
             if (total > MaxCppFree)
-                throw new ArgException($"--oracle-chain, --oracle-shared-leaves and --oracle-reachable-frac would make about {total} free functions; at most {MaxCppFree} (raise --oracle-reachable-frac or shrink the graph)");
+                // The default (0) dead block is a quarter of the live graph, so only a frac of at least live/max helps (the
+                // live graph alone always fits: the chain and the shared leaves are each at most half the max).
+                throw new ArgException($"--oracle-chain, --oracle-shared-leaves and --oracle-reachable-frac would make about {total} free functions; at most {MaxCppFree} " +
+                    $"(shrink the graph, or set --oracle-reachable-frac to at least {Math.Ceiling(100.0 * live / MaxCppFree) / 100:0.00} for a smaller dead block)");
             return;
         }
         if (cppKnob is not null) throw new ArgException($"--{cppKnob} requires --lang cpp");

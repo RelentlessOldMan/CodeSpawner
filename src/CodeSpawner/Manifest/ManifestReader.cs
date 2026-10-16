@@ -20,10 +20,10 @@ public sealed class BaseManifest
     public List<string> StaticInitRoots { get; init; } = new();
 }
 
-/// <summary>Reads a v1 manifest (produced by <see cref="ManifestWriter"/>) back into a symbol table.</summary>
 /// <summary>A manifest whose version the reader does not take: bad input (exit 2), not a failure part-way.</summary>
 public sealed class ManifestVersionException(string message) : Exception(message);
 
+/// <summary>Reads a manifest (produced by <see cref="ManifestWriter"/>) back into a symbol table.</summary>
 public static class ManifestReader
 {
     /// <summary>
@@ -100,12 +100,22 @@ public static class ManifestReader
     public static BaseManifest Load(string path, int maxVersion = 1)
     {
         byte[] bytes = File.ReadAllBytes(path);
+        // A JSON value of the wrong kind (a string where a number or an array belongs) throws
+        // InvalidOperationException from System.Text.Json: bad input, like a missing key, not an I/O failure.
+        try { return Parse(path, bytes, maxVersion); }
+        catch (InvalidOperationException ex) { throw new FormatException($"{path}: {ex.Message}", ex); }
+    }
+
+    private static BaseManifest Parse(string path, byte[] bytes, int maxVersion)
+    {
         string sha = IdentitySha(bytes);
         using var doc = JsonDocument.Parse(bytes);
         var root = doc.RootElement;
 
-        if (!root.TryGetProperty("_meta", out var meta)) throw new FormatException($"{path}: no _meta block");
-        int ver = meta.TryGetProperty("manifestVersion", out var v) ? v.GetInt32() : -1;
+        if (!root.TryGetProperty("_meta", out var meta) || meta.ValueKind != JsonValueKind.Object) throw new FormatException($"{path}: no _meta object");
+        int ver = !meta.TryGetProperty("manifestVersion", out var v) ? -1
+            : v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi
+            : throw new FormatException($"{path}: manifestVersion {v.GetRawText()} is not an integer");
         if (ver < 1 || ver > maxVersion)
             throw new ManifestVersionException(ver == 2 && maxVersion == 1
                 ? "manifest version 2 is a C++ (gen --lang cpp) manifest; this command reads only C (version 1) manifests"
@@ -157,8 +167,8 @@ public static class ManifestReader
         {
             ManifestVersion = ver,
             Seed = meta.TryGetProperty("seed", out var s) ? s.GetInt32() : 0,
-            GeneratorVersion = meta.TryGetProperty("generatorVersion", out var gv) ? gv.GetString()! : "",
-            CorpusRoot = meta.TryGetProperty("corpusRoot", out var cr) ? cr.GetString()! : "",
+            GeneratorVersion = meta.TryGetProperty("generatorVersion", out var gv) ? Str(gv) : "",
+            CorpusRoot = meta.TryGetProperty("corpusRoot", out var cr) ? Str(cr) : "",
             Sha256 = sha,
             Symbols = symbols,
             Roots = roots,
