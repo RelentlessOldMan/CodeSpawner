@@ -18,23 +18,46 @@ public static class ManifestVerifier
     // files; access is sequential-by-file so the effective hit rate stays high.
     private const int LineCacheCap = 16;
 
+    // Where FAIL and error lines go: stderr, or (tests) a writer of the caller's flow alone, so a test can read
+    // which check fired without swapping the process-wide Console under tests running in parallel.
+    private static readonly AsyncLocal<TextWriter?> ErrOverride = new();
+    private static TextWriter Err => ErrOverride.Value ?? Console.Error;
+
+    internal static int Run(VerifyOptions o, TextWriter err)
+    {
+        ErrOverride.Value = err;
+        try { return Run(o); }
+        finally { ErrOverride.Value = null; }
+    }
+
     public static int Run(VerifyOptions o)
+    {
+        // A JSON value of the wrong kind where the checks below read another (an object where an array belongs) is
+        // bad input, like invalid JSON, not a failure of the corpus: exit 2, never 1 part-way through the checks.
+        try { return RunChecks(o); }
+        catch (InvalidOperationException ex) { Err.WriteLine($"error: malformed manifest: {ex.Message}"); return 2; }
+    }
+
+    private static int RunChecks(VerifyOptions o)
     {
         string corpus = Path.GetFullPath(o.Corpus);
         string manifestPath = o.Manifest ?? DefaultManifestPath(corpus);
 
-        if (!Directory.Exists(corpus)) { Console.Error.WriteLine($"error: corpus dir not found: {corpus}"); return 2; }
-        if (!File.Exists(manifestPath)) { Console.Error.WriteLine($"error: manifest not found: {manifestPath}"); return 2; }
+        if (!Directory.Exists(corpus)) { Err.WriteLine($"error: corpus dir not found: {corpus}"); return 2; }
+        if (!File.Exists(manifestPath)) { Err.WriteLine($"error: manifest not found: {manifestPath}"); return 2; }
 
         Console.WriteLine($"verify: corpus={corpus}");
         Console.WriteLine($"verify: manifest={manifestPath}");
 
         JsonDocument doc;
         try { doc = JsonDocument.Parse(File.ReadAllBytes(manifestPath)); }
-        catch (JsonException ex) { Console.Error.WriteLine($"error: manifest is not valid JSON: {ex.Message}"); return 2; }
+        catch (JsonException ex) { Err.WriteLine($"error: manifest is not valid JSON: {ex.Message}"); return 2; }
         using var _ = doc;
         var root = doc.RootElement;
-        if (root.ValueKind != JsonValueKind.Object) { Console.Error.WriteLine("error: manifest root is not an object"); return 2; }
+        if (root.ValueKind != JsonValueKind.Object) { Err.WriteLine("error: manifest root is not an object"); return 2; }
+        // System.Text.Json keeps the last of two equal keys; a reader that keeps the first would see another manifest
+        // than the one checked here.
+        if (DuplicateKey(root, "") is { } dup) { Err.WriteLine($"error: manifest key {dup} appears twice"); return 2; }
 
         int fail = 0;
 
@@ -42,23 +65,24 @@ public static class ManifestVerifier
         // delta, so whatever the sites below say, the corpus is not one the manifest describes.
         if (File.Exists(Path.Combine(corpus, Mutation.Mutator.JournalName)))
         {
-            Console.Error.WriteLine($"FAIL: {Mutation.Mutator.JournalName} present: a mutate of this corpus was interrupted " +
+            Err.WriteLine($"FAIL: {Mutation.Mutator.JournalName} present: a mutate of this corpus was interrupted " +
                                     "(or is still running); regenerate the corpus");
             fail++;
         }
 
         // --- _meta ---
         // Not a manifest at all (no _meta or no symbols object) is bad input, like invalid JSON: exit 2.
-        if (!root.TryGetProperty("_meta", out var meta)) { Console.Error.WriteLine("error: manifest has no _meta block"); return 2; }
+        if (!root.TryGetProperty("_meta", out var meta) || meta.ValueKind != JsonValueKind.Object) { Err.WriteLine("error: manifest has no _meta object"); return 2; }
         int ver = meta.TryGetProperty("manifestVersion", out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int vi) ? vi : -1;
         // An unknown version is no manifest this verifier can read: bad input, before any check runs on a guess.
-        if (ver is not (1 or 2)) { Console.Error.WriteLine($"error: manifestVersion {(v.ValueKind == JsonValueKind.Undefined ? "missing" : v.GetRawText())} is not 1 or 2"); return 2; }
+        if (ver is not (1 or 2)) { Err.WriteLine($"error: manifestVersion {(v.ValueKind == JsonValueKind.Undefined ? "missing" : v.GetRawText())} is not 1 or 2"); return 2; }
         Console.WriteLine($"  OK  _meta.manifestVersion == {ver}");
         bool v2 = ver == 2;
 
         if (!root.TryGetProperty("symbols", out var symbols) || symbols.ValueKind != JsonValueKind.Object)
-        { Console.Error.WriteLine("error: manifest has no symbols object"); return 2; }
-        if (v2 && CppShapeError(meta, symbols) is { } shape) { Console.Error.WriteLine($"error: malformed v2 manifest: {shape}"); return 2; }
+        { Err.WriteLine("error: manifest has no symbols object"); return 2; }
+        if (MetaShapeError(meta) is { } metaShape) { Err.WriteLine($"error: malformed manifest: {metaShape}"); return 2; }
+        if (v2 && CppShapeError(root, meta, symbols) is { } shape) { Err.WriteLine($"error: malformed v2 manifest: {shape}"); return 2; }
 
         // Collect symbol names for the edge-chain check.
         var names = new HashSet<string>();
@@ -72,7 +96,7 @@ public static class ManifestVerifier
             {
                 string rn = r.GetString() ?? "";
                 if (names.Contains(rn)) rootsOk++;
-                else { Console.Error.WriteLine($"FAIL root '{rn}': not a declared symbol"); fail++; }
+                else { Err.WriteLine($"FAIL root '{rn}': not a declared symbol"); fail++; }
             }
             if (rootsOk > 0) Console.WriteLine($"  OK  _meta.roots ({rootsOk} declared entry point(s))");
         }
@@ -80,7 +104,7 @@ public static class ManifestVerifier
         var lineCache = new Dictionary<string, string[]>();
         var paths = new Generation.Containment(corpus);
         int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0, cppOk = 0;
-        if (v2) fail += CheckCpp(meta, symbols, names, ref cppOk, paths, lineCache);
+        if (v2) fail += CheckCpp(corpus, meta, symbols, names, ref cppOk, paths, lineCache);
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree, its linked roots included (the
         // unresolved-include premise: an include path may span every root).
@@ -97,9 +121,9 @@ public static class ManifestVerifier
             if (entry.TryGetProperty("expectedMiss", out var emEl) && emEl.ValueKind == JsonValueKind.True)
             {
                 if (!entry.TryGetProperty("def", out var emDef) || emDef.GetString() is not { } site)
-                { Console.Error.WriteLine($"FAIL expectedMiss {name}: no def site"); fail++; continue; }
+                { Err.WriteLine($"FAIL expectedMiss {name}: no def site"); fail++; continue; }
                 if (HonestMissOk(paths, lineCache, site, name, out string mw)) missOk++;
-                else { Console.Error.WriteLine($"FAIL expectedMiss {name}: {mw}"); fail++; }
+                else { Err.WriteLine($"FAIL expectedMiss {name}: {mw}"); fail++; }
                 continue;
             }
 
@@ -111,21 +135,21 @@ public static class ManifestVerifier
             {
                 if (entry.TryGetProperty("simpleName", out var snEl) && snEl.ValueKind == JsonValueKind.String && snEl.GetString()!.Length > 0)
                     simple = snEl.GetString()!;
-                else { Console.Error.WriteLine($"FAIL {name}: a v2 symbol needs a simpleName"); fail++; continue; }
+                else { Err.WriteLine($"FAIL {name}: a v2 symbol needs a simpleName"); fail++; continue; }
             }
             // A ctor shares its class's name, so its sites must name it outside a dtor's `~Cls`.
             bool ctor = v2 && entry.TryGetProperty("kind", out var kEl) && kEl.GetString() == "ctor";
             if (!entry.TryGetProperty("def", out var defEl) || defEl.ValueKind != JsonValueKind.String)
-            { Console.Error.WriteLine($"FAIL def {name}: no def site"); fail++; }
+            { Err.WriteLine($"FAIL def {name}: no def site"); fail++; }
             else if (SiteHasToken(paths, lineCache, defEl.GetString()!, simple ?? name, out string why, wholeWord: v2, notAfterTilde: ctor)) defsOk++;
-            else { Console.Error.WriteLine($"FAIL def {name}: {why}"); fail++; }
+            else { Err.WriteLine($"FAIL def {name}: {why}"); fail++; }
 
             // each ref site contains the symbol token.
             if (entry.TryGetProperty("refs", out var refsEl))
                 foreach (var r in refsEl.EnumerateArray())
                 {
                     if (SiteHasToken(paths, lineCache, ManifestReader.Str(r), simple ?? name, out string why, wholeWord: v2, notAfterTilde: ctor)) refsOk++;
-                    else { Console.Error.WriteLine($"FAIL ref {name} @ {r.GetString()}: {why}"); fail++; }
+                    else { Err.WriteLine($"FAIL ref {name} @ {r.GetString()}: {why}"); fail++; }
                 }
 
             // edges point at symbols that exist (the func_i -> func_{i-1} chain is intact).
@@ -134,7 +158,7 @@ public static class ManifestVerifier
                 {
                     string target = ManifestReader.Str(e);
                     if (names.Contains(target)) edgesOk++;
-                    else { Console.Error.WriteLine($"FAIL edge {name} -> {target}: target symbol missing"); fail++; }
+                    else { Err.WriteLine($"FAIL edge {name} -> {target}: target symbol missing"); fail++; }
                 }
 
             // indirectEdges: a resolved target must be a declared symbol; an unresolved (external) target must
@@ -146,9 +170,9 @@ public static class ManifestVerifier
                     bool resolved = !ie.TryGetProperty("resolved", out var rv) || rv.ValueKind != JsonValueKind.False;
                     bool present = names.Contains(target);
                     if (resolved && !present)
-                    { Console.Error.WriteLine($"FAIL indirect {name} -> {target}: resolved target is not a declared symbol"); fail++; }
+                    { Err.WriteLine($"FAIL indirect {name} -> {target}: resolved target is not a declared symbol"); fail++; }
                     else if (!resolved && present)
-                    { Console.Error.WriteLine($"FAIL indirect {name} -> {target}: unresolved target must not be a declared symbol"); fail++; }
+                    { Err.WriteLine($"FAIL indirect {name} -> {target}: unresolved target must not be a declared symbol"); fail++; }
                     else indirectOk++;
                 }
 
@@ -158,14 +182,14 @@ public static class ManifestVerifier
                 {
                     string site = ManifestReader.Str(u);
                     if (!SiteHasToken(paths, lineCache, site, name, out string why))
-                    { Console.Error.WriteLine($"FAIL gated {name} @ {site}: {why}"); fail++; continue; }
+                    { Err.WriteLine($"FAIL gated {name} @ {site}: {why}"); fail++; continue; }
 
                     string file = paths.Resolve(site[..site.LastIndexOf(':')])!;   // SiteHasToken resolved it
                     string text = File.ReadAllText(file);
                     if (!text.Contains("#ifdef VENDOR_OK"))
-                    { Console.Error.WriteLine($"FAIL gated {name} @ {site}: not behind #ifdef VENDOR_OK"); fail++; continue; }
+                    { Err.WriteLine($"FAIL gated {name} @ {site}: not behind #ifdef VENDOR_OK"); fail++; continue; }
                     if (anyVendorHeaderPresent)
-                    { Console.Error.WriteLine($"FAIL gated {name}: a VENDOR_missing_*.h header exists in the tree"); fail++; continue; }
+                    { Err.WriteLine($"FAIL gated {name}: a VENDOR_missing_*.h header exists in the tree"); fail++; continue; }
                     gatedOk++;
                 }
         }
@@ -176,21 +200,24 @@ public static class ManifestVerifier
             foreach (var grp in dgEl.EnumerateObject())
             {
                 string gname = grp.Name;
-                if (!grp.Value.TryGetProperty("sha256", out var shaEl) || shaEl.GetString() is not { } sha ||
-                    !grp.Value.TryGetProperty("paths", out var pathsEl) || pathsEl.ValueKind != JsonValueKind.Array)
-                { Console.Error.WriteLine($"FAIL dup {gname}: malformed group (need sha256 + paths[])"); fail++; continue; }
+                if (grp.Value.ValueKind != JsonValueKind.Object
+                    || !grp.Value.TryGetProperty("sha256", out var shaEl) || shaEl.ValueKind != JsonValueKind.String
+                    || !grp.Value.TryGetProperty("paths", out var pathsEl) || pathsEl.ValueKind != JsonValueKind.Array
+                    || grp.Value.TryGetProperty("nearVariants", out var nvEl) && nvEl.ValueKind != JsonValueKind.Array)
+                { Err.WriteLine($"FAIL dup {gname}: malformed group (need sha256 + paths[], nearVariants[] optional)"); fail++; continue; }
+                string sha = shaEl.GetString()!;
                 foreach (var p in pathsEl.EnumerateArray())
                 {
                     if (FileSha(paths, ManifestReader.Str(p), out string got, out string why) && got == sha) dupOk++;
-                    else { Console.Error.WriteLine($"FAIL dup {gname} @ {p.GetString()}: {(why.Length > 0 ? why : $"hash {got} != {sha}")}"); fail++; }
+                    else { Err.WriteLine($"FAIL dup {gname} @ {p.GetString()}: {(why.Length > 0 ? why : $"hash {got} != {sha}")}"); fail++; }
                 }
                 if (grp.Value.TryGetProperty("nearVariants", out var nvs))
                     foreach (var nv in nvs.EnumerateArray())
                     {
                         if (!FileSha(paths, ManifestReader.Str(nv), out string got, out string why))
-                        { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: {why}"); fail++; }
+                        { Err.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: {why}"); fail++; }
                         else if (got == sha)
-                        { Console.Error.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: identical to group (should differ)"); fail++; }
+                        { Err.WriteLine($"FAIL dup-near {gname} @ {nv.GetString()}: identical to group (should differ)"); fail++; }
                     }
             }
 
@@ -201,7 +228,7 @@ public static class ManifestVerifier
             var parsed = ManifestReader.Load(manifestPath, maxVersion: 2);
             string got = IndirectDigest.Compute(parsed.Symbols, parsed.Roots);
             if (got == declaredIts) Console.WriteLine("  OK  _meta.indirectTruthSha reproduces");
-            else { Console.Error.WriteLine($"FAIL indirectTruthSha: manifest {declaredIts}, recomputed {got}"); fail++; }
+            else { Err.WriteLine($"FAIL indirectTruthSha: manifest {declaredIts}, recomputed {got}"); fail++; }
         }
 
         // cppTruthSha (v2): required, and recomputed from the manifest like indirectTruthSha.
@@ -212,47 +239,74 @@ public static class ManifestVerifier
                 var parsed = ManifestReader.Load(manifestPath, maxVersion: 2);
                 string got = CppDigest.Compute(parsed.Symbols, parsed.StaticInitRoots);
                 if (got == declaredCts) Console.WriteLine("  OK  _meta.cppTruthSha reproduces");
-                else { Console.Error.WriteLine($"FAIL cppTruthSha: manifest {declaredCts}, recomputed {got}"); fail++; }
+                else { Err.WriteLine($"FAIL cppTruthSha: manifest {declaredCts}, recomputed {got}"); fail++; }
             }
-            else { Console.Error.WriteLine("FAIL cppTruthSha: a v2 manifest must carry _meta.cppTruthSha"); fail++; }
+            else { Err.WriteLine("FAIL cppTruthSha: a v2 manifest must carry _meta.cppTruthSha"); fail++; }
         }
 
         Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges" +
                           (v2 ? $", {cppOk} C++ facts" : ""));
         // A manifest that declares nothing checkable used to PASS, having proved nothing.
         if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk + cppOk == 0)
-        { Console.Error.WriteLine("error: the manifest declares nothing to check (no symbol sites, dup groups or indirect edges)"); return 2; }
+        { Err.WriteLine("error: the manifest declares nothing to check (no symbol sites, dup groups or indirect edges)"); return 2; }
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
-        Console.Error.WriteLine($"verify: FAIL ({fail} problem(s))");
+        Err.WriteLine($"verify: FAIL ({fail} problem(s))");
         return 1;
     }
 
     private static readonly HashSet<string> CppKinds = new(StringComparer.Ordinal) { "function", "method", "ctor", "dtor", "template", "instance", "class" };
+
+    /// <summary>The first object key (as a path) that appears twice anywhere under <paramref name="e"/>, or null.</summary>
+    internal static string? DuplicateKey(JsonElement e, string at)
+    {
+        if (e.ValueKind == JsonValueKind.Object)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in e.EnumerateObject())
+            {
+                string here = at.Length == 0 ? $"'{p.Name}'" : $"{at}.'{p.Name}'";
+                if (!seen.Add(p.Name)) return here;
+                if (DuplicateKey(p.Value, here) is { } d) return d;
+            }
+        }
+        else if (e.ValueKind == JsonValueKind.Array)
+        {
+            int i = 0;
+            foreach (var x in e.EnumerateArray()) if (DuplicateKey(x, $"{at}[{i++}]") is { } d) return d;
+        }
+        return null;
+    }
+
+    /// <summary>The _meta scalars every reader takes (both versions): a wrong type is bad input up front, not an
+    /// exception after the checks have printed.</summary>
+    internal static string? MetaShapeError(JsonElement meta)
+    {
+        if (meta.TryGetProperty("seed", out var s) && !(s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out _)))
+            return $"_meta.seed {s.GetRawText()} is not a 32-bit integer";
+        foreach (var k in new[] { "generatorVersion", "corpusRoot", "indirectTruthSha", "cppTruthSha" })
+            if (meta.TryGetProperty(k, out var v) && v.ValueKind != JsonValueKind.String) return $"_meta.{k} must be a string";
+        return null;
+    }
 
     /// <summary>
     /// The shape of a v2 manifest: every field the C++ checks read has the type the schema gives it, symbol and class
     /// names are unique, and the v1-only C fields are absent. A wrong shape is bad input (exit 2), like invalid JSON:
     /// a string where an array belongs must not be skipped as if the field were empty.
     /// </summary>
-    internal static string? CppShapeError(JsonElement meta, JsonElement symbols)
+    internal static string? CppShapeError(JsonElement root, JsonElement meta, JsonElement symbols)
     {
         static bool Strs(JsonElement e) => e.ValueKind == JsonValueKind.Array && e.EnumerateArray().All(x => x.ValueKind == JsonValueKind.String);
         static bool Bool(JsonElement e) => e.ValueKind is JsonValueKind.True or JsonValueKind.False;
-        static string? Dup(JsonElement obj, string what)
-        {
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var p in obj.EnumerateObject()) if (!seen.Add(p.Name)) return $"{what} '{p.Name}' appears twice";
-            return null;
-        }
 
+        // (Duplicate keys, anywhere in the manifest, are refused before this runs.)
         if (!meta.TryGetProperty("classes", out var cls) || cls.ValueKind != JsonValueKind.Object) return "_meta.classes must be an object";
-        if (Dup(cls, "_meta.classes key") is { } d1) return d1;
         foreach (var c in cls.EnumerateObject()) if (!Strs(c.Value)) return $"_meta.classes['{c.Name}'] must be an array of strings";
         foreach (var k in new[] { "roots", "staticInitRoots" })
             if (meta.TryGetProperty(k, out var a) && !Strs(a)) return $"_meta.{k} must be an array of strings";
         foreach (var k in new[] { "lang", "cppTruthSha" })
             if (meta.TryGetProperty(k, out var a) && a.ValueKind != JsonValueKind.String) return $"_meta.{k} must be a string";
-        if (Dup(symbols, "symbol") is { } d2) return d2;
+        if (root.TryGetProperty("dupGroups", out _)) return "'dupGroups' is a v1 (C) field";
+        if (meta.TryGetProperty("indirectTruthSha", out _)) return "_meta.indirectTruthSha is a v1 (C) field";
 
         foreach (var s in symbols.EnumerateObject())
         {
@@ -261,7 +315,8 @@ public static class ManifestVerifier
             if (e.ValueKind != JsonValueKind.Object) return $"{at} must be an object";
             foreach (var k in new[] { "unreachableRefs", "indirectEdges", "expectedMiss", "bytes" })
                 if (e.TryGetProperty(k, out _)) return $"{at}: '{k}' is a v1 (C) field";
-            foreach (var k in new[] { "def", "kind", "simpleName", "instanceOf" })
+            if (!e.TryGetProperty("def", out var df) || df.ValueKind != JsonValueKind.String) return $"{at} needs a string 'def'";
+            foreach (var k in new[] { "kind", "simpleName", "instanceOf" })
                 if (e.TryGetProperty(k, out var v) && v.ValueKind != JsonValueKind.String) return $"{at}: '{k}' must be a string";
             if (e.TryGetProperty("pure", out var pu) && !Bool(pu)) return $"{at}: 'pure' must be a boolean";
             foreach (var k in new[] { "refs", "edges", "implicitEdges" })
@@ -292,6 +347,12 @@ public static class ManifestVerifier
     private static readonly Regex CanonicalSite = new(@"^(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*:[1-9][0-9]*$", RegexOptions.Compiled);
     private static readonly Regex ClassLine = new(@"^class (\w+)( final)?(?: : (public [\w:]+(?:, public [\w:]+)*))? \{$", RegexOptions.Compiled);
     private static readonly Regex TemplateArgs = new("<[^<>]*>", RegexOptions.Compiled);
+    // The generated program's line shapes. A declaration (no body): `void m_1();`, `virtual void m_1() override;`,
+    // `Cls_3();`, `~Cls_3();` (calls are always qualified or through a pointer, so never look like these). A
+    // definition: a function, method, ctor or dtor body opening on its line, a `class` line, or a pure `= 0;`
+    // (`int main()` is not a symbol, so not one).
+    private static readonly Regex DeclLine = new(@"^\s*(?:(?:virtual )?void \w+\(\)(?: override)?(?: final)?|~?\w+\(\));$", RegexOptions.Compiled);
+    private static readonly Regex DefLine = new(@"^(?:\s*(?:virtual )?void [\w:~]+\(.*\)(?: override)?(?: final)? \{|\s*(?:\w+::)?~?\w+\(\) \{|class \w+.* \{|\s*virtual void \w+\(\) = 0;)$", RegexOptions.Compiled);
 
     /// <summary>
     /// The C++ (v2) facts, D9 of docs/cpp-profile-design.md, checked against the manifest and the source (the shape is
@@ -302,13 +363,17 @@ public static class ManifestVerifier
     /// points at the right kind (implicit: ctor/dtor, member pointer: method, staticInitRoots: ctor/dtor, instanceOf:
     /// template). Each virtual record: static is a method, cha is exactly the non-pure overrides below some receiver
     /// class at or below static's class that resolves the call to static, and rta is within cha (rta's own exactness
-    /// needs the program's constructions, so the digest and the tests carry it). Returns the failure count.
+    /// needs the program's constructions; verify does not check it). Sites: a def is a definition line in its
+    /// owner's files (a member's in its class's .hpp/.cpp, a function's outside every class and template file), no
+    /// site is a declaration (the rt/*.hpp prototypes, an in-class declaration), and a ref is never another symbol's
+    /// def line (a class symbol, a type use, is exempt). Completeness: every definition line under cpp/ is some
+    /// symbol's def, so a deleted symbol fails. Edges never target a class or a template. Returns the failure count.
     /// </summary>
-    private static int CheckCpp(JsonElement meta, JsonElement symbols, HashSet<string> names, ref int ok,
+    private static int CheckCpp(string corpus, JsonElement meta, JsonElement symbols, HashSet<string> names, ref int ok,
         Generation.Containment paths, Dictionary<string, string[]> cache)
     {
         int fail = 0;
-        void Fail(string m) { Console.Error.WriteLine("FAIL " + m); fail++; }
+        void Fail(string m) { Err.WriteLine("FAIL " + m); fail++; }
         string? LineAt(string site) => TryReadLine(paths, cache, site, out string t, out _, out _) ? t.Trim() : null;
         static string Strip(string key) => TemplateArgs.Replace(key, "");
         static string Owner(string key) { key = Strip(key); int i = key.LastIndexOf("::", StringComparison.Ordinal); return i < 0 ? "" : key[..i]; }
@@ -325,7 +390,7 @@ public static class ManifestVerifier
         bool hierarchyOk = true;
         foreach (var (c, bs) in bases)
             foreach (var b in bs.Where(b => !bases.ContainsKey(b))) { Fail($"_meta.classes: {c}'s base {b} is not a class"); hierarchyOk = false; }
-        // Topological order (Kahn), bases first; whatever is left over sits on a cycle.
+        // Topological order (Kahn), bases first; whatever is left over sits on a cycle or below one.
         var children = bases.Keys.ToDictionary(c => c, _ => new List<string>(), StringComparer.Ordinal);
         var pending = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var (c, bs) in bases)
@@ -343,7 +408,12 @@ public static class ManifestVerifier
         }
         if (topo.Count < bases.Count)
         {
-            Fail($"_meta.classes: an inheritance cycle through {bases.Keys.First(c => pending[c] > 0)}");
+            // A left-over class still waits on a left-over base, so walking up through those must repeat: the repeated
+            // stretch is the cycle.
+            var path = new List<string> { bases.Keys.First(c => pending[c] > 0) };
+            while (path.IndexOf(path[^1]) == path.Count - 1)
+                path.Add(bases[path[^1]].First(b => bases.ContainsKey(b) && pending[b] > 0));
+            Fail($"_meta.classes: an inheritance cycle {string.Join(" -> ", path.Skip(path.IndexOf(path[^1])))}");
             hierarchyOk = false;
         }
         else ok++;
@@ -351,6 +421,19 @@ public static class ManifestVerifier
         var kind = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var s in symbols.EnumerateObject()) kind[s.Name] = Prop(s.Value, "kind");
         foreach (var c in bases.Keys.Where(c => !names.Contains(c) || kind[c] != "class")) Fail($"_meta.classes: {c} is not a class symbol");
+
+        // Where definitions live: every def site, and each class's file stem (cpp/ns_1/cls_4 for cls_4.hpp/.cpp).
+        static string FileOf(string site) => site[..Math.Max(0, site.LastIndexOf(':'))];
+        static string StemOf(string file) { int i = file.LastIndexOf('.'); return i > file.LastIndexOf('/') ? file[..i] : file; }
+        var allDefs = new HashSet<string>(StringComparer.Ordinal);
+        var classStem = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in symbols.EnumerateObject())
+            if (Prop(s.Value, "def") is { } d)
+            {
+                allDefs.Add(d);
+                if (kind[s.Name] == "class") classStem[s.Name] = StemOf(FileOf(d));
+            }
+        var classStems = classStem.Values.ToHashSet(StringComparer.Ordinal);
 
         // --- per symbol ---
         var defOwner = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -403,6 +486,27 @@ public static class ManifestVerifier
             if (def is not null && refs.Contains(def)) Fail($"{name}: its def {def} is listed as a ref");
             if (refs.Count != refs.Distinct().Count()) Fail($"{name}: a ref is listed twice");
 
+            // Where the sites sit. A class symbol's name is a type use on any line, declarations included.
+            if (k != "class" && def is not null)
+            {
+                bool placed = true;
+                foreach (var site in refs.Prepend(def))
+                    if (FileOf(site).StartsWith("cpp/rt/", StringComparison.Ordinal) && FileOf(site).EndsWith(".hpp", StringComparison.Ordinal)
+                        || LineAt(site) is { } sl && DeclLine.IsMatch(sl))
+                    { Fail($"{name}: site {site} is a declaration, neither a def nor a ref"); placed = false; }
+                foreach (var site in refs.Where(allDefs.Contains))
+                { Fail($"{name}: ref {site} is a definition line (a def, not a call or use)"); placed = false; }
+                string defStem = StemOf(FileOf(def));
+                if (LineAt(def) is { } dl2 && !DefLine.IsMatch(dl2)) { Fail($"{name}: def {def} is not a definition line"); placed = false; }
+                if (k is "method" or "ctor" or "dtor" && classStem.TryGetValue(own, out var cs) && defStem != cs)
+                { Fail($"{name}: def {def} is outside its class's files ({cs}.hpp/.cpp)"); placed = false; }
+                if (k == "function" && (classStems.Contains(defStem) || def.StartsWith("cpp/tmpl/", StringComparison.Ordinal)))
+                { Fail($"{name}: a function's def {def} sits in a class or template file"); placed = false; }
+                if (placed) ok++;
+            }
+            foreach (var t in Arr(e, "edges").Where(t => names.Contains(t) && kind[t] is "class" or "template"))
+                Fail($"edge {name} -> {t}: a call targets a function, method, ctor, dtor or instance, not a {kind[t]}");
+
             // pure: exactly the methods declared `= 0;`.
             bool isPure = e.TryGetProperty("pure", out var pu) && pu.ValueKind == JsonValueKind.True;
             bool declaresPure = def is not null && LineAt(def) is { } dl && dl.EndsWith("= 0;", StringComparison.Ordinal);
@@ -444,6 +548,37 @@ public static class ManifestVerifier
                 }
         }
 
+        // Completeness: every definition line in the program is some symbol's def (main excepted: not a symbol).
+        int missing = 0;
+        string cppDir = Path.Combine(corpus, "cpp");
+        if (Directory.Exists(cppDir))
+            foreach (var file in Directory.EnumerateFiles(cppDir, "*", NoLinks).Order(StringComparer.Ordinal))
+            {
+                string rel = Path.GetRelativePath(corpus, file).Replace('\\', '/');
+                int n = 0;
+                foreach (var line in File.ReadLines(file))
+                {
+                    n++;
+                    if (!DefLine.IsMatch(line) || allDefs.Contains($"{rel}:{n}")) continue;
+                    if (++missing <= 20) Fail($"{rel}:{n} defines something no symbol's def names: {line.Trim()}");
+                }
+            }
+        if (missing > 20) Fail($"... {missing - 20} more definition lines no symbol's def names");
+        else if (missing == 0) ok++;
+
+        // No list names a target twice (the generator dedups; a reader counting edges would count one twice).
+        foreach (var s in symbols.EnumerateObject())
+        {
+            foreach (var key in new[] { "edges", "implicitEdges" })
+                if (Arr(s.Value, key) is var l && l.Count != l.Distinct().Count()) Fail($"{s.Name}: a target is listed twice in {key}");
+            if (s.Value.TryGetProperty("memberPtrEdges", out var mpe)
+                && mpe.EnumerateArray().Select(m => $"{Prop(m, "target")}|{Prop(m, "via")}|{m.GetProperty("dispatched").GetRawText()}").ToList() is var mk
+                && mk.Count != mk.Distinct().Count())
+                Fail($"{s.Name}: a member-pointer record is listed twice");
+        }
+        foreach (var key in new[] { "roots", "staticInitRoots" })
+            if (Arr(meta, key) is var l && l.Count != l.Distinct().Count()) Fail($"_meta.{key}: an entry is listed twice");
+
         foreach (var r in Arr(meta, "staticInitRoots"))
         {
             if (!names.Contains(r)) Fail($"staticInitRoot '{r}': not a declared symbol");
@@ -454,17 +589,20 @@ public static class ManifestVerifier
         // --- virtual records ---
         // Resolve(c, n): the method a call of n through class c reaches: c's own, else the first base (in order, depth
         // first) that has one; a class's bases never share a name, so the order is unambiguous. Walked with a stack,
-        // so a tall (hand-made) chain cannot overflow. Overrides(r, n): what cha is for a receiver r.
+        // so a tall (hand-made) chain cannot overflow, visiting each class once, so a lattice of diamonds stays linear
+        // (a class reached again had nothing the first time). Overrides(r, n): what cha is for a receiver r.
         var resolved = new Dictionary<(string, string), string?>();
         string? Resolve(string c, string n)
         {
             if (resolved.TryGetValue((c, n), out var hit)) return hit;
             string? got = null;
             var stack = new Stack<string>();
+            var visited = new HashSet<string>(StringComparer.Ordinal);
             stack.Push(c);
             while (stack.Count > 0 && got is null)
             {
                 var x = stack.Pop();
+                if (!visited.Add(x)) continue;
                 if (methodsOf.TryGetValue(x, out var ms) && ms.TryGetValue(n, out var own)) got = own;
                 else for (int i = bases[x].Count - 1; i >= 0; i--) stack.Push(bases[x][i]);
             }

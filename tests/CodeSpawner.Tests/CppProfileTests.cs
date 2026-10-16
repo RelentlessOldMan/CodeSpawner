@@ -36,6 +36,14 @@ public class CppProfileTests
     private static int Verify(string corpus, string manifest) =>
         ManifestVerifier.Run(new VerifyOptions { Corpus = corpus, Manifest = manifest });
 
+    // Verify, with what it wrote to stderr (captured for this call only, not via the process-wide Console).
+    private static (int code, string err) VerifyErr(string corpus, string manifest)
+    {
+        var err = new StringWriter();
+        int code = ManifestVerifier.Run(new VerifyOptions { Corpus = corpus, Manifest = manifest }, err);
+        return (code, err.ToString());
+    }
+
     // ---------- knobs ----------
 
     [Fact]
@@ -74,6 +82,9 @@ public class CppProfileTests
     [InlineData("--lang", "cpp", "--oracle-fanout", "2", "--oracle-shared-leaves", "1000001")]
     [InlineData("--lang", "cpp", "--oracle-chain", "1000000", "--oracle-reachable-frac", "0.01")]   // ~100M free functions
     [InlineData("--lang", "cpp", "--oracle-chain", "1900000")]                                     // over the range, and the cap
+    [InlineData("--lang", "cpp", "--oracle-chain", "1000000", "--oracle-fanout", "2", "--oracle-shared-leaves", "1000000")]   // the cap counts shared leaves
+    [InlineData("--lang", "cpp", "--cpp-static-init", "10001")]
+    [InlineData("--lang", "cpp", "--oracle-shared-leaves", "2")]       // shapes the fanout DAG only
     public void BadKnobs_AreRefused(params string[] args)
         => Assert.Throws<ArgException>(() => ArgParser.ParseGen(new[] { "--out", "x" }.Concat(args).ToArray()));
 
@@ -86,6 +97,7 @@ public class CppProfileTests
     [InlineData("--cpp-classes", "100000")]
     [InlineData("--cpp-instantiated-frac", "0")]
     [InlineData("--cpp-static-init", "0")]
+    [InlineData("--cpp-static-init", "10000")]
     [InlineData("--oracle-fanout", "3", "--oracle-shared-leaves", "10")]
     [InlineData("--oracle-chain", "1000000")]
     [InlineData("--oracle-chain", "1000000", "--oracle-reachable-frac", "0.5")]
@@ -128,6 +140,7 @@ public class CppProfileTests
         Assert.Contains(p.Classes.SelectMany(c => c.Methods), f => f.Pure);           // abstract class
         Assert.Contains(syms.Values, s => s.Pure && s.Kind == "method");               // ... marked in the manifest
         Assert.Contains(p.Classes, c => c.Final);
+        Assert.Contains(p.Classes, c => !c.Abstract && !t.Live.Contains(c));      // a concrete class live code never builds
         Assert.Contains(p.Classes, c => c.Base is not null && c.Mixin is not null);  // multiple inheritance
         Assert.Contains(p.Classes, c => c.Depth >= 2);
         Assert.NotEmpty(m.StaticInitRoots);
@@ -305,42 +318,60 @@ public class CppProfileTests
         syms.First(kv => pred(kv.Value!.AsObject())).Key;
 
     [Theory]
-    [InlineData("chaUnrelated")]      // a cha target that does not override static
-    [InlineData("rtaNotInCha")]
-    [InlineData("staticNotMethod")]
-    [InlineData("instanceOfNotTemplate")]
-    [InlineData("badKind")]
-    [InlineData("noSimpleName")]
-    [InlineData("implicitMissing")]
-    [InlineData("memberPtrMissing")]
-    [InlineData("memberPtrVia")]
-    [InlineData("staticInitMissing")]
-    [InlineData("refWrongLine")]
-    [InlineData("defWrongWord")]
-    [InlineData("shaDrift")]
-    [InlineData("shaMissing")]
-    [InlineData("rtaDropped")]        // only the digest catches a quietly shrunk rta
-    [InlineData("pureOnBody")]        // pure claimed for a method that has a body
-    [InlineData("pureOnFunction")]
-    [InlineData("classWithEdge")]     // a class symbol is a def + refs only
-    [InlineData("classNotInMeta")]
-    [InlineData("classRefWrongLine")]
-    [InlineData("chaPure")]           // a pure method has no body to dispatch to
-    [InlineData("chaIncomplete")]     // an override quietly dropped from cha (re-sealed: only the exact-cha check sees it)
-    [InlineData("chaSameName")]       // an unrelated class's method of the same simple name
-    [InlineData("classesFakeBase")]   // _meta.classes names a base the class line does not
-    [InlineData("classesCycle")]      // must FAIL, not hang
-    [InlineData("simpleNameRetarget")]
-    [InlineData("defInRefs")]
-    [InlineData("ctorDefAtClassLine")]
-    [InlineData("ctorRefAtDtor")]     // `~Cls_N` does not name the ctor
-    [InlineData("instanceOfOnFunction")]
-    [InlineData("pureMissing")]
-    [InlineData("staticInitMethod")]
-    [InlineData("implicitMethod")]
-    [InlineData("dupRef")]
-    [InlineData("siteNotCanonical")]
-    public void Verify_FailsTampering(string how)
+    [InlineData("chaUnrelated", "cha is not the set of non-pure overrides")]      // a cha target that does not override static
+    [InlineData("rtaNotInCha", "is not in cha")]
+    [InlineData("staticNotMethod", "static is not a declared method")]
+    [InlineData("instanceOfNotTemplate", "is not a declared template")]
+    [InlineData("badKind", "is not one of")]
+    [InlineData("noSimpleName", "a v2 symbol needs a simpleName")]
+    [InlineData("implicitMissing", "target symbol missing")]
+    [InlineData("memberPtrMissing", "target symbol missing")]
+    [InlineData("memberPtrVia", "is not table|arg")]
+    [InlineData("staticInitMissing", "not a declared symbol")]
+    [InlineData("refWrongLine", "FAIL ref ")]
+    [InlineData("defWrongWord", "is not the key's last name")]
+    [InlineData("shaDrift", "FAIL cppTruthSha")]
+    [InlineData("shaMissing", "cppTruthSha")]
+    [InlineData("rtaDropped", "FAIL cppTruthSha")]        // only the digest catches a quietly shrunk rta
+    [InlineData("pureOnBody", "is not a '= 0;' declaration")]        // pure claimed for a method that has a body
+    [InlineData("pureOnFunction", "only a method can be pure")]
+    [InlineData("classWithEdge", "a class symbol has no edges")]     // a class symbol is a def + refs only
+    [InlineData("classNotInMeta", "does not fit its key")]
+    [InlineData("classRefWrongLine", "FAIL ref ")]
+    [InlineData("chaPure", "is pure (no body to dispatch to)")]           // a pure method has no body to dispatch to
+    [InlineData("chaIncomplete", "cha is not the set of non-pure overrides")]     // an override quietly dropped from cha (re-sealed: only the exact-cha check sees it)
+    [InlineData("chaSameName", "cha is not the set of non-pure overrides")]       // an unrelated class's method of the same simple name
+    [InlineData("classesFakeBase", "are not the ones its class line names")]   // _meta.classes names a base the class line does not
+    [InlineData("classesCycle", "an inheritance cycle")]      // must FAIL, not hang
+    [InlineData("simpleNameRetarget", "is not the key's last name")]
+    [InlineData("defInRefs", "is listed as a ref")]
+    [InlineData("ctorDefAtClassLine", "is also the def of")]
+    [InlineData("ctorRefAtDtor", "FAIL ref ")]     // `~Cls_N` does not name the ctor
+    [InlineData("instanceOfOnFunction", "only an instance has instanceOf")]
+    [InlineData("pureMissing", "but it is not marked pure")]
+    [InlineData("staticInitMethod", "a static object's root is its ctor or dtor")]
+    [InlineData("implicitMethod", "an implicit call targets a ctor or dtor")]
+    [InlineData("dupRef", "a ref is listed twice")]
+    [InlineData("siteNotCanonical", "is not canonical")]
+    [InlineData("symbolDeleted", "defines something no symbol's def names")]     // a function dropped from the manifest, and from every edge into it
+    [InlineData("classDeleted", "defines something no symbol's def names")]      // a leaf class dropped from the symbols and _meta.classes, with its members
+    [InlineData("edgeToClass", "not a class")]       // a call is to a function or member, not a type
+    [InlineData("edgeToTemplate", "not a template")]    // ... nor a template (its instances are what is called)
+    [InlineData("refOnOverrideDef", "is a definition line (a def, not a call or use)")]  // an override's def line names the overridden method, but is no call of it
+    [InlineData("defsSwapped", "is outside its class's files")]       // two same-name methods' defs swapped: each now in the other class's files
+    [InlineData("ctorRefAtOutOfClassDtor", "is a definition line (a def, not a call or use)")] // `Cls_N::~Cls_N() {`: the qualifier names the class, not a ctor call
+    [InlineData("refOnPrototype", "is a declaration, neither a def nor a ref")]    // rt/free.hpp declares a function; no call is there
+    [InlineData("refOnInClassDecl", "is a declaration, neither a def nor a ref")]  // `void m_N();` in the class body declares an out-of-class method
+    [InlineData("defOnInClassDecl", "is a declaration, neither a def nor a ref")]
+    [InlineData("classesBaseOrder", "are not the ones its class line names")]   // a two-base class's bases reversed
+    [InlineData("ctorAsDtor", "does not fit its key")]   // a valid kind, but not the one its key names
+    [InlineData("instanceDefMoved", "is not its template's def")]
+    [InlineData("memberPtrToFunction", "a member pointer targets a method, not a function")]
+    [InlineData("dupEdge", "a target is listed twice in edges")]   // the generator dedups every list
+    [InlineData("dupImplicit", "a target is listed twice in implicitEdges")]
+    [InlineData("dupMemberPtr", "a member-pointer record is listed twice")]
+    [InlineData("dupStaticInit", "_meta.staticInitRoots: an entry is listed twice")]
+    public void Verify_FailsTampering(string how, string expect)
     {
         using var tmp = new TempDir();
         var (c, mp) = Gen(tmp);
@@ -349,13 +380,32 @@ public class CppProfileTests
         var syms = root["symbols"]!.AsObject();
         JsonObject Ve() => syms.Select(kv => kv.Value!["virtualEdges"]).OfType<JsonArray>().SelectMany(a => a)
             .Select(v => v!.AsObject()).First(v => v["rta"]!.AsArray().Count > 0 && v["cha"]!.AsArray().Count > v["rta"]!.AsArray().Count);
+        // Remove a symbol and every mention of it, so only the program's own lines still show it was there.
+        void Drop(string name)
+        {
+            syms.Remove(name);
+            static void Strip(JsonArray? a, string name) { if (a is not null) for (int i = a.Count - 1; i >= 0; i--) if ((string?)a[i] == name) a.RemoveAt(i); }
+            Strip(meta["roots"] as JsonArray, name);
+            Strip(meta["staticInitRoots"] as JsonArray, name);
+            foreach (var o in syms.Select(kv => kv.Value!.AsObject()))
+            {
+                Strip(o["edges"] as JsonArray, name);
+                Strip(o["implicitEdges"] as JsonArray, name);
+                if (o["virtualEdges"] is JsonArray ve)
+                    for (int i = ve.Count - 1; i >= 0; i--)
+                        if ((string)ve[i]!["static"]! == name) ve.RemoveAt(i);
+                        else { Strip(ve[i]!["cha"] as JsonArray, name); Strip(ve[i]!["rta"] as JsonArray, name); }
+                if (o["memberPtrEdges"] is JsonArray mp)
+                    for (int i = mp.Count - 1; i >= 0; i--) if ((string)mp[i]!["target"]! == name) mp.RemoveAt(i);
+            }
+        }
         switch (how)
         {
             case "chaUnrelated":
             {
                 var v = Ve();
                 string st = (string)v["static"]!;
-                string other = FirstWith(syms, s => (string?)s["kind"] == "method" && !syms[st]!["simpleName"]!.ToString().Equals((string?)s["simpleName"]));
+                string other = FirstWith(syms, s => (string?)s["kind"] == "method" && (bool?)s["pure"] != true && !syms[st]!["simpleName"]!.ToString().Equals((string?)s["simpleName"]));
                 v["cha"]!.AsArray().Add(other);
                 break;
             }
@@ -472,6 +522,93 @@ public class CppProfileTests
                 s["refs"]![0] = "./" + (string)s["refs"]![0]!;
                 break;
             }
+            case "symbolDeleted": Drop(FirstWith(syms, s => (string?)s["kind"] == "function")); break;
+            case "classDeleted":
+            {
+                var classes = meta["classes"]!.AsObject();
+                string cls = classes.Select(kv => kv.Key).First(k => !classes.Any(kv => kv.Value!.AsArray().Any(b => (string?)b == k)));
+                foreach (var m in syms.Select(kv => kv.Key).Where(k => k.StartsWith(cls + "::", StringComparison.Ordinal)).ToList()) Drop(m);
+                Drop(cls);
+                classes.Remove(cls);
+                break;
+            }
+            case "edgeToClass": syms[FirstWith(syms, s => (string?)s["kind"] == "function")]!["edges"]!.AsArray().Add(FirstWith(syms, s => (string?)s["kind"] == "class")); break;
+            case "edgeToTemplate": syms[FirstWith(syms, s => (string?)s["kind"] == "function")]!["edges"]!.AsArray().Add(FirstWith(syms, s => (string?)s["kind"] == "template")); break;
+            case "refOnOverrideDef":
+            case "defsSwapped":
+            {
+                // A virtual record whose static method has a body, and another method (an override) in its cha.
+                var (st, ov) = syms.Select(kv => kv.Value!["virtualEdges"]).OfType<JsonArray>().SelectMany(a => a).Select(r => r!.AsObject())
+                    .Where(r => (bool?)syms[(string)r["static"]!]!["pure"] != true)
+                    .Select(r => ((string)r["static"]!, r["cha"]!.AsArray().Select(x => (string)x!).FirstOrDefault(x => x != (string)r["static"]!)))
+                    .First(x => x.Item2 is not null);
+                if (how == "refOnOverrideDef") syms[st]!["refs"]!.AsArray().Add((string)syms[ov!]!["def"]!);
+                else (syms[st]!["def"], syms[ov!]!["def"]) = ((string)syms[ov!]!["def"]!, (string)syms[st]!["def"]!);
+                break;
+            }
+            case "ctorRefAtOutOfClassDtor":
+            {
+                string dtor = FirstWith(syms, s => (string?)s["kind"] == "dtor" && ((string)s["def"]!).Contains(".cpp:"));
+                int at = dtor.LastIndexOf("::~", StringComparison.Ordinal);
+                syms[dtor[..at] + "::" + dtor[(at + 3)..]]!["refs"]!.AsArray().Add((string)syms[dtor]!["def"]!);
+                break;
+            }
+            case "refOnPrototype":
+            {
+                var proto = File.ReadAllLines(Path.Combine(c, "cpp", "rt", "free.hpp"));
+                string fn = FirstWith(syms, s => (string?)s["kind"] == "function" && proto.Any(l => l.Contains($"void {(string)s["simpleName"]!}();")));
+                int line = Array.FindIndex(proto, l => l.Contains($"void {(string)syms[fn]!["simpleName"]!}();")) + 1;
+                syms[fn]!["refs"]!.AsArray().Add($"cpp/rt/free.hpp:{line}");
+                break;
+            }
+            case "refOnInClassDecl":
+            case "defOnInClassDecl":
+            {
+                // A method defined out of class (cls_N.cpp) has a `void m_N();` declaration in cls_N.hpp.
+                string m = FirstWith(syms, s => (string?)s["kind"] == "method" && ((string)s["def"]!).Contains(".cpp:"));
+                string def = (string)syms[m]!["def"]!, hpp = def[..def.LastIndexOf(".cpp:", StringComparison.Ordinal)] + ".hpp";
+                var lines = File.ReadAllLines(Path.Combine(c, hpp));
+                string sn = (string)syms[m]!["simpleName"]!;
+                int line = Array.FindIndex(lines, l => System.Text.RegularExpressions.Regex.IsMatch(l, $@"\bvoid {sn}\(\)[^{{]*;$")) + 1;
+                Assert.True(line > 0, $"{m}: no declaration in {hpp}");
+                if (how == "refOnInClassDecl") syms[m]!["refs"]!.AsArray().Add($"{hpp}:{line}");
+                else syms[m]!["def"] = $"{hpp}:{line}";
+                break;
+            }
+            case "classesBaseOrder":
+            {
+                var bs = meta["classes"]!.AsObject().First(kv => kv.Value!.AsArray().Count == 2).Value!.AsArray();
+                var (b0, b1) = ((string)bs[0]!, (string)bs[1]!);
+                (bs[0], bs[1]) = (b1, b0);
+                break;
+            }
+            case "ctorAsDtor": syms[FirstWith(syms, s => (string?)s["kind"] == "ctor")]!["kind"] = "dtor"; break;
+            case "instanceDefMoved":
+            {
+                var s = syms[FirstWith(syms, s => (string?)s["kind"] == "instance" && s["refs"]!.AsArray().Count > 0)]!;
+                s["def"] = (string)s["refs"]![0]!;
+                break;
+            }
+            case "memberPtrToFunction": syms[FirstWith(syms, s => s["memberPtrEdges"] is JsonArray)]!["memberPtrEdges"]![0]!["target"] = FirstWith(syms, s => (string?)s["kind"] == "function"); break;
+            case "dupEdge":
+            {
+                var e = syms[FirstWith(syms, s => s["edges"]!.AsArray().Count > 0)]!["edges"]!.AsArray();
+                e.Add((string)e[0]!);
+                break;
+            }
+            case "dupImplicit":
+            {
+                var e = syms[FirstWith(syms, s => s["implicitEdges"] is JsonArray)]!["implicitEdges"]!.AsArray();
+                e.Add((string)e[0]!);
+                break;
+            }
+            case "dupMemberPtr":
+            {
+                var e = syms[FirstWith(syms, s => s["memberPtrEdges"] is JsonArray)]!["memberPtrEdges"]!.AsArray();
+                e.Add(e[0]!.DeepClone());
+                break;
+            }
+            case "dupStaticInit": meta["staticInitRoots"]!.AsArray().Add((string)meta["staticInitRoots"]![0]!); break;
         }
         var jo = new JsonSerializerOptions { WriteIndented = true, TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver() };
         File.WriteAllText(mp, root.ToJsonString(jo));
@@ -482,7 +619,11 @@ public class CppProfileTests
             meta["cppTruthSha"] = CppDigest.Compute(parsed.Symbols, parsed.StaticInitRoots);
             File.WriteAllText(mp, root.ToJsonString(jo));
         }
-        Assert.NotEqual(0, Verify(c, mp));
+        // The check the case is named for is the one that fires (others may too): a failing exit alone would let a
+        // check be deleted while another one happened to catch its case.
+        var (code, err) = VerifyErr(c, mp);
+        Assert.Equal(1, code);
+        Assert.Contains(expect, err);
     }
 
     // A v2 manifest of the wrong shape is bad input (exit 2), never read as if the field were empty.
@@ -497,6 +638,21 @@ public class CppProfileTests
     [InlineData("staticInitString")]
     [InlineData("dupSymbolKey")]
     [InlineData("badVersion")]
+    [InlineData("versionString")]
+    [InlineData("metaArray")]
+    [InlineData("seedString")]
+    [InlineData("seedFraction")]
+    [InlineData("generatorVersionNumber")]
+    [InlineData("defMissing")]
+    [InlineData("dupGroupsInV2")]       // v1-only fields: a v2 reader would drop them silently
+    [InlineData("indirectShaInV2")]
+    [InlineData("dupKeyInSymbol")]      // a duplicate key anywhere: a reader that keeps the first sees another manifest
+    [InlineData("dupKeyInMeta")]
+    [InlineData("dupKeyInRecord")]
+    [InlineData("dupClassesKey")]
+    [InlineData("kindNumber")]
+    [InlineData("cppTruthShaNumber")]
+    [InlineData("staticNumber")]
     public void Verify_MalformedV2_Exits2(string how)
     {
         using var tmp = new TempDir();
@@ -516,8 +672,38 @@ public class CppProfileTests
             case "mpNoDispatched": First(s => s["memberPtrEdges"] is JsonArray)["memberPtrEdges"]![0]!.AsObject().Remove("dispatched"); break;
             case "staticInitString": meta["staticInitRoots"] = "x"; break;
             case "badVersion": meta["manifestVersion"] = 3; break;
+            case "versionString": meta["manifestVersion"] = "2"; break;
+            case "metaArray": root["_meta"] = new JsonArray(); break;
+            case "seedString": meta["seed"] = "1337"; break;
+            case "seedFraction": meta["seed"] = 1.5; break;
+            case "generatorVersionNumber": meta["generatorVersion"] = 1; break;
+            case "defMissing": First(s => (string?)s["kind"] == "function").Remove("def"); break;
+            case "dupGroupsInV2": root["dupGroups"] = new JsonObject(); break;
+            case "indirectShaInV2": meta["indirectTruthSha"] = new string('0', 64); break;
+            case "kindNumber": First(s => (string?)s["kind"] == "function")["kind"] = 5; break;
+            case "cppTruthShaNumber": meta["cppTruthSha"] = 5; break;
+            case "staticNumber": First(s => s["virtualEdges"] is JsonArray)["virtualEdges"]![0]!["static"] = 5; break;
         }
         string text = root.ToJsonString();
+        // A second copy of a key's first "key":value, right after it (JsonNode cannot hold one, so splice the text;
+        // the values spliced here are strings without a comma or brace).
+        static string Twice(string text, string key)
+        {
+            int at = text.IndexOf($"\"{key}\":", StringComparison.Ordinal);
+            int end = text.IndexOfAny(new[] { ',', '}' }, at);
+            return text.Insert(end, "," + text[at..end]);
+        }
+        if (how == "dupKeyInSymbol") text = Twice(text, "simpleName");
+        if (how == "dupKeyInMeta") text = Twice(text, "lang");
+        if (how == "dupKeyInRecord") text = Twice(text, "via");
+        if (how == "dupClassesKey")
+        {
+            // The first _meta.classes entry, twice.
+            var first = meta["classes"]!.AsObject().First();
+            string entry = $"\"{first.Key}\":{first.Value!.ToJsonString()}";
+            int at = text.IndexOf(entry, StringComparison.Ordinal);
+            text = text.Insert(at, entry + ",");
+        }
         if (how == "dupSymbolKey")
         {
             // A second copy of the first symbol, same key (JsonNode cannot hold one, so splice the text).
@@ -528,6 +714,35 @@ public class CppProfileTests
         }
         File.WriteAllText(mp, text);
         Assert.Equal(2, Verify(c, mp));
+    }
+
+    // A diamond lattice 40 deep has 2^40 paths from its bottom to its top: resolving a method through it must visit
+    // each class once, not walk every path (verify once hung here).
+    [Fact]
+    public void Verify_DiamondLattice_DoesNotHang()
+    {
+        using var tmp = new TempDir();
+        var (c, mp) = Gen(tmp);
+        var root = JsonNode.Parse(File.ReadAllText(mp))!.AsObject();
+        var cls = root["_meta"]!["classes"]!.AsObject();
+        var syms = root["symbols"]!.AsObject();
+        // A receiver R below a class with a dispatched method, whose first base is a lattice without that method
+        // (L0 -> {A0, B0} -> L1 -> ... -> L40), so resolving the call through R searches the whole lattice first.
+        var rec = syms.Select(kv => kv.Value!["virtualEdges"]).OfType<JsonArray>().SelectMany(a => a).First()!;
+        string st = (string)rec["static"]!, owner = st[..st.LastIndexOf("::", StringComparison.Ordinal)];
+        const int k = 40;
+        for (int i = 0; i < k; i++)
+        {
+            cls[$"ns_0::L{i}"] = new JsonArray($"ns_0::A{i}", $"ns_0::B{i}");
+            cls[$"ns_0::A{i}"] = new JsonArray($"ns_0::L{i + 1}");
+            cls[$"ns_0::B{i}"] = new JsonArray($"ns_0::L{i + 1}");
+        }
+        cls[$"ns_0::L{k}"] = new JsonArray();
+        cls["ns_0::R"] = new JsonArray("ns_0::L0", owner);
+        File.WriteAllText(mp, root.ToJsonString());
+        var run = Task.Run(() => Verify(c, mp));
+        Assert.True(run.Wait(TimeSpan.FromSeconds(60)), "verify did not finish within 60s");
+        Assert.NotEqual(0, run.Result);    // the lattice's classes are not symbols: a FAIL, just not a hang
     }
 
     // Whole-word matching: m_1 is not in m_10, and with notAfterTilde a ctor's name is not found inside `~Cls`.

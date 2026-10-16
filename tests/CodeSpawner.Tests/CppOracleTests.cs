@@ -367,6 +367,8 @@ public class CppOracleTests
         yield return new object[] { "big", (Action<GenOptions>)(o => { o.Seed = 9; o.CppClasses = 60; o.CppInstantiatedFrac = 1; o.OracleChain = 40; }) };
         yield return new object[] { "deep", (Action<GenOptions>)(o => { o.Seed = 4; o.CppClasses = 40; o.CppDepth = 6; o.CppMultiInherit = 0.8; }) };
         yield return new object[] { "dag", (Action<GenOptions>)(o => { o.Seed = 6; o.OracleFanout = 3; o.OracleChain = 30; o.OracleSharedLeaves = 4; o.OracleReachableFrac = 0.5; }) };
+        // Dense enough that bodies repeat a member-pointer use (the generator's dedup is what keeps the lists clean).
+        yield return new object[] { "dense", (Action<GenOptions>)(o => { o.Seed = 9; o.CppClasses = 2000; o.CppInstantiatedFrac = 1; o.OracleChain = 10; }) };
     }
 
     [Theory]
@@ -420,6 +422,10 @@ public class CppOracleTests
             var mmp = (r?.Mp ?? new()).Select(x => $"{x.Target}/{x.Via}/{x.Dispatched}");
             var tmp2 = (s["memberPtrEdges"] as JsonArray ?? new()).Select(x => $"{x!["target"]}/{x["via"]}/{(bool)x["dispatched"]!}");
             if (Sorted(mmp) != Sorted(tmp2)) bad.Add($"MP {k}: {Sorted(mmp)} vs {Sorted(tmp2)}");
+            // Sorted() compares as sets; no list may name a target twice either.
+            var lists = new List<(string, List<string>)> { ("edges", Strs(s["edges"])), ("implicitEdges", Strs(s["implicitEdges"])), ("memberPtrEdges", tmp2.ToList()) };
+            foreach (var v in s["virtualEdges"] as JsonArray ?? new()) { lists.Add(("cha", Strs(v!["cha"]))); lists.Add(("rta", Strs(v["rta"]))); }
+            foreach (var (what, l) in lists) if (l.Count != l.Distinct().Count()) bad.Add($"DUP {what} {k}");
             if ((string?)s["kind"] != "class")
             {
                 var w = refs.GetValueOrDefault(k) ?? new();
@@ -431,6 +437,8 @@ public class CppOracleTests
         }
         if (Sorted(or.Roots) != Sorted(Strs(meta["roots"]))) bad.Add($"ROOTS [{Sorted(or.Roots)}] vs [{Sorted(Strs(meta["roots"]))}]");
         if (Sorted(or.SRoots) != Sorted(Strs(meta["staticInitRoots"]))) bad.Add($"SROOTS [{Sorted(or.SRoots)}] vs [{Sorted(Strs(meta["staticInitRoots"]))}]");
+        foreach (var key in new[] { "roots", "staticInitRoots" })
+            if (Strs(meta[key]) is var l && l.Count != l.Distinct().Count()) bad.Add($"DUP {key}");
 
         // Both closures, recomputed over the manifest's own edges, against the source's.
         HashSet<string> MClosure(bool precise)
@@ -477,6 +485,98 @@ public class CppOracleTests
         Assert.Equal(or.Live.Order(StringComparer.Ordinal), t.Live.Select(c => c.Q).Order(StringComparer.Ordinal));
     }
 
+    // Wherever the dispatch-only construction is placed (a method body that constructs: nothing else does), the class
+    // it builds is live and needed a round of its own, so the solve takes at least three passes.
+    [Fact]
+    public void DispatchOnlyConstruction_AlwaysNeedsASecondRound()
+    {
+        int placed = 0;
+        for (int seed = 1; seed <= 30; seed++)
+        {
+            var p = CppProgram.Build(Opts("x", seed));
+            CppEmitter.Emit(p);
+            var built = p.Classes.SelectMany(c => c.Methods).SelectMany(m => m.Body)
+                .Where(s => s.Kind is StmtKind.ConstructLocal or StmtKind.ConstructNew).Select(s => s.Cls!).ToList();
+            if (built.Count == 0) continue;
+            placed++;
+            var t = CppTruth.Build(p);
+            Assert.True(t.Rounds >= 3, $"seed {seed}: {t.Rounds} rounds");
+            Assert.All(built, x => Assert.Contains(x, t.Live));
+        }
+        Assert.True(placed >= 15, $"placed on only {placed} of 30 seeds");
+    }
+
+    // A header includes its bases', mixin's and members' headers, so those must never loop back (the compiler would
+    // see an incomplete type). Checked on the model over many seeds and the shapes that add members.
+    [Fact]
+    public void HeaderDependencies_AreAcyclic()
+    {
+        foreach (var (classes, multi) in new[] { (12, 0.25), (40, 0.8), (3, 1.0) })
+            for (int seed = 1; seed <= 100; seed++)
+            {
+                var o = Opts("x", seed);
+                o.CppClasses = classes;
+                o.CppMultiInherit = multi;
+                var p = CppProgram.Build(o);
+                var state = new Dictionary<CppClass, int>();     // 1 on the stack, 2 done
+                bool Cyclic(CppClass c)
+                {
+                    if (state.TryGetValue(c, out int st)) return st == 1;
+                    state[c] = 1;
+                    foreach (var d in new[] { c.Base, c.Mixin }.Concat(c.Members))
+                        if (d is not null && Cyclic(d)) return true;
+                    state[c] = 2;
+                    return false;
+                }
+                Assert.False(p.Classes.Any(Cyclic), $"seed {seed}, {classes} classes: a header dependency cycle");
+            }
+    }
+
+    // Hand-built programs for rules no generated program happens to need.
+    private static CppClass HandClass(CppProgram p, string name, CppClass? b = null)
+    {
+        var c = new CppClass { Index = p.Classes.Count, Name = name, Ns = "n", Base = b };
+        c.Ctor = new CppFn { Name = name, Kind = FnKind.Ctor, Owner = c };
+        c.Dtor = new CppFn { Name = "~" + name, Kind = FnKind.Dtor, Owner = c };
+        b?.Children.Add(c);
+        p.Classes.Add(c);
+        return c;
+    }
+
+    // Membership is transitive: a static A holds a B that holds a C; nothing constructs B or C, and both are live.
+    [Fact]
+    public void Rta_MemberOfAMemberIsLive()
+    {
+        var p = new CppProgram { Root = new CppFn { Name = "root", Kind = FnKind.Free, Ns = "n" } };
+        p.Free.Add(p.Root);
+        var (a, b, c) = (HandClass(p, "A"), HandClass(p, "B"), HandClass(p, "C"));
+        a.Members.Add(b);
+        b.Members.Add(c);
+        p.StaticObjs.Add(a);
+        p.StaticInitLines.Add(2);
+        var t = CppTruth.Build(p);
+        Assert.Equal(new[] { "n::A", "n::B", "n::C" }, t.Live.Select(x => x.Q).Order(StringComparer.Ordinal));
+    }
+
+    // Two calls of one static method through different receivers can share cha but not rta (B is live, D below it is
+    // not): each keeps its own record, so neither rta is lost to the other.
+    [Fact]
+    public void VirtualRecords_DifferingOnlyInRta_AreBothKept()
+    {
+        var p = new CppProgram { Root = new CppFn { Name = "root", Kind = FnKind.Free, Ns = "n" } };
+        p.Free.Add(p.Root);
+        var b = HandClass(p, "B");
+        b.Methods.Add(new CppFn { Name = "m_0", Kind = FnKind.Method, Owner = b, Virtual = true });
+        var d = HandClass(p, "D", b);
+        p.StaticObjs.Add(b);
+        p.StaticInitLines.Add(2);
+        p.Root.Body.Add(new Stmt { Kind = StmtKind.CallVirtual, Cls = b, Method = "m_0" });
+        p.Root.Body.Add(new Stmt { Kind = StmtKind.CallVirtual, Cls = d, Method = "m_0" });
+        var m = CppTruth.Build(p).ToManifest(Opts("x", 1), "root");
+        var recs = m.Symbols["n::root"].VirtualEdges.Select(v => $"{v.Static} cha[{string.Join(",", v.Cha)}] rta[{string.Join(",", v.Rta)}]").Order().ToList();
+        Assert.Equal(new[] { "n::B::m_0 cha[n::B::m_0] rta[]", "n::B::m_0 cha[n::B::m_0] rta[n::B::m_0]" }, recs);
+    }
+
     // A class live only as a member of a base subobject: an abstract class (never a complete object) holds it, nothing
     // constructs it, and it is still live because a constructed subclass contains the base's members. Without this
     // shape the base-member rule of the RTA solve went untested (dropping it changed no generated corpus).
@@ -494,6 +594,9 @@ public class CppOracleTests
                         && holders.Any() && holders.All(kv => !or.Live.Contains(kv.Key)))
             .ToList();
         Assert.True(viaBase.Count > 0, $"seed {seed}: no class is live only through a base subobject's member");
+        // ... and its holder is an abstract class: one never built as a complete object, only as a base.
+        var p = CppProgram.Build(Opts("x", seed));
+        Assert.All(p.Classes.Where(h => h.Members.Any(m => viaBase.Contains(m.Q))), h => Assert.True(h.Abstract, $"{h.Q} holds a base-only member but is concrete"));
     }
 
     // Every whole-word occurrence of a symbol's simple name is a def or ref of some symbol with that name, and every

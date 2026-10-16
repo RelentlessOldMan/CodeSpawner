@@ -11,6 +11,45 @@ reads it.
 
 ## [Unreleased]
 
+Generated corpora are unchanged (C and C++). `verify` is stricter on hand-edited manifests.
+
+### Fixed
+- `verify` no longer hangs on a v2 manifest whose `_meta.classes` is a deep lattice of diamonds: resolving a
+  method visits each class once instead of walking every path (40 levels used to mean 2^40 paths).
+- `verify` exits 2 (bad input), not 1, for:
+  - a `_meta` that is not an object, a `seed` that is not a 32-bit integer, or a `generatorVersion` /
+    `corpusRoot` that is not a string;
+  - a duplicate key anywhere in the manifest (before 1.2.3, only symbol and class keys were checked);
+  - a v2 symbol with no `def`, and the v1-only `dupGroups` / `_meta.indirectTruthSha` in a v2 manifest;
+  - a value of the wrong JSON type anywhere the checks read.
+- `mutate` exits 2, not 1, for a non-integer `manifestVersion` or `seed`.
+- An inheritance-cycle FAIL names the classes on the cycle; it could name a class below the cycle.
+- The `gen --lang cpp` free-function cap names the `--oracle-reachable-frac` that would fit; "raise it" was
+  wrong at the default 0.
+- The C gen error for a directory where the manifest goes also suggests `--manifest=false`.
+
+### Changed
+- `verify` checks where a v2 manifest's sites sit, not just that their lines contain the name:
+  - a def is a definition line, in its class's files for a member and in no class or template file for a
+    function;
+  - no def or ref is a declaration (the `cpp/rt/*.hpp` prototypes, an in-class declaration);
+  - no ref is a definition line (an override's def, or `Cls::~Cls() {` as a ctor ref);
+  - every definition line in the program is some symbol's def, so a symbol deleted from the manifest fails;
+  - no `edges` entry targets a class or a template;
+  - no `edges`, `implicitEdges` or `memberPtrEdges` list, and neither `_meta.roots` nor
+    `_meta.staticInitRoots`, names an entry twice (the generator never writes one).
+- `docs/cpp-profile-design.md` words the dispatch-only construction and the base-only member more exactly:
+  they add a pass to the RTA solve (at least three passes in all), they are skipped in more cases than it
+  listed, and "never constructed" means in reachable code.
+- Tests: every `verify` tamper case asserts the FAIL message of the check it targets, not just a failing exit.
+  New cases cover reordered bases, a ctor relabelled as a dtor, a moved instance def, a member pointer to a
+  function, duplicate list entries, and more exit-2 shapes. New model tests cover transitive member liveness,
+  virtual records that differ only in `rta`, the dispatch-only construction over 30 seeds, acyclic header
+  dependencies, and the oracle's duplicate-free lists on a dense shape.
+- The docs say what `verify` does not prove: `edges`, `rta`, `implicitEdges`, `staticInitRoots` and
+  member-pointer `dispatched` are checked only for target kind, and `cppTruthSha` catches an unsigned edit,
+  not a re-signed one (`docs/cpp-profile-design.md` "As built", `docs/USAGE.md`).
+
 ## [1.2.2] - 2026-10-15
 
 **`gen --lang cpp` output changes for most seeds** (program bytes and manifest truth; the new default-seed

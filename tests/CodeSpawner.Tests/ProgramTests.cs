@@ -86,7 +86,60 @@ public class ProgramTests
         if (lang == "c") args.AddRange(new[] { "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0", "--med-headers", "0", "--cfiles", "2" });
         Assert.Equal(2, Cli(args.ToArray()));
         Assert.Contains("a directory is in the way", _lastErr);
+        if (lang == "c") Assert.Contains("--manifest=false", _lastErr);         // C gen can skip the manifest
+        else Assert.DoesNotContain("--out, or choose another --out", _lastErr);
         Assert.True(File.Exists(Path.Combine(corpus, "keep.txt")));
+    }
+
+    // A manifest value of the wrong JSON kind is bad input (exit 2) for mutate and verify alike, never an exit-1
+    // "failure" thrown part-way.
+    [Theory]
+    [InlineData("mutate", "\"manifestVersion\": 1", "\"manifestVersion\": \"1\"")]
+    [InlineData("mutate", "\"seed\": 1337", "\"seed\": \"1337\"")]
+    [InlineData("verify", "\"seed\": 1337", "\"seed\": \"1337\"")]
+    [InlineData("verify", "\"generatorVersion\": \"", "\"generatorVersion\": 1, \"x\": \"")]
+    [InlineData("verify", "\"_meta\": {", "\"_meta\": [], \"x\": {")]
+    public void WrongKindManifestValue_Exits2(string command, string from, string to)
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c"), man = Path.Combine(tmp.Path, "c-manifest.json");
+        Assert.Equal(0, Cli("gen", "--out", corpus, "--seed", "1337", "--scale", "0.0003", "--giant-headers", "0", "--big-headers", "0",
+                            "--med-headers", "0", "--cfiles", "2"));
+        string text = File.ReadAllText(man);
+        Assert.Contains(from, text);
+        File.WriteAllText(man, text.Replace(from, to));
+        Assert.Equal(2, Cli(command, "--corpus", corpus));
+    }
+
+    // The cycle the message names is one: every class on it, and only those (a class below a cycle is left over too).
+    [Fact]
+    public void Verify_CppInheritanceCycle_NamesTheCycle()
+    {
+        using var tmp = new TempDir();
+        string corpus = Path.Combine(tmp.Path, "c"), man = Path.Combine(tmp.Path, "c-manifest.json");
+        Assert.Equal(0, Cli("gen", "--lang", "cpp", "--out", corpus));
+        var root = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(man))!.AsObject();
+        var cls = root["_meta"]!["classes"]!.AsObject();
+        // A class two single-base levels down becomes a base of the class it derives from through them.
+        string leaf = cls.First(kv => kv.Value!.AsArray().Count == 1 && cls[(string)kv.Value[0]!]!.AsArray().Count == 1).Key;
+        string mid = (string)cls[leaf]![0]!, top = (string)cls[mid]![0]!;
+        cls[top]!.AsArray().Add(leaf);
+        File.WriteAllText(man, root.ToJsonString());
+        Assert.Equal(1, Cli("verify", "--corpus", corpus));
+        var line = _lastErr.Split('\n').First(l => l.Contains("inheritance cycle"));
+        var named = line[(line.IndexOf("cycle ", StringComparison.Ordinal) + 6)..].Trim().Split(" -> ");
+        Assert.Equal(named[0], named[^1]);
+        Assert.Equal(new[] { leaf, mid, top }.Order(), named.Skip(1).Order());
+    }
+
+    // The free-function cap names the --oracle-reachable-frac that would fit, not "raise it" (0, the default, is
+    // already the smallest dead block a fraction can't beat below about 0.8).
+    [Fact]
+    public void Gen_CppFreeCap_AdvisesAFracThatFits()
+    {
+        var ex = Assert.Throws<CodeSpawner.Cli.ArgException>(() =>
+            CodeSpawner.Cli.ArgParser.ParseGen(new[] { "--lang", "cpp", "--oracle-chain", "1000000", "--oracle-fanout", "2", "--oracle-shared-leaves", "700000", "--out", "x" }));
+        Assert.Contains("--oracle-reachable-frac to at least 0.85", ex.Message);    // 1.7M live / 2M
     }
 
     [Fact]
