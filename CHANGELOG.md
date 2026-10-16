@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-10-15
+
 Generated corpora are unchanged (C and C++). `verify` is stricter on hand-edited manifests.
 
 ### Fixed
@@ -771,7 +773,8 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.1.13...v1.2.0
