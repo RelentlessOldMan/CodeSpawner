@@ -230,6 +230,7 @@ public static class Program
               --sample <n>       classify up to n files per (ext,size-band) cluster (default 64; 0 = all)
               gen --from-profile <p> [--with-oracle] [--oracle-scale] [--oracle-chain <n>]
                                  regenerate; --with-oracle overlays the ground-truth spine + manifest
+                                 (--web-* knobs add the include web beside it; needs --with-oracle)
 
             ORACLE CALL-GRAPH SHAPE (with --with-oracle; see docs/oracle-v1-design.md; all default off = linear):
               --oracle-chain <n>           func_i node budget (default 12)

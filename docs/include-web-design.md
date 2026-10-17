@@ -141,6 +141,12 @@ At death's settings the web is 1.65 GB of headers, with closures of about 350 MB
 
 All of them are never scaled, and refused unless `--web-units` is given. `--lang cpp` is refused with the web.
 
+`gen --from-profile ... --with-oracle` takes them too (since 1.3.1): the web is written at the root beside the
+profile's `d*` tree, which stays byte-identical, and its truth is added to the oracle manifest. This is how the
+real-shape death keeper carries the web. A `--preset` cannot be combined with `--from-profile`, so the knobs are spelled
+out; `death`'s are `--web-units 3000 --web-headers 3000 --web-depth 15 --web-window 18-28 --web-aggregators 40
+--web-templates 60 --web-template-sites 4 --web-tail 24 --web-header-lines 2000 --web-tail-mb 48`.
+
 | Knob | Default | Shape |
 |---|---|---|
 | `--web-units` | 0 | Units, and so closures. |

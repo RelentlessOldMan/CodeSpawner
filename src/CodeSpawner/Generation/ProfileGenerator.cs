@@ -68,10 +68,24 @@ public sealed class ProfileGenerator
         Console.WriteLine($"  synthesized {files:N0} files across {profile.Archetypes.Count} archetypes" +
                           (degraded > 0 ? $" ({degraded} template archetype(s) degraded to inline-fn-heavy)" : ""));
 
+        // The include web (docs/include-web-design.md) sits at the root beside the profile's d* tree.
+        WebEmitResult? web = null;
+        if (_o.WebUnits > 0)
+        {
+            web = WebEmitter.Emit(_o, outFull, new PopulationStats(), new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, _o.IoParallelism) });
+            Console.WriteLine($"  include web: {CorpusGenerator.WebSummary(web)}");
+            CompileDbEmitter.Write(_o, outFull, [], web.Units);
+        }
+
         if (_o.WithOracle)
         {
             var overlay = new OracleOverlay(_o, profile, outFull, dirs);
             var model = overlay.Emit();
+            if (web is not null)
+            {
+                CorpusGenerator.AddWebKnobs(_o, model.Gen);
+                CorpusGenerator.AddWeb(model, web);
+            }
             string mpath = CorpusGenerator.ManifestPath(outFull);
             ManifestWriter.Write(model, mpath);
             Console.WriteLine($"  oracle overlay: {model.Symbols.Count} symbols -> {mpath}" +

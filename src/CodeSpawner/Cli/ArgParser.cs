@@ -171,11 +171,13 @@ public static class ArgParser
 
         if (o.FromProfile is not null)
         {
-            var ignored = given.Where(k => !ProfileKnobs.Contains(k) && !k.StartsWith("oracle-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+            var ignored = given.Where(k => !ProfileKnobs.Contains(k) && !k.StartsWith("oracle-", StringComparison.Ordinal) && !k.StartsWith("web-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
             if (ignored.Count > 0)
                 throw new ArgException($"--from-profile takes its shape from the profile and ignores {string.Join(", ", ignored.Select(k => "--" + k))}; drop them (a --preset counts too)");
             var oracle = given.FirstOrDefault(k => k.StartsWith("oracle-", StringComparison.Ordinal));
             if (oracle is not null && !o.WithOracle) throw new ArgException($"--{oracle} requires --with-oracle");
+            // The include web is added beside the profile's tree; its closure truth lives in the oracle manifest.
+            if (o.WebUnits > 0 && !o.WithOracle) throw new ArgException("--web-units with --from-profile requires --with-oracle");
             // These shape the fanout DAG; the default linear chain (--oracle-fanout 0) has none of them.
             var d = new GenOptions { Out = "" };
             string? dagOnly = o.OracleDepth != d.OracleDepth ? "oracle-depth"
