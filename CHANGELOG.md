@@ -11,6 +11,16 @@ reads it.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-10-16
+
+Every corpus is byte-identical to 1.3.0.
+
+### Added
+- `gen --from-profile ... --with-oracle` takes the `--web-*` knobs: the include web is written at the root beside the
+  profile's tree (which stays byte-identical, as do its oracle symbols and `indirectTruthSha`), and its closures,
+  instances, `_meta.includeDirs` and web knobs are added to the oracle manifest. The web without `--with-oracle` is
+  refused. This lets the real-shape death keeper carry CodeCarver's web.
+
 ## [1.3.0] - 2026-10-16
 
 `--preset death` corpora change (the web is added); every other corpus is byte-identical to 1.2.3.
