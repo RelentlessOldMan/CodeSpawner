@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-16
+
 `--preset death` corpora change (the web is added); every other corpus is byte-identical to 1.2.3.
 
 ### Added

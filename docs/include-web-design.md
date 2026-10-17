@@ -134,6 +134,9 @@ Function-like macros are never expanded, except `CAT(a, b)`, which pastes `a_b`.
 that conditions, computed includes and `TNAME` need (every `#define` still counts). Each file is parsed once into
 events, so a closure costs its directives, not its bytes: death-lite's 3000 closures verify in about 20 s.
 
+At death's settings the web is 1.65 GB of headers, with closures of about 350 MB at p50, 645 MB at p95 and
+850 MB at most per unit, and verify still recomputes all 3000 in about 11 s.
+
 ## Knobs
 
 All of them are never scaled, and refused unless `--web-units` is given. `--lang cpp` is refused with the web.
