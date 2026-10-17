@@ -88,8 +88,9 @@ Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the thresho
 
 See [scan-design.md](scan-design.md) and [oracle-v1-design.md](oracle-v1-design.md).
 
-`--from-profile` reads only `--out`, `--seed`, `--force` and the knobs below; any other knob (a preset's
-included) would be ignored, so it is refused. The `--oracle-*` knobs need `--with-oracle`, and on a plain
+`--from-profile` reads only `--out`, `--seed`, `--force`, the knobs below and the `--web-*` knobs (since 1.3.1; the
+web needs `--with-oracle`, since its truth is in the manifest); any other knob (a preset's included) would be
+ignored, so it is refused. The `--oracle-*` knobs need `--with-oracle`, and on a plain
 `gen` (no profile) a non-default oracle knob is refused, since plain gen never runs the overlay. At its
 default value one is accepted, because a `_meta.gen` replay passes every recorded knob back (since 1.1.11).
 `--oracle-chain` must be ≥ 2, the other counts ≥ 0, and `--oracle-reachable-frac` 0 or in [0.01, 1].

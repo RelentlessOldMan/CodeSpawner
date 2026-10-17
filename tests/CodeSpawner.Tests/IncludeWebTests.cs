@@ -326,6 +326,52 @@ public class IncludeWebTests
         Assert.All(before, kv => Assert.Equal(kv.Value, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(kv.Key)))));
     }
 
+    // ---------- gen --from-profile ----------
+
+    // The web is added beside a profile's tree: that tree, its oracle symbols and indirectTruthSha are untouched,
+    // the web knobs are recorded, verify recomputes the closures, and a three-way mutate leaves the web in both variants.
+    [Fact]
+    public void FromProfile_AddsTheWeb_LeavingTheProfileTreeAndOracleAlone()
+    {
+        using var tmp = new TempDir();
+        string tree = Path.Combine(tmp.Path, "tree");
+        Directory.CreateDirectory(tree);
+        for (int i = 0; i < 40; i++) File.WriteAllText(Path.Combine(tree, $"f{i}.c"), $"int f{i}(void) {{ return {i}; }}\n");
+        string prof = Path.Combine(tmp.Path, "prof.json");
+        Assert.Equal(0, Cli("scan", tree, "--out", prof));
+
+        string[] oracle = ["--with-oracle", "--oracle-fanout", "3", "--oracle-chain", "40", "--oracle-indirect", "5", "--oracle-bytes"];
+        string plain = Path.Combine(tmp.Path, "p"), web = Path.Combine(tmp.Path, "w");
+        Assert.True(Cli(["gen", "--out", plain, "--from-profile", prof, .. oracle]) == 0, _lastErr);
+        Assert.True(Cli(["gen", "--out", web, "--from-profile", prof, .. oracle, .. Web]) == 0, _lastErr);
+
+        var p = Snapshot(plain);
+        var w = Snapshot(web);
+        Assert.Equal(p, new SortedDictionary<string, string>(w.Where(kv => !IsWeb(kv.Key)).ToDictionary(), StringComparer.Ordinal));
+        Assert.Contains(w.Keys, k => k.StartsWith("web/", StringComparison.Ordinal));
+
+        var (pm, wm) = (Manifest(plain), Manifest(web));
+        Assert.Equal(pm["_meta"]!["indirectTruthSha"]!.ToJsonString(), wm["_meta"]!["indirectTruthSha"]!.ToJsonString());
+        foreach (var kv in pm["symbols"]!.AsObject()) Assert.Equal(kv.Value!.ToJsonString(), wm["symbols"]![kv.Key]!.ToJsonString());
+        Assert.Equal(30, wm["closures"]!.AsObject().Count);
+        Assert.Contains("webUnits", wm["_meta"]!["gen"]!.ToJsonString());
+        var (code, err) = Verify(web);
+        Assert.True(code == 0, err);
+
+        Assert.True(Cli("mutate", "--corpus", web, "--target", "source", "--files-changed", "20", "--three-way", "--overlap-fraction", "0.5") == 0, _lastErr);
+        foreach (var v in new[] { web + "_v1", web + "_v2" })
+        {
+            var vs = Snapshot(v);
+            Assert.All(w.Where(kv => IsWeb(kv.Key)), kv => Assert.Equal(kv.Value, vs[kv.Key]));
+        }
+
+        static bool IsWeb(string rel) => rel == "compile_commands.json" || rel.StartsWith("web/", StringComparison.Ordinal) || rel.StartsWith("inc/", StringComparison.Ordinal) || rel.StartsWith("inc_vnd/", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromProfile_WebWithoutOracle_IsRefused() =>
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(["--out", "x", "--from-profile", "p", "--web-units", "3"]));
+
     // ---------- verify's preprocessor on a hand-written web ----------
 
     private static void Put(string root, string rel, string text) { string p = Path.Combine(root, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, text); }

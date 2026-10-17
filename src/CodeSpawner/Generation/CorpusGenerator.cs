@@ -278,6 +278,52 @@ public sealed class CorpusGenerator
             TinyFileEmitter.Write(dir, i, ref rng);
         });
 
+    /// <summary>The include web's knobs, recorded only when it is on, so a manifest without one keeps its bytes.</summary>
+    internal static void AddWebKnobs(GenOptions o, List<GenKnob> g)
+    {
+        if (o.WebUnits > 0)
+        {
+            g.Add(GenKnob.Of("webUnits", (long)o.WebUnits));
+            g.Add(GenKnob.Of("webHeaders", (long)o.WebHeaders));
+            g.Add(GenKnob.Of("webDepth", (long)o.WebDepth));
+            g.Add(GenKnob.Of("webWindow", o.WebWindow));
+            g.Add(GenKnob.Of("webAggregators", (long)o.WebAggregators));
+            g.Add(GenKnob.Of("webHeaderLines", (long)o.WebHeaderLines));
+            g.Add(GenKnob.Of("webTail", (long)o.WebTail));
+            g.Add(GenKnob.Of("webTailMb", (long)o.WebTailMb));
+            g.Add(GenKnob.Of("webTemplates", (long)o.WebTemplates));
+            g.Add(GenKnob.Of("webTemplateSites", (long)o.WebTemplateSites));
+            g.Add(GenKnob.Of("webTemplateHeads", (long)o.WebTemplateHeads));
+            g.Add(GenKnob.Of("webTemplateReachFrac", o.WebTemplateReachFrac));
+            g.Add(GenKnob.Of("webTemplateHiddenFrac", o.WebTemplateHiddenFrac));
+            g.Add(GenKnob.Of("webCycleFrac", o.WebCycleFrac));
+            g.Add(GenKnob.Of("webIfdefFrac", o.WebIfdefFrac));
+            g.Add(GenKnob.Of("webContinuationFrac", o.WebContinuationFrac));
+            g.Add(GenKnob.Of("webCommentFrac", o.WebCommentFrac));
+            g.Add(GenKnob.Of("webUndefFrac", o.WebUndefFrac));
+            g.Add(GenKnob.Of("webComputedFrac", o.WebComputedFrac));
+            g.Add(GenKnob.Of("webNextFrac", o.WebNextFrac));
+            g.Add(GenKnob.Of("webShadow", (long)o.WebShadow));
+            g.Add(GenKnob.Of("webRelativeFrac", o.WebRelativeFrac));
+            g.Add(GenKnob.Of("webCrlfFrac", o.WebCrlfFrac));
+            g.Add(GenKnob.Of("webMixedEolFrac", o.WebMixedEolFrac));
+        }
+    }
+
+    /// <summary>The include web's truth: its -I order, the template instances as symbols, and the closures.</summary>
+    internal static void AddWeb(ManifestModel model, WebEmitResult web)
+    {
+        model.IncludeDirs.AddRange(WebEmitter.IncludeDirs);
+        foreach (var x in web.Instances)
+        {
+            var e = new SymbolEntry { Def = x.Def, TemplateHead = x.TemplateHead, IncludedVia = x.IncludedVia };
+            e.Refs.AddRange(x.Refs);
+            model.Symbols[x.Name] = e;
+        }
+        foreach (var c in web.Closures)
+            model.Closures.Add(new ClosureRecord(c.Unit, c.Files, c.Bytes, c.Reads, c.ReadBytes, c.Depth, c.Defines, c.TemplateInstances));
+    }
+
     /// <summary>
     /// Record the EFFECTIVE generation knobs under <c>_meta.gen</c> (reproducibility). Counts mirror the exact
     /// <see cref="GenOptions.Eff"/> expressions used to emit each population (explicit → literal, else default ×
@@ -335,34 +381,7 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("oracleSharedLeaves", (long)_o.OracleSharedLeaves));
         g.Add(GenKnob.Of("oracleReachableFrac", _o.OracleReachableFrac));
         g.Add(GenKnob.Of("oracleIndirect", (long)_o.OracleIndirect));
-        // Include web: only when on, so a manifest without one keeps its bytes.
-        if (_o.WebUnits > 0)
-        {
-            g.Add(GenKnob.Of("webUnits", (long)_o.WebUnits));
-            g.Add(GenKnob.Of("webHeaders", (long)_o.WebHeaders));
-            g.Add(GenKnob.Of("webDepth", (long)_o.WebDepth));
-            g.Add(GenKnob.Of("webWindow", _o.WebWindow));
-            g.Add(GenKnob.Of("webAggregators", (long)_o.WebAggregators));
-            g.Add(GenKnob.Of("webHeaderLines", (long)_o.WebHeaderLines));
-            g.Add(GenKnob.Of("webTail", (long)_o.WebTail));
-            g.Add(GenKnob.Of("webTailMb", (long)_o.WebTailMb));
-            g.Add(GenKnob.Of("webTemplates", (long)_o.WebTemplates));
-            g.Add(GenKnob.Of("webTemplateSites", (long)_o.WebTemplateSites));
-            g.Add(GenKnob.Of("webTemplateHeads", (long)_o.WebTemplateHeads));
-            g.Add(GenKnob.Of("webTemplateReachFrac", _o.WebTemplateReachFrac));
-            g.Add(GenKnob.Of("webTemplateHiddenFrac", _o.WebTemplateHiddenFrac));
-            g.Add(GenKnob.Of("webCycleFrac", _o.WebCycleFrac));
-            g.Add(GenKnob.Of("webIfdefFrac", _o.WebIfdefFrac));
-            g.Add(GenKnob.Of("webContinuationFrac", _o.WebContinuationFrac));
-            g.Add(GenKnob.Of("webCommentFrac", _o.WebCommentFrac));
-            g.Add(GenKnob.Of("webUndefFrac", _o.WebUndefFrac));
-            g.Add(GenKnob.Of("webComputedFrac", _o.WebComputedFrac));
-            g.Add(GenKnob.Of("webNextFrac", _o.WebNextFrac));
-            g.Add(GenKnob.Of("webShadow", (long)_o.WebShadow));
-            g.Add(GenKnob.Of("webRelativeFrac", _o.WebRelativeFrac));
-            g.Add(GenKnob.Of("webCrlfFrac", _o.WebCrlfFrac));
-            g.Add(GenKnob.Of("webMixedEolFrac", _o.WebMixedEolFrac));
-        }
+        AddWebKnobs(_o, g);
         // (no fromProfile knob here: `gen --from-profile` is dispatched to ProfileGenerator, not this path, so
         //  _o.FromProfile is always null here. A profile-genned corpus's reproduction recipe IS the profile file.)
     }
@@ -436,18 +455,7 @@ public sealed class CorpusGenerator
                 model.DupGroups.Add(g);
             }
 
-        if (web is not null)
-        {
-            model.IncludeDirs.AddRange(WebEmitter.IncludeDirs);
-            foreach (var x in web.Instances)
-            {
-                var e = new SymbolEntry { Def = x.Def, TemplateHead = x.TemplateHead, IncludedVia = x.IncludedVia };
-                e.Refs.AddRange(x.Refs);
-                model.Symbols[x.Name] = e;
-            }
-            foreach (var c in web.Closures)
-                model.Closures.Add(new ClosureRecord(c.Unit, c.Files, c.Bytes, c.Reads, c.ReadBytes, c.Depth, c.Defines, c.TemplateInstances));
-        }
+        if (web is not null) AddWeb(model, web);
 
         return model;
     }
