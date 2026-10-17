@@ -6,10 +6,25 @@ namespace CodeSpawner.Cli;
 /// </summary>
 public static class Presets
 {
+    // The include web's counts, shared by death and death-lite (only the header sizes differ). Declared first:
+    // static fields initialize in textual order.
+    private static readonly string[] WebCounts =
+        ["--web-units", "3000", "--web-headers", "3000", "--web-depth", "15", "--web-window", "18-28",
+         "--web-aggregators", "40", "--web-templates", "60", "--web-template-sites", "4", "--web-tail", "24"];
+
     // death: the "repo of death" — ~90 GB, ~50k files, 12 headers OVER 1 GB (the headline pathology).
     // 12 giants * 1.2 GB = ~14.4 GB; the rest (~75 GB) is made of ~55 MB big headers.
+    // Plus the include web (docs/include-web-design.md): 3000 units over 3000 register maps, deep and overlapping,
+    // with 24 tail headers of 48 MB each.
     private static readonly string[] Death =
-        ["--scale", "1.0", "--giant-headers", "12", "--max-header-mb", "1229", "--big-headers", "1375"];
+        ["--scale", "1.0", "--giant-headers", "12", "--max-header-mb", "1229", "--big-headers", "1375",
+         .. WebCounts, "--web-header-lines", "2000", "--web-tail-mb", "48"];
+
+    // death-lite: all of death's shapes in ~0.5 GB, no compute gate. Giants of 32 MB, the rest at 1/20 the counts,
+    // and the web at death's counts with small headers (150 lines, tails of 8 MB).
+    private static readonly string[] DeathLite =
+        ["--scale", "0.05", "--giant-headers", "3", "--max-header-mb", "32", "--big-headers", "1", "--med-headers", "12",
+         .. WebCounts, "--web-header-lines", "150", "--web-tail-mb", "8"];
 
     // ci: ~1/100 counts, keeps >=1 pathology header. Seconds-to-minutes smoke tier.
     private static readonly string[] Ci = ["--scale", "0.01"];
@@ -55,6 +70,7 @@ public static class Presets
     private static readonly (string Name, string[] Tokens)[] Registry =
     [
         ("death", Death),
+        ("death-lite", DeathLite),
         ("ci", Ci),
         ("memory", Memory),
         ("dense-band", DenseBand),

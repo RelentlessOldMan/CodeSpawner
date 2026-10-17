@@ -77,6 +77,58 @@ public sealed class GenOptions
     /// <summary>~129 MB headers (mut_restream_*.h) — mutate 4-restream shrinks them for the streamed→whole-file rewrite.</summary>
     public int RestreamSeeds { get; set; } = 0;
 
+    // --- include web (docs/include-web-design.md; OFF unless --web-units > 0). Never scaled: a preset or the
+    //     command line sets them literally. ---
+
+    /// <summary>Closure-root units (web/u_N.c). 0 = no include web.</summary>
+    public int WebUnits { get; set; } = 0;
+    /// <summary>Register-map headers (inc/rm_N.h), chained in segments of <see cref="WebDepth"/>.</summary>
+    public int WebHeaders { get; set; } = 600;
+    /// <summary>Segment length: header i of a segment includes header i+1, so a segment head pulls a chain this deep.</summary>
+    public int WebDepth { get; set; } = 12;
+    /// <summary>Segment heads each unit includes directly, "N" or "MIN-MAX"; neighbouring units' windows overlap.</summary>
+    public string WebWindow { get; set; } = "6-12";
+    /// <summary>Aggregator headers (inc/all_K.h), each including a run of segment heads.</summary>
+    public int WebAggregators { get; set; } = 16;
+    /// <summary>Mean #define lines per register-map header (each is 1/2x to 3/2x of it).</summary>
+    public int WebHeaderLines { get; set; } = 300;
+    /// <summary>Register-map headers grown to <see cref="WebTailMb"/> (the size tail).</summary>
+    public int WebTail { get; set; } = 0;
+    /// <summary>Size of each tail header in MB.</summary>
+    public int WebTailMb { get; set; } = 32;
+    /// <summary>Template headers (inc/tmpl_N.h), unguarded, instantiated once per TNAME site.</summary>
+    public int WebTemplates { get; set; } = 24;
+    /// <summary>TNAME instantiation sites per unit.</summary>
+    public int WebTemplateSites { get; set; } = 3;
+    /// <summary>Function heads per template header.</summary>
+    public int WebTemplateHeads { get; set; } = 12;
+    /// <summary>Fraction of TNAME sites that reach their template through a register-map chain (deep) instead of directly.</summary>
+    public double WebTemplateReachFrac { get; set; } = 0.4;
+    /// <summary>Fraction of template heads named through an alias macro (the head line shows no CAT(TNAME, ...)).</summary>
+    public double WebTemplateHiddenFrac { get; set; } = 0.25;
+    /// <summary>Fraction of register-map headers with a guarded back-include (a cycle).</summary>
+    public double WebCycleFrac { get; set; } = 0.2;
+    /// <summary>Fraction of register-map headers with an #if CFG_k-gated include and #if/#else define block.</summary>
+    public double WebIfdefFrac { get; set; } = 0.15;
+    /// <summary>Fraction of register-map headers with a long backslash-continued #define.</summary>
+    public double WebContinuationFrac { get; set; } = 0.2;
+    /// <summary>Fraction of register-map headers with comment shapes (#include text in comments, comments touching macro names).</summary>
+    public double WebCommentFrac { get; set; } = 0.2;
+    /// <summary>Fraction of register-map headers that #undef and redefine some of their macros.</summary>
+    public double WebUndefFrac { get; set; } = 0.1;
+    /// <summary>Fraction of includes written as a computed include (#define WEB_HDR_x "rm_7.h" / #include WEB_HDR_x).</summary>
+    public double WebComputedFrac { get; set; } = 0.05;
+    /// <summary>Fraction of units including a vendor wrapper pair (inc/vx_N.h does #include_next into inc_vnd/).</summary>
+    public double WebNextFrac { get; set; } = 0.05;
+    /// <summary>Decoy inc_vnd/rm_N.h files sharing a basename with inc/rm_N.h (never reached: inc/ is searched first).</summary>
+    public int WebShadow { get; set; } = 4;
+    /// <summary>Fraction of includes written relative (#include "../inc/rm_5.h").</summary>
+    public double WebRelativeFrac { get; set; } = 0.05;
+    /// <summary>Fraction of web files written with CRLF line ends.</summary>
+    public double WebCrlfFrac { get; set; } = 0.05;
+    /// <summary>Fraction of web files written with mixed LF/CRLF line ends.</summary>
+    public double WebMixedEolFrac { get; set; } = 0.02;
+
     // --- scan/shape-profile regeneration (gen --from-profile). ---
 
     /// <summary>Path to a scan profile — when set, gen synthesizes a look-alike from it instead of the knobs.</summary>

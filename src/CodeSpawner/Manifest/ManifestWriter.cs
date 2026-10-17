@@ -84,6 +84,13 @@ public static class ManifestWriter
             w.WriteString("indirectTruthSha", IndirectDigest.Compute(m.Symbols, m.Roots));
         if (m.ManifestVersion >= 2)
             w.WriteString("cppTruthSha", CppDigest.Compute(m.Symbols, m.StaticInitRoots));
+        if (m.IncludeDirs.Count > 0)
+        {
+            // Include web: the -I order the closures were computed with. Additive, v1.
+            w.WriteStartArray("includeDirs");
+            foreach (var d in m.IncludeDirs) w.WriteStringValue(d);
+            w.WriteEndArray();
+        }
         if (m.TotalOracleBytes > 0)
             w.WriteNumber("totalOracleBytes", m.TotalOracleBytes); // byte-mass ground truth (--oracle-bytes)
         w.WriteEndObject();
@@ -154,6 +161,8 @@ public static class ManifestWriter
             }
             if (s.Bytes > 0) w.WriteNumber("bytes", s.Bytes); // byte mass of the def span (--oracle-bytes)
             if (s.ExpectedMiss) w.WriteBoolean("expectedMiss", true);
+            if (s.TemplateHead is not null) w.WriteString("templateHead", s.TemplateHead);
+            if (s.IncludedVia is not null) w.WriteString("includedVia", s.IncludedVia);
             w.WriteEndObject();
         }
         w.WriteEndObject();
@@ -176,6 +185,26 @@ public static class ManifestWriter
                     foreach (var nv in d.NearVariants) w.WriteStringValue(nv);
                     w.WriteEndArray();
                 }
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+        }
+
+        if (m.Closures.Count > 0)
+        {
+            // Top-level: each include-web unit's closure (docs/include-web-design.md). Additive, v1.
+            w.WriteStartObject("closures");
+            foreach (var c in m.Closures)
+            {
+                w.Spill();
+                w.WriteStartObject(c.Unit);
+                w.WriteNumber("files", c.Files);
+                w.WriteNumber("bytes", c.Bytes);
+                w.WriteNumber("reads", c.Reads);
+                w.WriteNumber("readBytes", c.ReadBytes);
+                w.WriteNumber("depth", c.Depth);
+                w.WriteNumber("defines", c.Defines);
+                w.WriteNumber("templateInstances", c.TemplateInstances);
                 w.WriteEndObject();
             }
             w.WriteEndObject();

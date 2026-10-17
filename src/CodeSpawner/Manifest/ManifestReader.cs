@@ -152,6 +152,10 @@ public static class ManifestReader
                     e.ExpectedMiss = true;
                 if (p.Value.TryGetProperty("bytes", out var by) && by.ValueKind == JsonValueKind.Number)
                     e.Bytes = by.GetInt64();
+                if (p.Value.TryGetProperty("templateHead", out var th) && th.ValueKind == JsonValueKind.String)
+                    e.TemplateHead = th.GetString();
+                if (p.Value.TryGetProperty("includedVia", out var iv) && iv.ValueKind == JsonValueKind.String)
+                    e.IncludedVia = iv.GetString();
                 if (ver >= 2) ReadV2(p.Value, e);
                 symbols[p.Name] = e;
             }

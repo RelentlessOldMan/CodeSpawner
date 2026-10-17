@@ -312,7 +312,8 @@ public static class Program
                with a _meta.conflictTruthSha over [conflicts-3way, merged-clean]; see docs/diff-delta-design.md)
 
             PRESETS (bundled knob sets; your own knobs still override):
-              --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death")
+              --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death") + the include web
+              --preset death-lite    all of death's shapes in ~0.5 GB (32 MB giants; the web at death's counts)
               --preset ci            ~1/100 counts, keeps >=1 pathology header (fast smoke)
               --preset memory        one giant header + a few includers (preprocessor-memory axis)
               --preset dense-band    dense sub-threshold headers (posting/trigram memory OOM shape)
@@ -363,6 +364,32 @@ public static class Program
               --dup-copies <n>           copies per dup group (default 4)
               --shrink-seeds <n>         ~9 MB headers that enable mutate 4-shrink
               --restream-seeds <n>       ~129 MB headers that enable mutate 4-restream
+
+            INCLUDE WEB (off unless --web-units is given; never scaled; docs/include-web-design.md):
+              --web-units <n>            .c units under web/, each with a recorded include closure (manifest "closures")
+              --web-headers <n>          guarded register-map headers inc/rm_N.h (default 600)
+              --web-depth <n>            headers per include chain segment (default 12)
+              --web-window <n|min-max>   chain heads each unit includes (default 6-12)
+              --web-aggregators <n>      inc/all_K.h headers that each include a run of chain heads (default 16)
+              --web-header-lines <n>     lines per register-map header (default 300)
+              --web-tail <n>             register maps that are big tail headers instead (default 0)
+              --web-tail-mb <m>          size of each tail header (default 32)
+              --web-templates <n>        unguarded template headers inc/tmpl_T.h, expanded per TNAME (default 24)
+              --web-template-sites <n>   TNAME include sites per unit (default 3)
+              --web-template-heads <n>   CAT(TNAME, ...) heads per template (default 12)
+              --web-template-reach-frac <f>   share of sites reaching templates through a deep chain (default 0.4)
+              --web-template-hidden-frac <f>  share of heads named through an alias macro (default 0.25)
+              --web-cycle-frac <f>       share of headers that include an earlier one (guarded cycle; default 0.2)
+              --web-ifdef-frac <f>       share of includes behind #if CFG_k (default 0.15)
+              --web-continuation-frac <f>  share of headers with a long backslash-continued macro (default 0.2)
+              --web-comment-frac <f>     share of headers with comment traps (fake includes, split defines; default 0.2)
+              --web-undef-frac <f>       share of headers that #undef and redefine (default 0.1)
+              --web-computed-frac <f>    share of includes through a macro (#include NAME; default 0.05)
+              --web-next-frac <f>        share of units including inc/vx_j.h, which #include_next's inc_vnd/vx_j.h (default 0.05)
+              --web-shadow <n>           inc_vnd/ decoys named like inc/ headers, never reached (default 4)
+              --web-relative-frac <f>    share of includes spelled ../inc/x.h (default 0.05)
+              --web-crlf-frac <f>        share of web files with CRLF line ends (default 0.05)
+              --web-mixed-eol-frac <f>   share of web files with mixed LF/CRLF (default 0.02)
 
             Flags take --flag, --flag=false or --flag false; values take --knob v or --knob=v.
             '<command> --help' prints this help.

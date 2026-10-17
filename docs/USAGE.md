@@ -105,6 +105,19 @@ codespawner gen --lang cpp --out C:\corpora\cpp --cpp-classes 40 --cpp-depth 4
 codespawner verify --corpus C:\corpora\cpp
 ```
 
+### `gen --web-units <n> --out <dir> [--web-* knobs…]`
+Adds an **include web** beside the C corpus: register-map headers chained deep and overlapping, aggregators,
+template headers expanded through `TNAME`, an `#include_next` vendor dir, and `n` `.c` units under `web/`. The
+manifest records each unit's include closure (`closures`: files, bytes, reads, readBytes, depth, defines,
+templateInstances) and every template instance as a symbol. `verify` recomputes all of it from the text. Contract
+and knobs: [include-web-design.md](include-web-design.md). `--preset death` carries it, and `--preset death-lite`
+carries it at death's counts in about 0.5 GB.
+
+```powershell
+codespawner gen --out C:\corpora\web --scale 0.001 --web-units 200 --web-headers 600
+codespawner verify --corpus C:\corpora\web
+```
+
 ### `verify --corpus <dir> [--manifest <file>]`
 Tool-independent self-check: asserts the manifest accurately describes the emitted files — every
 `def`/`ref` site exists at `path:line` and contains the expected token; every `unreachableRef` site holds
@@ -129,6 +142,9 @@ a receiver with `rta ⊆ cha`, and a recomputed `cppTruthSha`. **What it does no
 `implicitEdges`, `staticInitRoots` and member-pointer `dispatched` match the program's calls (they are checked
 only for the right kind of target), and `cppTruthSha`, recomputed from the manifest itself, catches only an
 edit that was not re-signed. The full list is in [cpp-profile-design.md](cpp-profile-design.md) "As built".
+With an include web, verify re-preprocesses every unit (its own small preprocessor: guards, `#if`, comments,
+continuations, computed includes, `#include_next`) and compares all seven closure numbers, and requires each
+template instance it finds to be declared once with the same `def`, `templateHead` and `includedVia`.
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
@@ -197,7 +213,8 @@ must never force another to change; tool-specific knobs stay optional and defaul
 
 ### Presets
 Scale tiers: `--preset ci` (≈1/100, keeps a giant), `--preset memory` (one giant + includers, nothing
-else), `--preset death` (~90 GB, 12 headers >1 GB).
+else), `--preset death` (~90 GB, 12 headers >1 GB, plus the include web), `--preset death-lite` (all of
+death's shapes in ~0.5 GB: 32 MB giants, the web at death's counts with small headers).
 
 Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.md)):
 `--preset dense-band` (posting/trigram memory OOM), `--preset broad-token` (`find_references` at scale +
@@ -263,7 +280,8 @@ reports actual size.
       src_42.c                 #   call-chain sources (func_42 -> func_41)
       hdr_7.h  blob_3.c  data_9.csv  ...
     .codespawner               # marker (internal; identifies a CodeSpawner corpus)
-    compile_commands.json      # only if --compile-db partial|full
+    inc/  inc_vnd/  web/       # only with --web-units: the include web (headers, vendor dir, units)
+    compile_commands.json      # if --compile-db partial|full, or with the include web (its units)
   <out>-manifest.json          # ground-truth manifest (SIBLING of the corpus dir)
 ```
 

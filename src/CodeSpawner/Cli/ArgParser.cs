@@ -65,6 +65,31 @@ public static class ArgParser
                 case "dup-copies": o.DupCopies = I(); break;
                 case "shrink-seeds": o.ShrinkSeeds = I(); break;
                 case "restream-seeds": o.RestreamSeeds = I(); break;
+                // include web:
+                case "web-units": o.WebUnits = I(); break;
+                case "web-headers": o.WebHeaders = I(); break;
+                case "web-depth": o.WebDepth = I(); break;
+                case "web-window": o.WebWindow = Val(); break;
+                case "web-aggregators": o.WebAggregators = I(); break;
+                case "web-header-lines": o.WebHeaderLines = I(); break;
+                case "web-tail": o.WebTail = I(); break;
+                case "web-tail-mb": o.WebTailMb = I(); break;
+                case "web-templates": o.WebTemplates = I(); break;
+                case "web-template-sites": o.WebTemplateSites = I(); break;
+                case "web-template-heads": o.WebTemplateHeads = I(); break;
+                case "web-template-reach-frac": o.WebTemplateReachFrac = D(); break;
+                case "web-template-hidden-frac": o.WebTemplateHiddenFrac = D(); break;
+                case "web-cycle-frac": o.WebCycleFrac = D(); break;
+                case "web-ifdef-frac": o.WebIfdefFrac = D(); break;
+                case "web-continuation-frac": o.WebContinuationFrac = D(); break;
+                case "web-comment-frac": o.WebCommentFrac = D(); break;
+                case "web-undef-frac": o.WebUndefFrac = D(); break;
+                case "web-computed-frac": o.WebComputedFrac = D(); break;
+                case "web-next-frac": o.WebNextFrac = D(); break;
+                case "web-shadow": o.WebShadow = I(); break;
+                case "web-relative-frac": o.WebRelativeFrac = D(); break;
+                case "web-crlf-frac": o.WebCrlfFrac = D(); break;
+                case "web-mixed-eol-frac": o.WebMixedEolFrac = D(); break;
                 // scan/shape-profile regeneration:
                 case "from-profile": o.FromProfile = Val(); break;
                 case "with-oracle": o.WithOracle = B(); break;
@@ -198,10 +223,60 @@ public static class ArgParser
         })
             if (v < min) throw new ArgException($"--{k} must be >= {min}, got {v}");
         if (o.Depth is < 1 or > 12) throw new ArgException($"--depth must be in 1..12, got {o.Depth}");
+        CheckWeb(o, given);
         if (o.HotTokenShare is < 0 or > 1) throw new ArgException("--hot-token-share must be in [0, 1]");
         // 0 = all reachable; a tiny fraction would size the dead block as live/frac nodes.
         if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
             throw new ArgException("--oracle-reachable-frac must be 0 (all reachable) or in [0.01, 1]");
+    }
+
+    /// <summary>The include-web knobs (docs/include-web-design.md). They shape the web only, so without --web-units
+    /// they would be ignored and are refused; --web-units 0 given outright (switching a preset's web off) lets the rest
+    /// through.</summary>
+    private static void CheckWeb(GenOptions o, HashSet<string> given)
+    {
+        if (!given.Contains("web-units"))
+        {
+            var stray = given.Where(k => k.StartsWith("web-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
+            if (stray is not null) throw new ArgException($"--{stray} shapes the include web, which is off; add --web-units <n>");
+        }
+        if (o.WebUnits is < 0 or > 1_000_000) throw new ArgException($"--web-units must be in 0..1000000, got {o.WebUnits}");
+        // The web's instance symbols are C functions in a v1 manifest; a v2 (C++) manifest has no shape for them yet.
+        if (o.WebUnits > 0 && o.Lang == SourceLang.Cpp) throw new ArgException("--web-units is C-only (not with --lang cpp)");
+        foreach (var (k, v, min, max) in new (string, int, int, int)[]
+        {
+            ("web-headers", o.WebHeaders, 1, 10_000_000), ("web-depth", o.WebDepth, 1, 10_000),
+            ("web-aggregators", o.WebAggregators, 0, 1_000_000), ("web-header-lines", o.WebHeaderLines, 1, 10_000_000),
+            ("web-tail", o.WebTail, 0, 1_000_000), ("web-tail-mb", o.WebTailMb, 1, 4096),
+            ("web-templates", o.WebTemplates, 0, 1_000_000), ("web-template-sites", o.WebTemplateSites, 0, 1000),
+            ("web-template-heads", o.WebTemplateHeads, 1, 10_000), ("web-shadow", o.WebShadow, 0, 1_000_000),
+        })
+            if (v < min || v > max) throw new ArgException($"--{k} must be in {min}..{max}, got {v}");
+        foreach (var (k, v) in new (string, double)[]
+        {
+            ("web-template-reach-frac", o.WebTemplateReachFrac), ("web-template-hidden-frac", o.WebTemplateHiddenFrac),
+            ("web-cycle-frac", o.WebCycleFrac), ("web-ifdef-frac", o.WebIfdefFrac), ("web-continuation-frac", o.WebContinuationFrac),
+            ("web-comment-frac", o.WebCommentFrac), ("web-undef-frac", o.WebUndefFrac), ("web-computed-frac", o.WebComputedFrac),
+            ("web-next-frac", o.WebNextFrac), ("web-relative-frac", o.WebRelativeFrac), ("web-crlf-frac", o.WebCrlfFrac),
+            ("web-mixed-eol-frac", o.WebMixedEolFrac),
+        })
+            if (v is < 0 or > 1) throw new ArgException($"--{k} must be in [0, 1], got {v.ToString(CultureInfo.InvariantCulture)}");
+        if (o.WebCrlfFrac + o.WebMixedEolFrac > 1) throw new ArgException("--web-crlf-frac and --web-mixed-eol-frac must add up to at most 1");
+        _ = ParseWebWindow(o.WebWindow);
+        if (o.WebTail > o.WebHeaders) throw new ArgException($"--web-tail {o.WebTail} is more than --web-headers {o.WebHeaders}");
+        if (o.WebShadow > o.WebHeaders) throw new ArgException($"--web-shadow {o.WebShadow} is more than --web-headers {o.WebHeaders}");
+    }
+
+    /// <summary><c>--web-window</c>: "N" or "MIN-MAX", 1 &lt;= MIN &lt;= MAX &lt;= 100000.</summary>
+    internal static (int Min, int Max) ParseWebWindow(string s)
+    {
+        int dash = s.IndexOf('-');
+        string a = dash < 0 ? s : s[..dash], b = dash < 0 ? s : s[(dash + 1)..];
+        if (int.TryParse(a, NumberStyles.None, CultureInfo.InvariantCulture, out int min)
+            && int.TryParse(b, NumberStyles.None, CultureInfo.InvariantCulture, out int max)
+            && min >= 1 && max >= min && max <= 100_000)
+            return (min, max);
+        throw new ArgException($"--web-window must be N or MIN-MAX with 1 <= MIN <= MAX <= 100000, got '{s}'");
     }
 
     private static SourceLang ParseLang(string v) => v.ToLowerInvariant() switch
