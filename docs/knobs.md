@@ -132,11 +132,24 @@ Free-function dead block: by default (`--oracle-reachable-frac 0`) a quarter of 
 means none. The live graph plus the dead block is capped at 2,000,000 free functions (`--oracle-chain` and
 `--oracle-shared-leaves` are each at most 1,000,000).
 
+## Include web (`gen --web-units N`)
+
+Off by default; never scaled; every `--web-*` knob is refused without `--web-units`, and the web is C-only. The
+full table, the layout and the closure definitions are in [include-web-design.md](include-web-design.md).
+`--web-units`, `--web-headers` (600), `--web-depth` (12), `--web-window` (`6-12`), `--web-aggregators` (16),
+`--web-header-lines` (300), `--web-tail` (0), `--web-tail-mb` (32), `--web-templates` (24),
+`--web-template-sites` (3), `--web-template-heads` (12), `--web-template-reach-frac` (0.4),
+`--web-template-hidden-frac` (0.25), `--web-cycle-frac` (0.2), `--web-ifdef-frac` (0.15),
+`--web-continuation-frac` (0.2), `--web-comment-frac` (0.2), `--web-undef-frac` (0.1), `--web-computed-frac` (0.05),
+`--web-next-frac` (0.05), `--web-shadow` (4), `--web-relative-frac` (0.05), `--web-crlf-frac` (0.05),
+`--web-mixed-eol-frac` (0.02).
+
 ## Presets
 
 | Preset | Expands to | Use |
 |---|---|---|
-| `--preset death` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale "repo of death". |
+| `--preset death` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` + the include web (`--web-units 3000 --web-headers 3000 --web-depth 15 --web-window 18-28 --web-aggregators 40 --web-templates 60 --web-template-sites 4 --web-tail 24 --web-header-lines 2000 --web-tail-mb 48`) | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale "repo of death". |
+| `--preset death-lite` | `--scale 0.05 --giant-headers 3 --max-header-mb 32 --big-headers 1 --med-headers 12` + the web at death's counts with `--web-header-lines 150 --web-tail-mb 8` | All of death's shapes in ~0.5 GB; no compute gate needed. |
 | `--preset ci` | `--scale 0.01` | Fast smoke tier; keeps ≥1 pathology header. |
 | `--preset memory` | one giant header, 5 `.c` files of which 3 include it (`--giant-includers` default), everything else off, 1M macro density | Pure preprocessor-memory repro. |
 | `--preset dense-band` | `--dense-headers 40 --dense-under-mb 127` (noise off) | Posting/trigram memory explosion — the OOM regression (~5 GB). |

@@ -1107,6 +1107,9 @@ public static class Mutator
             if (string.Equals(Path.GetFileName(abs), MarkerName, StringComparison.Ordinal)) continue;
             if (string.Equals(abs, compileDb, StringComparison.OrdinalIgnoreCase)) continue;
             if (abs.EndsWith(".mut.tmp", StringComparison.OrdinalIgnoreCase)) continue;
+            // The include web's closure truth names every byte of its files, so a bulk edit there would make it stale.
+            string rel = RelOf(corpus, abs);
+            if (Generation.WebEmitter.Dirs.Any(d => rel.StartsWith(d + "/", StringComparison.Ordinal))) continue;
             bool match = target switch
             {
                 "source"  => HasExt(abs, ".c", ".cc", ".cpp", ".cxx"),
@@ -1115,7 +1118,7 @@ public static class Mutator
                 "all"     => true,
                 _         => false,
             };
-            if (match) result.Add(RelOf(corpus, abs));
+            if (match) result.Add(rel);
         }
         result.Sort(StringComparer.Ordinal);
         return result;
@@ -2131,6 +2134,8 @@ public static class Mutator
             {
                 Def = v.Def,
                 ExpectedMiss = v.ExpectedMiss,
+                TemplateHead = v.TemplateHead,
+                IncludedVia = v.IncludedVia,
                 UnreachableRefs = v.UnreachableRefs is null ? null : new List<string>(v.UnreachableRefs),
             };
         foreach (var (k, v) in src)

@@ -107,13 +107,20 @@ public sealed class CorpusGenerator
 
         Timed("tiny files", () => EmitTinyFiles(tree, nCsv));
 
-        Timed("compile_commands", () => CompileDbEmitter.Write(_o, outFull, src.Files));
+        WebEmitResult? web = null;
+        if (_o.WebUnits > 0)
+        {
+            web = Timed("include web", () => WebEmitter.Emit(_o, outFull, stats, HeaderParallel));
+            Console.WriteLine($"    ^ {WebSummary(web)}");
+        }
+
+        Timed("compile_commands", () => CompileDbEmitter.Write(_o, outFull, src.Files, web?.Units));
 
         if (_o.Manifest)
         {
             var model = Timed("manifest", () =>
             {
-                var m = BuildManifest(outFull, src, unres, broad, patho, dups, stats);
+                var m = BuildManifest(outFull, src, unres, broad, patho, dups, web, stats);
                 ManifestWriter.Write(m, mpath);
                 return m;
             });
@@ -328,12 +335,40 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("oracleSharedLeaves", (long)_o.OracleSharedLeaves));
         g.Add(GenKnob.Of("oracleReachableFrac", _o.OracleReachableFrac));
         g.Add(GenKnob.Of("oracleIndirect", (long)_o.OracleIndirect));
+        // Include web: only when on, so a manifest without one keeps its bytes.
+        if (_o.WebUnits > 0)
+        {
+            g.Add(GenKnob.Of("webUnits", (long)_o.WebUnits));
+            g.Add(GenKnob.Of("webHeaders", (long)_o.WebHeaders));
+            g.Add(GenKnob.Of("webDepth", (long)_o.WebDepth));
+            g.Add(GenKnob.Of("webWindow", _o.WebWindow));
+            g.Add(GenKnob.Of("webAggregators", (long)_o.WebAggregators));
+            g.Add(GenKnob.Of("webHeaderLines", (long)_o.WebHeaderLines));
+            g.Add(GenKnob.Of("webTail", (long)_o.WebTail));
+            g.Add(GenKnob.Of("webTailMb", (long)_o.WebTailMb));
+            g.Add(GenKnob.Of("webTemplates", (long)_o.WebTemplates));
+            g.Add(GenKnob.Of("webTemplateSites", (long)_o.WebTemplateSites));
+            g.Add(GenKnob.Of("webTemplateHeads", (long)_o.WebTemplateHeads));
+            g.Add(GenKnob.Of("webTemplateReachFrac", _o.WebTemplateReachFrac));
+            g.Add(GenKnob.Of("webTemplateHiddenFrac", _o.WebTemplateHiddenFrac));
+            g.Add(GenKnob.Of("webCycleFrac", _o.WebCycleFrac));
+            g.Add(GenKnob.Of("webIfdefFrac", _o.WebIfdefFrac));
+            g.Add(GenKnob.Of("webContinuationFrac", _o.WebContinuationFrac));
+            g.Add(GenKnob.Of("webCommentFrac", _o.WebCommentFrac));
+            g.Add(GenKnob.Of("webUndefFrac", _o.WebUndefFrac));
+            g.Add(GenKnob.Of("webComputedFrac", _o.WebComputedFrac));
+            g.Add(GenKnob.Of("webNextFrac", _o.WebNextFrac));
+            g.Add(GenKnob.Of("webShadow", (long)_o.WebShadow));
+            g.Add(GenKnob.Of("webRelativeFrac", _o.WebRelativeFrac));
+            g.Add(GenKnob.Of("webCrlfFrac", _o.WebCrlfFrac));
+            g.Add(GenKnob.Of("webMixedEolFrac", _o.WebMixedEolFrac));
+        }
         // (no fromProfile knob here: `gen --from-profile` is dispatched to ProfileGenerator, not this path, so
         //  _o.FromProfile is always null here. A profile-genned corpus's reproduction recipe IS the profile file.)
     }
 
     private ManifestModel BuildManifest(string outFull, SourceEmitResult src, UnresolvedEmitResult? unres,
-        BroadTokenEmitResult? broad, List<PathoSym>? patho, List<DupGroupResult>? dups, PopulationStats stats)
+        BroadTokenEmitResult? broad, List<PathoSym>? patho, List<DupGroupResult>? dups, WebEmitResult? web, PopulationStats stats)
     {
         var model = new ManifestModel
         {
@@ -401,7 +436,33 @@ public sealed class CorpusGenerator
                 model.DupGroups.Add(g);
             }
 
+        if (web is not null)
+        {
+            model.IncludeDirs.AddRange(WebEmitter.IncludeDirs);
+            foreach (var x in web.Instances)
+            {
+                var e = new SymbolEntry { Def = x.Def, TemplateHead = x.TemplateHead, IncludedVia = x.IncludedVia };
+                e.Refs.AddRange(x.Refs);
+                model.Symbols[x.Name] = e;
+            }
+            foreach (var c in web.Closures)
+                model.Closures.Add(new ClosureRecord(c.Unit, c.Files, c.Bytes, c.Reads, c.ReadBytes, c.Depth, c.Defines, c.TemplateInstances));
+        }
+
         return model;
+    }
+
+    /// <summary>One line on the web's shape: closure files and MB at p50/p95/max, and how deep templates are reached.</summary>
+    internal static string WebSummary(WebEmitResult web)
+    {
+        static T Pct<T>(List<T> sorted, double p) => sorted[Math.Min(sorted.Count - 1, (int)(p * sorted.Count))];
+        var files = web.Closures.Select(c => c.Files).Order().ToList();
+        var mb = web.Closures.Select(c => c.Bytes / (1024.0 * 1024)).Order().ToList();
+        int deep = web.Instances.Count(i => i.Depth > 8);
+        int maxDepth = web.Instances.Count == 0 ? 0 : web.Instances.Max(i => i.Depth);
+        return $"{web.Units.Count} unit(s), {web.TotalBytes / (1024.0 * 1024):N0} MB of headers; closure files p50 {Pct(files, 0.5)} " +
+               $"p95 {Pct(files, 0.95)} max {files[^1]}, MB p50 {Pct(mb, 0.5):N1} p95 {Pct(mb, 0.95):N1} max {mb[^1]:N1}; " +
+               $"{web.Instances.Count} template instance(s), {deep} deeper than 8 (max depth {maxDepth})";
     }
 
     // Convert an absolute "path:line" site to a repo-relative one (the last ':' separates the line).

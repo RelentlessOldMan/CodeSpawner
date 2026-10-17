@@ -119,7 +119,18 @@ public sealed class SymbolEntry
     public List<string> ImplicitEdges { get; init; } = new();
     public List<VirtualEdge> VirtualEdges { get; init; } = new();
     public List<MemberPtrEdge> MemberPtrEdges { get; init; } = new();
+
+    // --- include web (v1, additive; docs/include-web-design.md) ---
+
+    /// <summary>A template instance: the template header's primary head line (<c>inc/tmpl_3.h:3</c>). The def is the
+    /// unit's own #include line that leads to the instantiation, which does not name the symbol.</summary>
+    public string? TemplateHead { get; set; }
+    /// <summary>A template instance: the template header it was stamped from (<c>inc/tmpl_3.h</c>).</summary>
+    public string? IncludedVia { get; set; }
 }
+
+/// <summary>An include-web unit's closure (docs/include-web-design.md), under the top-level <c>closures</c> key.</summary>
+public sealed record ClosureRecord(string Unit, long Files, long Bytes, long Reads, long ReadBytes, int Depth, long Defines, int TemplateInstances);
 
 /// <summary>
 /// A set of byte-identical files (the dedup target — they MUST collapse to one posting set) plus optional
@@ -196,4 +207,10 @@ public sealed class ManifestModel
 
     /// <summary>Optional duplicate-content groups (dedup / posting-collapse oracle). Empty when unused.</summary>
     public List<DupGroup> DupGroups { get; } = new();
+
+    /// <summary>Include web: the -I search order (corpus-relative) under <c>_meta.includeDirs</c>. Empty = no web.</summary>
+    public List<string> IncludeDirs { get; } = new();
+
+    /// <summary>Include web: each unit's closure, the top-level <c>closures</c> object. Empty = no web.</summary>
+    public List<ClosureRecord> Closures { get; } = new();
 }

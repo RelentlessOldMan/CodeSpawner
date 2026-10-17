@@ -66,7 +66,8 @@ codespawner verify --corpus .\_fw
 # Presets
 codespawner gen --out .\_fw   --preset ci        # fast smoke, keeps >=1 giant header
 codespawner gen --out .\_mem  --preset memory    # preprocessor-memory axis
-codespawner gen --out D:\death --preset death    # ~90 GB, 12 headers >1 GB
+codespawner gen --out D:\death --preset death    # ~90 GB, 12 headers >1 GB, + the include web
+codespawner gen --out .\_lite --preset death-lite # all of death's shapes in ~0.5 GB
 ```
 
 Run `codespawner --help` for the full knob list, or see [`docs/knobs.md`](docs/knobs.md).
@@ -106,6 +107,7 @@ asserts `_meta.manifestVersion` first:
 - [`docs/USAGE.md`](docs/USAGE.md) — **the full usage guide** (start here).
 - [`docs/manifest-schema.md`](docs/manifest-schema.md) — the versioned manifest contract.
 - [`docs/knobs.md`](docs/knobs.md) — the knob catalogue (each = an observed failure class) + presets.
+- [`docs/include-web-design.md`](docs/include-web-design.md) — the include web and its per-unit closure truth.
 - [`docs/PLAN.md`](docs/PLAN.md) — the build plan / design rationale.
 
 ## Contributing

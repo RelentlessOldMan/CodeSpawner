@@ -117,6 +117,27 @@ Gen --out $dc --preset dup-content --dup-groups 6
 Check "dup-content verify" ($LASTEXITCODE -eq 0)
 Check "dupGroups present" ((Get-Content "$dc-manifest.json" -Raw) -match '"dupGroups"' -and (Get-Content "$dc-manifest.json" -Raw) -match '"sha256"')
 
+# 4d2. INCLUDE WEB: verify recomputes every closure; a tampered closure fails; units compile under the web's -I
+# order when clang is on hand (the closure numbers themselves were cross-checked against clang -H by hand).
+$wb = Join-Path $Work "wb"
+Gen --out $wb --scale 0.001 --giant-headers 0 --big-headers 0 --med-headers 0 --web-units 40 --web-headers 300 --web-tail 2 --web-tail-mb 2
+& $Exe verify --corpus $wb | Out-Null
+Check "include-web verify" ($LASTEXITCODE -eq 0)
+$wm = Get-Content "$wb-manifest.json" -Raw
+Check "closures + includeDirs present" (($wm -match '"closures"') -and ($wm -match '"includeDirs"') -and ($wm -match '"templateHead"'))
+($wm -replace '"readBytes": (\d+)', '"readBytes": 1$1') | Set-Content "$wb-tampered.json"
+& $Exe verify --corpus $wb --manifest "$wb-tampered.json" 2>&1 | Out-Null
+Check "include-web tamper detected" ($LASTEXITCODE -eq 1)
+$clang = @((Get-Command clang -ErrorAction SilentlyContinue).Source, "$env:ProgramFiles\LLVM\bin\clang.exe") | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if ($clang) {
+    $bad = 0
+    foreach ($u in 0..9) {
+        & $clang -fsyntax-only -Werror "-I$wb\inc" "-I$wb\inc_vnd" "$wb\web\u_$u.c" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { $bad++ }
+    }
+    Check "include-web units compile (clang -fsyntax-only -Werror)" ($bad -eq 0) "($bad of 10 failed)"
+} else { Write-Host "  SKIP  include-web clang compile (no clang)" -ForegroundColor Yellow }
+
 # 4e. MUTATE: digest golden vector + a deterministic delta with correct ripples.
 & $Exe digest-selftest | Out-Null
 Check "digest golden vector" ($LASTEXITCODE -eq 0)

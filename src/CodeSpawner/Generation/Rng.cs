@@ -120,4 +120,6 @@ public enum Category
     ProfileOracle,
     // C++ profile (appended):
     CppGen,
+    // include web (appended):
+    Web,
 }

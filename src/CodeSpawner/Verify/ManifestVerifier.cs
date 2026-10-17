@@ -82,6 +82,7 @@ public static class ManifestVerifier
         if (!root.TryGetProperty("symbols", out var symbols) || symbols.ValueKind != JsonValueKind.Object)
         { Err.WriteLine("error: manifest has no symbols object"); return 2; }
         if (MetaShapeError(meta) is { } metaShape) { Err.WriteLine($"error: malformed manifest: {metaShape}"); return 2; }
+        if (WebShapeError(root, meta, symbols) is { } webShape) { Err.WriteLine($"error: malformed manifest: {webShape}"); return 2; }
         if (v2 && CppShapeError(root, meta, symbols) is { } shape) { Err.WriteLine($"error: malformed v2 manifest: {shape}"); return 2; }
 
         // Collect symbol names for the edge-chain check.
@@ -103,8 +104,9 @@ public static class ManifestVerifier
 
         var lineCache = new Dictionary<string, string[]>();
         var paths = new Generation.Containment(corpus);
-        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0, cppOk = 0;
+        int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0, cppOk = 0, webOk = 0;
         if (v2) fail += CheckCpp(corpus, meta, symbols, names, ref cppOk, paths, lineCache);
+        if (root.TryGetProperty("closures", out var closuresEl)) fail += CheckWeb(corpus, meta, closuresEl, symbols, paths, ref webOk);
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree, its linked roots included (the
         // unresolved-include premise: an include path may span every root).
@@ -139,8 +141,16 @@ public static class ManifestVerifier
             }
             // A ctor shares its class's name, so its sites must name it outside a dtor's `~Cls`.
             bool ctor = v2 && entry.TryGetProperty("kind", out var kEl) && kEl.GetString() == "ctor";
+            // A web template instance is named by token pasting: its def is the unit's #include line (CheckWeb checks
+            // where it is defined); its refs are ordinary call sites.
+            bool instance = entry.TryGetProperty("templateHead", out JsonElement _);
             if (!entry.TryGetProperty("def", out var defEl) || defEl.ValueKind != JsonValueKind.String)
             { Err.WriteLine($"FAIL def {name}: no def site"); fail++; }
+            else if (instance)
+            {
+                if (TryReadLine(paths, lineCache, defEl.GetString()!, out string dl, out int _, out string dwhy) && dl.TrimStart().StartsWith("#include", StringComparison.Ordinal)) defsOk++;
+                else { Err.WriteLine($"FAIL def {name}: {(dwhy.Length > 0 ? dwhy : "not an #include line")}"); fail++; }
+            }
             else if (SiteHasToken(paths, lineCache, defEl.GetString()!, simple ?? name, out string why, wholeWord: v2, notAfterTilde: ctor)) defsOk++;
             else { Err.WriteLine($"FAIL def {name}: {why}"); fail++; }
 
@@ -245,9 +255,9 @@ public static class ManifestVerifier
         }
 
         Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges" +
-                          (v2 ? $", {cppOk} C++ facts" : ""));
+                          (v2 ? $", {cppOk} C++ facts" : "") + (webOk > 0 ? $", {webOk} include-web facts" : ""));
         // A manifest that declares nothing checkable used to PASS, having proved nothing.
-        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk + cppOk == 0)
+        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk + cppOk + webOk == 0)
         { Err.WriteLine("error: the manifest declares nothing to check (no symbol sites, dup groups or indirect edges)"); return 2; }
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
         Err.WriteLine($"verify: FAIL ({fail} problem(s))");
@@ -285,7 +295,94 @@ public static class ManifestVerifier
             return $"_meta.seed {s.GetRawText()} is not a 32-bit integer";
         foreach (var k in new[] { "generatorVersion", "corpusRoot", "indirectTruthSha", "cppTruthSha" })
             if (meta.TryGetProperty(k, out var v) && v.ValueKind != JsonValueKind.String) return $"_meta.{k} must be a string";
+        if (meta.TryGetProperty("includeDirs", out var d)
+            && !(d.ValueKind == JsonValueKind.Array && d.EnumerateArray().All(x => x.ValueKind == JsonValueKind.String && x.GetString()!.Length > 0)))
+            return "_meta.includeDirs must be an array of non-empty strings";
         return null;
+    }
+
+    internal static readonly string[] ClosureFields = ["files", "bytes", "reads", "readBytes", "depth", "defines", "templateInstances"];
+
+    /// <summary>The include web's shape: <c>closures</c> maps a unit to its seven non-negative integers and needs
+    /// <c>_meta.includeDirs</c>; a template instance carries <c>templateHead</c> and <c>includedVia</c> as strings,
+    /// both or neither, and only next to closures (its truth is recomputed from them).</summary>
+    internal static string? WebShapeError(JsonElement root, JsonElement meta, JsonElement symbols)
+    {
+        bool has = root.TryGetProperty("closures", out var cl);
+        if (has)
+        {
+            if (cl.ValueKind != JsonValueKind.Object) return "closures must be an object";
+            if (!meta.TryGetProperty("includeDirs", out _)) return "closures need _meta.includeDirs";
+            foreach (var u in cl.EnumerateObject())
+            {
+                if (u.Value.ValueKind != JsonValueKind.Object) return $"closures.'{u.Name}' must be an object";
+                foreach (var f in ClosureFields)
+                    if (!u.Value.TryGetProperty(f, out var n) || n.ValueKind != JsonValueKind.Number || !n.TryGetInt64(out long x) || x < 0)
+                        return $"closures.'{u.Name}'.{f} must be a non-negative integer";
+            }
+        }
+        foreach (var s in symbols.EnumerateObject())
+        {
+            if (s.Value.ValueKind != JsonValueKind.Object) continue;
+            bool th = s.Value.TryGetProperty("templateHead", out var a), iv = s.Value.TryGetProperty("includedVia", out var b);
+            if (!th && !iv) continue;
+            if (th != iv) return $"symbol '{s.Name}' needs both templateHead and includedVia, or neither";
+            if (a.ValueKind != JsonValueKind.String || b.ValueKind != JsonValueKind.String) return $"symbol '{s.Name}': templateHead and includedVia must be strings";
+            if (!has) return $"symbol '{s.Name}' is a template instance, but the manifest has no closures";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The include web: recompute every unit's closure with verify's own preprocessor (<see cref="IncludeClosure"/>)
+    /// and compare all seven numbers; then match the template instances it finds against the manifest's instance
+    /// symbols, both ways: each instance declared once, with the def, templateHead and includedVia the walk sees.
+    /// </summary>
+    private static int CheckWeb(string corpus, JsonElement meta, JsonElement closures, JsonElement symbols,
+        Generation.Containment paths, ref int ok)
+    {
+        int fail = 0;
+        var dirs = meta.GetProperty("includeDirs").EnumerateArray().Select(x => x.GetString()!).ToList();
+        foreach (var d in dirs)
+            if (paths.Resolve(d) is null) { Err.WriteLine($"FAIL includeDirs: {d} escapes the corpus root"); return 1; }
+        var units = closures.EnumerateObject().Select(u => u.Name).ToList();
+        foreach (var u in units)
+            if (paths.Resolve(u) is not { } f || !File.Exists(f)) { Err.WriteLine($"FAIL closure {u}: unit file missing or outside the corpus"); return 1; }
+
+        var walk = new IncludeClosure(corpus, dirs, units, paths).Run(units);
+        var found = new Dictionary<string, IncludeClosure.Instance>(StringComparer.Ordinal);
+        foreach (var u in closures.EnumerateObject())
+        {
+            var r = walk[u.Name];
+            if (r.Error is not null) { Err.WriteLine($"FAIL closure {u.Name}: {r.Error}"); fail++; continue; }
+            long[] got = [r.Files, r.Bytes, r.Reads, r.ReadBytes, r.Depth, r.Defines, r.TemplateInstances];
+            for (int k = 0; k < ClosureFields.Length; k++)
+            {
+                long want = u.Value.GetProperty(ClosureFields[k]).GetInt64();
+                if (want == got[k]) ok++;
+                else { Err.WriteLine($"FAIL closure {u.Name}: {ClosureFields[k]} {want}, recomputed {got[k]}"); fail++; }
+            }
+            foreach (var x in r.Instances)
+                if (!found.TryAdd(x.Name, x)) { Err.WriteLine($"FAIL instance {x.Name}: defined twice ({found[x.Name].Unit}:{found[x.Name].UnitLine} and {x.Unit}:{x.UnitLine})"); fail++; }
+        }
+
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in symbols.EnumerateObject())
+        {
+            if (!s.Value.TryGetProperty("templateHead", out var th)) continue;
+            declared.Add(s.Name);
+            if (!found.TryGetValue(s.Name, out var x)) { Err.WriteLine($"FAIL instance {s.Name}: no unit's closure defines it"); fail++; continue; }
+            string def = s.Value.TryGetProperty("def", out var dEl) && dEl.ValueKind == JsonValueKind.String ? dEl.GetString()! : "";
+            string via = s.Value.GetProperty("includedVia").GetString()!;
+            if (def != $"{x.Unit}:{x.UnitLine}") { Err.WriteLine($"FAIL instance {s.Name}: def {def}, the walk has {x.Unit}:{x.UnitLine}"); fail++; }
+            else if (th.GetString() != $"{x.File}:{x.HeadLine}") { Err.WriteLine($"FAIL instance {s.Name}: templateHead {th.GetString()}, the walk has {x.File}:{x.HeadLine}"); fail++; }
+            else if (via != x.File) { Err.WriteLine($"FAIL instance {s.Name}: includedVia {via}, the walk has {x.File}"); fail++; }
+            else ok++;
+        }
+        foreach (var n in found.Keys.Where(n => !declared.Contains(n)).Order(StringComparer.Ordinal))
+        { Err.WriteLine($"FAIL instance {n}: the walk finds it at {found[n].Unit}:{found[n].UnitLine}, the manifest does not declare it"); fail++; }
+        if (fail == 0) Console.WriteLine($"  OK  include web: {units.Count} closure(s), {found.Count} template instance(s) recomputed");
+        return fail;
     }
 
     /// <summary>

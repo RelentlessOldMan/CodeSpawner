@@ -11,6 +11,26 @@ reads it.
 
 ## [Unreleased]
 
+`--preset death` corpora change (the web is added); every other corpus is byte-identical to 1.2.3.
+
+### Added
+- **Include web** (`gen --web-units N`, docs/include-web-design.md), for CodeCarver's include-closure slicing:
+  - a deep, overlapping graph of guarded register-map headers, aggregators, unguarded template headers expanded
+    through `TNAME`, an `#include_next` vendor dir, shadow decoys, and `.c` units;
+  - include traps: cycles, `#if`/`#ifdef` gates, computed and relative includes, long continued macros, comments
+    that touch macro names or hide fake includes, and CRLF and mixed line ends;
+  - a dial (`--web-*`) for each shape.
+- Manifest, all additive:
+  - top-level `closures`, with each unit's files, bytes, reads, readBytes, depth, defines and templateInstances;
+  - `_meta.includeDirs`;
+  - template-instance symbols with `templateHead` and `includedVia`.
+  - The web's units are listed in `compile_commands.json` whatever `--compile-db` says.
+- `verify` recomputes every closure with its own small preprocessor and checks each template instance both ways.
+  clang `-H` agrees with the closures.
+- `--preset death` now includes the web. New `--preset death-lite` has all of death's shapes in about 0.5 GB
+  (32 MB giants, and the web at death's counts with small headers), with no compute gate needed.
+- `mutate` never edits the web's directories.
+
 ## [1.2.3] - 2026-10-15
 
 Generated corpora are unchanged (C and C++). `verify` is stricter on hand-edited manifests.
