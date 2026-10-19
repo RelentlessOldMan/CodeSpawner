@@ -41,6 +41,9 @@ public static class WebEmitter
     public static readonly string[] Dirs = [IncDir, VendorDir, UnitDir];
     /// <summary>The -I search order, relative to the corpus root (also <c>_meta.includeDirs</c>).</summary>
     public static readonly string[] IncludeDirs = [IncDir, VendorDir];
+    /// <summary>The deepest closure the web may record. gcc and clang stop at an #include nesting of 200; a deeper
+    /// closure would be truth no compiler produces, so gen refuses it (and the walks stay far from the stack's end).</summary>
+    public const int MaxClosureDepth = 190;
     private const int CfgSwitches = 16;
     private const int VendorPairs = 4;
 
@@ -416,6 +419,9 @@ public static class WebEmitter
             var wf = files[f];
             bool seen = _stamp[f] == _cur;
             if (wf.Guarded && seen) return;          // the guard skips the whole file: not a read
+            if (depth > MaxClosureDepth)
+                throw new ArgException($"include web: a closure reaches {wf.Rel} at depth {depth}, deeper than {MaxClosureDepth} " +
+                                       "(compilers stop at 200); lower --web-depth or --web-ifdef-frac");
             _reads++; _readBytes += wf.Bytes;
             if (!seen) { _stamp[f] = _cur; _files++; _bytes += wf.Bytes; }
             if (depth > _depth) _depth = depth;
@@ -435,16 +441,19 @@ public static class WebEmitter
             if (files[f].Guarded && _stamp[f] == _cur) return null;
             var tmp = new HashSet<int>();
             var got = new List<int>();
-            void P(int g)
+            bool tooDeep = false;
+            void P(int g, int depth)
             {
                 var wf = files[g];
                 if (wf.Guarded && (_stamp[g] == _cur || tmp.Contains(g))) return;
+                // An include reaching past the cap would refuse the whole gen: not a candidate.
+                if (depth > MaxClosureDepth) { tooDeep = true; return; }
                 tmp.Add(g);
                 if (wf.Tmpl) { got.Add(g); return; }
-                foreach (var h in wf.Includes) P(h);
+                foreach (var h in wf.Includes) { P(h, depth + 1); if (tooDeep) return; }
             }
-            P(f);
-            return got;
+            P(f, 1);
+            return tooDeep ? null : got;
         }
 
         public Counts End(long unitBytes, long unitDefines) =>

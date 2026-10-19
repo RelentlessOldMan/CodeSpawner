@@ -247,7 +247,7 @@ public static class ArgParser
         if (o.WebUnits > 0 && o.Lang == SourceLang.Cpp) throw new ArgException("--web-units is C-only (not with --lang cpp)");
         foreach (var (k, v, min, max) in new (string, int, int, int)[]
         {
-            ("web-headers", o.WebHeaders, 1, 10_000_000), ("web-depth", o.WebDepth, 1, 10_000),
+            ("web-headers", o.WebHeaders, 1, 10_000_000), ("web-depth", o.WebDepth, 1, 150),
             ("web-aggregators", o.WebAggregators, 0, 1_000_000), ("web-header-lines", o.WebHeaderLines, 1, 10_000_000),
             ("web-tail", o.WebTail, 0, 1_000_000), ("web-tail-mb", o.WebTailMb, 1, 4096),
             ("web-templates", o.WebTemplates, 0, 1_000_000), ("web-template-sites", o.WebTemplateSites, 0, 1000),
@@ -267,6 +267,15 @@ public static class ArgParser
         _ = ParseWebWindow(o.WebWindow);
         if (o.WebTail > o.WebHeaders) throw new ArgException($"--web-tail {o.WebTail} is more than --web-headers {o.WebHeaders}");
         if (o.WebShadow > o.WebHeaders) throw new ArgException($"--web-shadow {o.WebShadow} is more than --web-headers {o.WebHeaders}");
+        if (o.WebUnits == 0) return;
+        // The closures are the web's truth: a web without a manifest is one nothing can check.
+        if (!o.Manifest) throw new ArgException("--web-units needs the manifest (its closures are the web's truth); drop --manifest false");
+        // Knobs whose parent is off would be ignored, like a web-* knob without the web.
+        string? idle = o.WebTemplates == 0
+            ? new[] { "web-template-sites", "web-template-heads", "web-template-reach-frac", "web-template-hidden-frac" }.FirstOrDefault(given.Contains)
+            : null;
+        if (idle is not null) throw new ArgException($"--{idle} shapes the web's templates, and --web-templates is 0");
+        if (o.WebTail == 0 && given.Contains("web-tail-mb")) throw new ArgException("--web-tail-mb sizes the tail headers, and --web-tail is 0");
     }
 
     /// <summary><c>--web-window</c>: "N" or "MIN-MAX", 1 &lt;= MIN &lt;= MAX &lt;= 100000.</summary>

@@ -156,6 +156,8 @@ public static class ManifestReader
                     e.TemplateHead = th.GetString();
                 if (p.Value.TryGetProperty("includedVia", out var iv) && iv.ValueKind == JsonValueKind.String)
                     e.IncludedVia = iv.GetString();
+                if (p.Value.TryGetProperty("defNotLiteral", out var dn) && dn.ValueKind == JsonValueKind.True)
+                    e.DefNotLiteral = true;
                 if (ver >= 2) ReadV2(p.Value, e);
                 symbols[p.Name] = e;
             }

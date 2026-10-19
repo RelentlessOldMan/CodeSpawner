@@ -137,13 +137,14 @@ means none. The live graph plus the dead block is capped at 2,000,000 free funct
 
 Off by default; never scaled; every `--web-*` knob is refused without `--web-units`, and the web is C-only. The
 full table, the layout and the closure definitions are in [include-web-design.md](include-web-design.md).
-`--web-units`, `--web-headers` (600), `--web-depth` (12), `--web-window` (`6-12`), `--web-aggregators` (16),
-`--web-header-lines` (300), `--web-tail` (0), `--web-tail-mb` (32), `--web-templates` (24),
+`--web-units`, `--web-headers` (600), `--web-depth` (12, at most 150), `--web-window` (`6-12`), `--web-aggregators` (16),
+`--web-header-lines` (300), `--web-tail` (0), `--web-tail-mb` (32; a tail comes out about 1.25× it), `--web-templates` (24),
 `--web-template-sites` (3), `--web-template-heads` (12), `--web-template-reach-frac` (0.4),
 `--web-template-hidden-frac` (0.25), `--web-cycle-frac` (0.2), `--web-ifdef-frac` (0.15),
 `--web-continuation-frac` (0.2), `--web-comment-frac` (0.2), `--web-undef-frac` (0.1), `--web-computed-frac` (0.05),
 `--web-next-frac` (0.05), `--web-shadow` (4), `--web-relative-frac` (0.05), `--web-crlf-frac` (0.05),
-`--web-mixed-eol-frac` (0.02).
+`--web-mixed-eol-frac` (0.02). The web needs the manifest (`--manifest false` is refused), and a template knob
+with `--web-templates 0` or `--web-tail-mb` without `--web-tail` is refused.
 
 ## Presets
 

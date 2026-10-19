@@ -316,7 +316,7 @@ public sealed class CorpusGenerator
         model.IncludeDirs.AddRange(WebEmitter.IncludeDirs);
         foreach (var x in web.Instances)
         {
-            var e = new SymbolEntry { Def = x.Def, TemplateHead = x.TemplateHead, IncludedVia = x.IncludedVia };
+            var e = new SymbolEntry { Def = x.Def, TemplateHead = x.TemplateHead, IncludedVia = x.IncludedVia, DefNotLiteral = true };
             e.Refs.AddRange(x.Refs);
             model.Symbols[x.Name] = e;
         }

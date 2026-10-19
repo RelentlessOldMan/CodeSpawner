@@ -20,8 +20,8 @@ public static class Presets
         ["--scale", "1.0", "--giant-headers", "12", "--max-header-mb", "1229", "--big-headers", "1375",
          .. WebCounts, "--web-header-lines", "2000", "--web-tail-mb", "48"];
 
-    // death-lite: all of death's shapes in ~0.5 GB, no compute gate. Giants of 32 MB, the rest at 1/20 the counts,
-    // and the web at death's counts with small headers (150 lines, tails of 8 MB).
+    // death-lite: all of death's shapes in ~0.5 GB, no compute gate. Source counts at 1/20, 3 giants of 32 MB, 1 big
+    // and 12 medium headers, and the web at death's counts with small headers (150 lines, tails of ~8 MB).
     private static readonly string[] DeathLite =
         ["--scale", "0.05", "--giant-headers", "3", "--max-header-mb", "32", "--big-headers", "1", "--med-headers", "12",
          .. WebCounts, "--web-header-lines", "150", "--web-tail-mb", "8"];

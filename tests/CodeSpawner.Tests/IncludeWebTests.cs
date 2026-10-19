@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeSpawner.Cli;
 using CodeSpawner.Generation;
@@ -81,7 +82,10 @@ public class IncludeWebTests
     public void Knobs_Parse_AndWindowTakesNOrRange()
     {
         var o = ArgParser.ParseGen(["--out", "x", .. Web]);
-        Assert.Equal((30, 120, 8, "3-6", 0.5), (o.WebUnits, o.WebHeaders, o.WebDepth, o.WebWindow, o.WebCycleFrac));
+        Assert.Equal((30, 120, 8, "3-6", 4, 40, 1, 1), (o.WebUnits, o.WebHeaders, o.WebDepth, o.WebWindow, o.WebAggregators, o.WebHeaderLines, o.WebTail, o.WebTailMb));
+        Assert.Equal((8, 3, 6, 0.6, 0.5), (o.WebTemplates, o.WebTemplateSites, o.WebTemplateHeads, o.WebTemplateReachFrac, o.WebTemplateHiddenFrac));
+        Assert.Equal((0.5, 0.5, 0.5, 0.5, 0.5), (o.WebCycleFrac, o.WebIfdefFrac, o.WebContinuationFrac, o.WebCommentFrac, o.WebUndefFrac));
+        Assert.Equal((0.3, 0.5, 4, 0.3, 0.3, 0.2), (o.WebComputedFrac, o.WebNextFrac, o.WebShadow, o.WebRelativeFrac, o.WebCrlfFrac, o.WebMixedEolFrac));
         Assert.Equal((7, 7), ArgParser.ParseWebWindow("7"));
         Assert.Equal((2, 9), ArgParser.ParseWebWindow("2-9"));
     }
@@ -97,6 +101,11 @@ public class IncludeWebTests
     [InlineData("--web-units", "5", "--web-headers", "4", "--web-shadow", "5")]
     [InlineData("--web-units", "-1")]
     [InlineData("--web-units", "5", "--lang", "cpp")]
+    [InlineData("--web-units", "5", "--web-depth", "151")]                 // closures would pass the compilers' 200
+    [InlineData("--web-units", "5", "--manifest", "false")]               // the closures are the web's truth
+    [InlineData("--web-units", "5", "--web-templates", "0", "--web-template-sites", "4")]   // a knob with its parent off
+    [InlineData("--web-units", "5", "--web-templates", "0", "--web-template-hidden-frac", "0.1")]
+    [InlineData("--web-units", "5", "--web-tail-mb", "8")]               // --web-tail is 0 by default
     public void BadKnobs_AreRefused(params string[] args) =>
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(["--out", "x", .. args]));
 
@@ -152,6 +161,14 @@ public class IncludeWebTests
         Assert.Contains("\\\n", all);                                         // continuation lines
         Assert.Contains("#undef ", all);
         Assert.Matches(@"#if(def)? CFG_\d+", all);
+        Assert.Contains(WebFiles(c), f => Path.GetFileName(f).StartsWith("all_", StringComparison.Ordinal));   // aggregators
+        Assert.Contains(WebFiles(c), f =>                                                                      // a cycle: a back include
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(Path.GetFileName(f), @"^rm_(\d+)\.h$");
+            return m.Success && System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(f), @"#include ""rm_(\d+)\.h""")
+                .Any(x => int.Parse(x.Groups[1].Value) < int.Parse(m.Groups[1].Value));
+        });
+        Assert.Contains(WebFiles(c), f => { string t = File.ReadAllText(f); return t.Contains("\r\n") && t.Replace("\r\n", "").Contains('\n'); });   // mixed EOL
 
         // compile_commands lists every unit with the web's -I order, though --compile-db is none.
         string db = File.ReadAllText(Path.Combine(c, "compile_commands.json"));
@@ -269,6 +286,88 @@ public class IncludeWebTests
     }
 
     [Fact]
+    public void Tamper_IncludedVia_Fails()
+    {
+        using var tmp = new TempDir();
+        var (code, err) = Tampered(tmp, (_, m) => AnInstance(m).Value!["includedVia"] = "inc/cfg.h");
+        Assert.Equal(1, code);
+        Assert.Contains("includedVia inc/cfg.h", err);
+    }
+
+    [Fact]
+    public void Instances_AreDefNotLiteral_AndTheFlagOnlyMarksInstances()
+    {
+        using var tmp = new TempDir();
+        string c = Gen(tmp, "c", Web);
+        var m = Manifest(c);
+        var syms = m["symbols"]!.AsObject();
+        Assert.All(syms.Where(kv => kv.Value!["templateHead"] is not null), kv => Assert.True(kv.Value!["defNotLiteral"]!.GetValue<bool>()));
+        Assert.All(syms.Where(kv => kv.Value!["templateHead"] is null), kv => Assert.Null(kv.Value!["defNotLiteral"]));
+        Assert.DoesNotContain(syms, kv => kv.Value!["expectedMiss"] is not null && kv.Value!["templateHead"] is not null);
+
+        syms.First(kv => kv.Value!["templateHead"] is null).Value!["defNotLiteral"] = true;
+        Save(c, m);
+        var (code, err) = Verify(c);
+        Assert.True(code == 2, err);
+        Assert.Contains("defNotLiteral marks a template instance", err);
+    }
+
+    [Theory]
+    [InlineData("swap-I")]
+    [InlineData("drop-unit")]
+    [InlineData("missing")]
+    public void Tamper_CompileDb_Fails(string kind)
+    {
+        using var tmp = new TempDir();
+        var (code, err) = Tampered(tmp, (c, _) =>
+        {
+            string db = Path.Combine(c, "compile_commands.json");
+            var arr = JsonNode.Parse(File.ReadAllText(db))!.AsArray();
+            switch (kind)
+            {
+                case "swap-I":
+                    var cmd = arr[0]!["command"]!.GetValue<string>();
+                    string inc = $"-I\"{Path.Combine(c, "inc")}\"", vnd = $"-I\"{Path.Combine(c, "inc_vnd")}\"";
+                    arr[0]!["command"] = cmd.Replace(inc, "@").Replace(vnd, inc).Replace("@", vnd);
+                    File.WriteAllText(db, arr.ToJsonString());
+                    break;
+                case "drop-unit": arr.RemoveAt(arr.Count - 1); File.WriteAllText(db, arr.ToJsonString()); break;
+                case "missing": File.Delete(db); break;
+            }
+        });
+        Assert.Equal(1, code);
+        Assert.Contains("FAIL compile_commands.json", err);
+    }
+
+    // A db that still names the tree it was generated at: a NOTE for a moved corpus, a FAIL for a 3-way variant
+    // whose db names its base (what 1.3.1's mutate left).
+    [Fact]
+    public void CompileDb_NamingAnotherTree_IsANote_OrAFailForAVariantsBase()
+    {
+        using var tmp = new TempDir();
+        string c = Gen(tmp, "c", Web);
+        foreach (var (dst, fails) in new[] { ("moved", false), ("c_v1", true) })
+        {
+            string to = Path.Combine(tmp.Path, dst);
+            CopyDir(c, to);
+            File.Copy(c + "-manifest.json", to + "-manifest.json");
+            var (code, err) = Verify(to);
+            if (fails) { Assert.Equal(1, code); Assert.Contains("this variant's base", err); }
+            else Assert.True(code == 0, err);
+        }
+
+        static void CopyDir(string from, string to)
+        {
+            foreach (var f in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+            {
+                string d = Path.Combine(to, Path.GetRelativePath(from, f));
+                Directory.CreateDirectory(Path.GetDirectoryName(d)!);
+                File.Copy(f, d);
+            }
+        }
+    }
+
+    [Fact]
     public void Tamper_RemovedOrInventedInstance_Fails()
     {
         using var tmp = new TempDir();
@@ -359,10 +458,22 @@ public class IncludeWebTests
         Assert.True(code == 0, err);
 
         Assert.True(Cli("mutate", "--corpus", web, "--target", "source", "--files-changed", "20", "--three-way", "--overlap-fraction", "0.5") == 0, _lastErr);
+        string db = File.ReadAllText(Path.Combine(web, "compile_commands.json"));
         foreach (var v in new[] { web + "_v1", web + "_v2" })
         {
             var vs = Snapshot(v);
-            Assert.All(w.Where(kv => IsWeb(kv.Key)), kv => Assert.Equal(kv.Value, vs[kv.Key]));
+            Assert.All(w.Where(kv => IsWeb(kv.Key) && kv.Key != "compile_commands.json"), kv => Assert.Equal(kv.Value, vs[kv.Key]));
+            // The variant's db compiles the variant: B's db with only the tree's path changed.
+            string vdb = File.ReadAllText(Path.Combine(v, "compile_commands.json"));
+            Assert.Equal(db.Replace(JsonEncodedText.Encode(web).ToString(), JsonEncodedText.Encode(v).ToString()), vdb);
+            Assert.DoesNotContain(JsonEncodedText.Encode(web).ToString() + "\\\\", vdb);
+        }
+        // ... and every 3-way manifest says that file is bookkeeping, not an edit (manifestVersion 2).
+        foreach (var m in new[] { "-delta-v1.json", "-delta-v2.json", "-conflict.json" })
+        {
+            var meta = JsonNode.Parse(File.ReadAllText(web + m))!["_meta"]!;
+            Assert.Equal(2, (int)meta["manifestVersion"]!);
+            Assert.Equal("[\"compile_commands.json\"]", meta["bookkeeping"]!.ToJsonString());
         }
 
         static bool IsWeb(string rel) => rel == "compile_commands.json" || rel.StartsWith("web/", StringComparison.Ordinal) || rel.StartsWith("inc/", StringComparison.Ordinal) || rel.StartsWith("inc_vnd/", StringComparison.Ordinal);
@@ -406,5 +517,62 @@ public class IncludeWebTests
         Assert.Equal(17, res.Defines);
         Assert.Equal(2, res.TemplateInstances);   // the third entry has no TNAME
         Assert.Equal(new[] { ("U_r0_t0", 5, 3), ("U_r1_t0", 8, 3) }, res.Instances.Select(i => (i.Name, i.UnitLine, i.HeadLine)));
+    }
+
+    private static IncludeClosure.Result Walk(string r, string unit = "web/u.c") =>
+        new IncludeClosure(r, ["inc", "vnd"], [unit], new Containment(r)).Run([unit])[unit];
+
+    // The includer's own dir comes before -I for a quoted include; angle brackets skip it.
+    [Fact]
+    public void Preprocessor_QuotedIncludeSearchesTheIncludersDirFirst()
+    {
+        using var tmp = new TempDir();
+        string r = tmp.Path;
+        Put(r, "inc/sub/a.h", "#include \"b.h\"\n#include <b.h>\n");
+        Put(r, "inc/sub/b.h", "#define SUB_B 1\n");
+        Put(r, "inc/b.h", "#define TOP_B 1\n");
+        Put(r, "web/u.c", "#include \"sub/a.h\"\n");
+        var res = Walk(r);
+        Assert.Null(res.Error);
+        Assert.Equal(4, res.Files);   // u.c, sub/a.h, sub/b.h (quoted, beside a.h), inc/b.h (angle)
+    }
+
+    [Theory]
+    [InlineData("#if 010 == 8 && 0x10 == 16 && 0b11 == 3 && 10u == 10\n#include \"y.h\"\n#endif\n", 2)]
+    [InlineData("#if UNDEFINED_NAME || 0\n#include \"y.h\"\n#endif\n", 1)]   // an undefined name is 0
+    [InlineData("#if 0 || 1\n#include \"y.h\"\n#endif\n", 2)]
+    [InlineData("#include \"chain.h\"\n#if TOP\n#include \"y.h\"\n#endif\n", 3)]   // TOP -> MID -> 1, defined in a header
+    [InlineData("#pragma once\n#include \"once.h\"\n#include \"once.h\"\n", 2)]
+    [InlineData("// a comment that runs on \\\n#include \"missing.h\"\n", 1)]   // the splice carries the comment
+    [InlineData("#include \"d.h\"\n#include LATER\n", 3)]                    // computed include defined in a later file
+    public void Preprocessor_Cases(string unit, int files)
+    {
+        using var tmp = new TempDir();
+        string r = tmp.Path;
+        Put(r, "inc/y.h", "#define Y 1\n");
+        Put(r, "inc/chain.h", "#ifndef CHAIN_H\n#define CHAIN_H\n#define TOP MID\n#define MID 1\n#endif\n");
+        Put(r, "inc/once.h", "#pragma once\n#define ONCE 1\n");
+        Put(r, "inc/d.h", "#define LATER \"y.h\"\n");
+        Put(r, "web/u.c", unit);
+        var res = Walk(r);
+        Assert.True(res.Error is null, res.Error);
+        Assert.Equal(files, res.Files);
+        if (unit.Contains("once.h")) Assert.Equal(2, res.Reads);   // once.h read once, though included twice
+    }
+
+    [Theory]
+    [InlineData("#include \"self.h\"\n", "nested deeper than 200")]                 // no guard, no once: a cycle
+    [InlineData("#if 1\n#error stop here\n#endif\n", "#error stop here")]
+    [InlineData("#if 09\n#endif\n", "#if number 09")]                                 // not an octal number
+    [InlineData("#if 99999999999999999999\n#endif\n", "#if number")]                // past 64 bits
+    public void Preprocessor_FailsWhereACompilerWould(string unit, string why)
+    {
+        using var tmp = new TempDir();
+        string r = tmp.Path;
+        Put(r, "inc/self.h", "#define SELF 1\n#include \"self.h\"\n");
+        Put(r, "web/u.c", unit);
+        var res = Walk(r);
+        Assert.NotNull(res.Error);
+        Assert.Contains(why, res.Error);
     }
 }

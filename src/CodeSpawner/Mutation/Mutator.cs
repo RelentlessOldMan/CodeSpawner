@@ -634,8 +634,8 @@ public static class Mutator
     {
         string trimmed = TrimDir(corpus);
         string v1Root = trimmed + "_v1", v2Root = trimmed + "_v2";
-        CopyTree(corpus, v1Root);
-        CopyTree(corpus, v2Root);
+        // Both copies carry the db, or neither: it is bookkeeping in both deltas and the conflict manifest.
+        string[] bookkeeping = CopyTree(corpus, v1Root) & CopyTree(corpus, v2Root) ? [CompileDbName] : [];
 
         int dth = (int)Math.Round(Math.Clamp(o.EditDensity, 0, 1) * 10000);
         int fth = (int)Math.Round(Math.Clamp(o.OverlapFraction, 0, 1) * 10000);
@@ -691,10 +691,10 @@ public static class Mutator
         }
 
         string prevSha = TruthDigest.Compute(basem.Symbols);
-        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v1Files, Array.Empty<Rename>()), v1Files, Array.Empty<Rename>(), Array.Empty<string>(), "v1");
-        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v2Files, Array.Empty<Rename>()), v2Files, Array.Empty<Rename>(), Array.Empty<string>(), "v2");
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v1Files, Array.Empty<Rename>()), v1Files, Array.Empty<Rename>(), Array.Empty<string>(), "v1", bookkeeping);
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v2Files, Array.Empty<Rename>()), v2Files, Array.Empty<Rename>(), Array.Empty<string>(), "v2", bookkeeping);
         string conflictSha = ConflictDigest.Compute(conflicts, clean);
-        WriteConflict(corpus, basem, o, conflictSha, conflicts, clean, Path.GetFileName(v1Root), Path.GetFileName(v2Root));
+        WriteConflict(corpus, basem, o, conflictSha, conflicts, clean, Path.GetFileName(v1Root), Path.GetFileName(v2Root), bookkeeping);
 
         Console.WriteLine($"mutate(3way): {chosen.Count} file(s), overlap={o.OverlapFraction:0.##}, seed {o.Seed} " +
                           $"→ {conflicts.Count} conflict(s), {clean.Count} clean; conflictTruthSha {conflictSha[..12]}…");
@@ -721,7 +721,8 @@ public static class Mutator
         WriteText(abs, sb.ToString(), encoding);
     }
 
-    private static void CopyTree(string src, string dst)
+    /// <returns>Whether the copy's <c>compile_commands.json</c> was rewritten (see <see cref="RebaseCompileDb"/>).</returns>
+    private static bool CopyTree(string src, string dst)
     {
         EnsureReplaceable(dst);
         if (Directory.Exists(dst)) Directory.Delete(dst, true);
@@ -731,7 +732,27 @@ public static class Mutator
             Directory.CreateDirectory(Path.Combine(dst, RelOf(src, dir).Replace('/', Path.DirectorySeparatorChar)));
         foreach (var f in Directory.EnumerateFiles(src, "*", TreeWalk))
             File.Copy(f, Path.Combine(dst, RelOf(src, f).Replace('/', Path.DirectorySeparatorChar)), overwrite: true);
+        return RebaseCompileDb(src, dst);
     }
+
+    /// <summary>The generator's <c>compile_commands.json</c> names the corpus by its absolute path: a variant's copy
+    /// would compile the base tree's files. Point the copy at the variant (the same bytes gen would write there). The
+    /// db then differs from B's by its paths alone, so the 3-way deltas list it as <c>_meta.bookkeeping</c>: a file
+    /// left out of diff truth, not an edit.</summary>
+    /// <returns>Whether the db exists (and so was rebased).</returns>
+    internal static bool RebaseCompileDb(string src, string dst)
+    {
+        string db = Path.Combine(dst, CompileDbName);
+        if (!File.Exists(db)) return false;
+        string from = JsonEncodedText.Encode(Path.GetFullPath(TrimDir(src))).ToString();
+        string to = JsonEncodedText.Encode(Path.GetFullPath(TrimDir(dst))).ToString();
+        string text = File.ReadAllText(db);
+        string moved = text.Replace(from, to, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (moved != text) File.WriteAllText(db, moved, new UTF8Encoding(false));
+        return true;
+    }
+
+    private const string CompileDbName = "compile_commands.json";
 
     /// <summary>
     /// Whether <paramref name="dir"/> is a 3-way variant a previous run made: its <c>-mutated.txt</c> records
@@ -794,8 +815,8 @@ public static class Mutator
     {
         string trimmed = TrimDir(corpus);
         string v1Root = trimmed + "_v1", v2Root = trimmed + "_v2";
-        CopyTree(corpus, v1Root);
-        CopyTree(corpus, v2Root);
+        // Both copies carry the db, or neither: it is bookkeeping in both deltas and the conflict manifest.
+        string[] bookkeeping = CopyTree(corpus, v1Root) & CopyTree(corpus, v2Root) ? [CompileDbName] : [];
 
         var v1Files = new List<DiffFile>();
         var v2Files = new List<DiffFile>();
@@ -830,10 +851,10 @@ public static class Mutator
         }
 
         string prevSha = TruthDigest.Compute(basem.Symbols);
-        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v1Files, Array.Empty<Rename>()), v1Files, Array.Empty<Rename>(), Array.Empty<string>(), "v1");
-        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v2Files, Array.Empty<Rename>()), v2Files, Array.Empty<Rename>(), Array.Empty<string>(), "v2");
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v1Files, Array.Empty<Rename>()), v1Files, Array.Empty<Rename>(), Array.Empty<string>(), "v1", bookkeeping);
+        WriteDiffDelta(corpus, basem, o, prevSha, DiffDigest.Compute(v2Files, Array.Empty<Rename>()), v2Files, Array.Empty<Rename>(), Array.Empty<string>(), "v2", bookkeeping);
         string conflictSha = ConflictDigest.Compute(conflicts, clean);
-        WriteConflict(corpus, basem, o, conflictSha, conflicts, clean, Path.GetFileName(v1Root), Path.GetFileName(v2Root));
+        WriteConflict(corpus, basem, o, conflictSha, conflicts, clean, Path.GetFileName(v1Root), Path.GetFileName(v2Root), bookkeeping);
 
         Console.WriteLine($"mutate(3way-edges): {applied} file(s), seed {o.Seed} → {conflicts.Count} conflict(s), {clean.Count} clean; conflictTruthSha {conflictSha[..12]}…");
         Console.WriteLine($"  variants: {Path.GetFileName(v1Root)}/ + {Path.GetFileName(v2Root)}/");
@@ -1012,21 +1033,23 @@ public static class Mutator
     }
 
     private static void WriteConflict(string corpus, BaseManifest basem, MutateOptions o, string conflictSha,
-        IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree)
+        IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree,
+        IReadOnlyList<string> bookkeeping)
     {
         string path = $"{TrimDir(corpus)}-conflict.json";
-        AtomicFile.Write(path, fs => WriteConflictJson(fs, basem, o, conflictSha, conflicts, clean, v1Tree, v2Tree));
+        AtomicFile.Write(path, fs => WriteConflictJson(fs, basem, o, conflictSha, conflicts, clean, v1Tree, v2Tree, bookkeeping));
         Console.WriteLine($"  {Path.GetFileName(path)}: {conflicts.Count} conflict(s), {clean.Count} clean-merge(s)");
     }
 
     private static void WriteConflictJson(Stream fs, BaseManifest basem, MutateOptions o, string conflictSha,
-        IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree)
+        IReadOnlyList<Conflict> conflicts, IReadOnlyList<CleanMerge> clean, string v1Tree, string v2Tree,
+        IReadOnlyList<string> bookkeeping)
     {
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartObject();
 
         w.WriteStartObject("_meta");
-        w.WriteNumber("manifestVersion", 1);
+        WriteDeltaVersion(w, bookkeeping);
         w.WriteString("deltaKind", "conflict-3way");
         w.WriteNumber("baseSeed", basem.Seed);
         w.WriteNumber("editSeed", o.Seed);
@@ -1101,7 +1124,7 @@ public static class Mutator
     {
         long giantFloor = (long)giantMinMb * 1024 * 1024;
         var result = new List<string>();
-        string compileDb = Path.Combine(corpus, "compile_commands.json");
+        string compileDb = Path.Combine(corpus, CompileDbName);
         foreach (var abs in Directory.EnumerateFiles(corpus, "*", TreeWalk))
         {
             if (string.Equals(Path.GetFileName(abs), MarkerName, StringComparison.Ordinal)) continue;
@@ -1893,7 +1916,7 @@ public static class Mutator
 
     private static void WriteDiffDelta(string corpus, BaseManifest basem, MutateOptions o, string prevSha,
         string diffSha, IReadOnlyList<DiffFile> files, IReadOnlyList<Rename> renames, IReadOnlyList<string> added,
-        string? variant = null)
+        string? variant = null, IReadOnlyList<string>? bookkeeping = null)
     {
         // Canonical path-ordinal order (the modified records are a set — diffTruthSha is order-independent — but a
         // single stable order lets a sharded delta slice on non-overlapping path ranges).
@@ -1913,7 +1936,7 @@ public static class Mutator
             using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
             w.WriteStartObject();
 
-            WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize: null);
+            WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize: null, bookkeeping ?? []);
 
             w.WriteStartObject("fileOps");
             w.WriteStartArray("added");                // decoy near-duplicate ADDs (rename false-positive traps)
@@ -1977,7 +2000,7 @@ public static class Mutator
         {
             using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
             w.WriteStartObject();
-            WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize);
+            WriteDiffMeta(w, basem, o, prevSha, diffSha, shardSize, []);
 
             w.WriteStartObject("fileOps");                 // added/removed/renamed inline; modified lives in shards
             w.WriteStartArray("added"); foreach (var a in added) w.WriteStringValue(a); w.WriteEndArray();
@@ -2007,10 +2030,10 @@ public static class Mutator
     }
 
     private static void WriteDiffMeta(Utf8JsonWriter w, BaseManifest basem, MutateOptions o, string prevSha,
-        string diffSha, int? shardSize)
+        string diffSha, int? shardSize, IReadOnlyList<string> bookkeeping)
     {
         w.WriteStartObject("_meta");
-        w.WriteNumber("manifestVersion", 1);
+        WriteDeltaVersion(w, bookkeeping);
         w.WriteString("deltaKind", "diff");            // distinguishes a diff-delta from a symbol-overlay delta
         w.WriteString("editKind", o.Kind);
         w.WriteNumber("baseSeed", basem.Seed);
@@ -2022,6 +2045,17 @@ public static class Mutator
         w.WriteString("diffTruthSha", diffSha);
         if (shardSize is { } ss) w.WriteNumber("shardSize", ss);   // paging marker (present only in the index)
         w.WriteEndObject();
+    }
+
+    /// <summary>A delta's <c>manifestVersion</c>: 1, or 2 when it carries <c>bookkeeping</c> — the variant-tree files
+    /// that differ from B but are not edits (the rebased compile db), left out of every truth digest.</summary>
+    private static void WriteDeltaVersion(Utf8JsonWriter w, IReadOnlyList<string> bookkeeping)
+    {
+        w.WriteNumber("manifestVersion", bookkeeping.Count > 0 ? 2 : 1);
+        if (bookkeeping.Count == 0) return;
+        w.WriteStartArray("bookkeeping");
+        foreach (var b in bookkeeping) w.WriteStringValue(b);
+        w.WriteEndArray();
     }
 
     private static void WriteModifiedRecord(Utf8JsonWriter w, DiffFile f)
@@ -2136,6 +2170,7 @@ public static class Mutator
                 ExpectedMiss = v.ExpectedMiss,
                 TemplateHead = v.TemplateHead,
                 IncludedVia = v.IncludedVia,
+                DefNotLiteral = v.DefNotLiteral,
                 UnreachableRefs = v.UnreachableRefs is null ? null : new List<string>(v.UnreachableRefs),
             };
         foreach (var (k, v) in src)

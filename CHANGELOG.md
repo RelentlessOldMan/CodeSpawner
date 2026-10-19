@@ -11,6 +11,47 @@ reads it.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-19
+
+Generated trees are byte-identical to 1.3.1. A web corpus's manifest gains `defNotLiteral` on its template instances
+(no digest changes). `mutate --three-way` on a corpus with a compile db now rewrites the variants' db, and its delta
+and conflict manifests become `manifestVersion` 2.
+
+### Added
+- `defNotLiteral: true` on every template instance: its def is an `#include` line, not the name, but its refs are
+  real call sites an indexer should resolve. It is not part of `truthSha`; `expectedMiss` is unchanged. Verify
+  refuses it (exit 2) when it is not `true` or sits on a symbol without `templateHead`.
+- `verify` checks `compile_commands.json` on a web corpus: every unit listed, with the web's `-I` order. A 3-way
+  variant whose db names its base is a FAIL; a db naming any other tree (a moved corpus) prints a NOTE.
+
+### Changed
+- `mutate --three-way` rewrites each variant's `compile_commands.json` to the variant's own paths. 1.3.1 left it
+  naming the base, so a variant compiled the base's files. The db is listed as `_meta.bookkeeping:
+  ["compile_commands.json"]` in the v1, v2 and conflict manifests, which are then `manifestVersion` 2. They stay
+  version 1 and byte-identical when the corpus has no compile db. No digest changes.
+
+### Fixed
+- Verify's preprocessor:
+  - honours `#pragma once`, fails on an active `#error`, and stops at 200 nested includes with an error instead
+    of overflowing the stack on an unguarded self-include;
+  - reads `#if` numbers as C does: octal `010` is 8, `0x`/`0b` and `u`/`l` suffixes work, and `09` or an out-of-range number
+    is an error;
+  - follows a macro whose value is another macro defined in a header (`#define A B`), and a computed include whose
+    macro is defined in a file found later;
+  - continues a `//` comment onto the next line when its line ends in `\`, as compilers do;
+  - no longer counts identifiers inside string and character literals or pp-numbers as macro uses.
+- `gen` refuses a web whose closures would go deeper than 190 (compilers stop at 200), and a template site skips
+  chains that would; `--web-depth` is capped at 150. A death-shaped web is
+  byte-identical to 1.3.1's (its deepest closure is 49).
+- `gen` refuses web knobs that would be ignored or unverifiable: `--manifest false` with `--web-units`, a template
+  knob with `--web-templates 0`, and `--web-tail-mb` without `--web-tail`.
+
+### Docs
+- A tail header comes out about 1.25× `--web-tail-mb` (death's 48 MB tails are about 60 MB).
+- Corrected: which web files get CRLF and mixed line ends, what `--web-ifdef-frac` counts, the gated include's
+  "two segments away" (it wraps), the clang `-H` check (a one-off at 1.3.0), death-lite's counts, and
+  `_meta.gen` under `--from-profile`.
+
 ## [1.3.1] - 2026-10-16
 
 Every corpus is byte-identical to 1.3.0.

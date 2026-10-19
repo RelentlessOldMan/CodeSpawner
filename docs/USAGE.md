@@ -143,8 +143,10 @@ a receiver with `rta ⊆ cha`, and a recomputed `cppTruthSha`. **What it does no
 only for the right kind of target), and `cppTruthSha`, recomputed from the manifest itself, catches only an
 edit that was not re-signed. The full list is in [cpp-profile-design.md](cpp-profile-design.md) "As built".
 With an include web, verify re-preprocesses every unit (its own small preprocessor: guards, `#if`, comments,
-continuations, computed includes, `#include_next`) and compares all seven closure numbers, and requires each
-template instance it finds to be declared once with the same `def`, `templateHead` and `includedVia`.
+continuations, computed includes, `#include_next`, `#pragma once`, `#error`) and compares all seven closure
+numbers, and requires each template instance it finds to be declared once with the same `def`, `templateHead` and
+`includedVia`. It checks that `compile_commands.json` lists every unit with the web's `-I` order; a 3-way variant
+whose db names its base fails, and a db naming another tree (a moved corpus) prints a note.
 
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
@@ -214,7 +216,7 @@ must never force another to change; tool-specific knobs stay optional and defaul
 ### Presets
 Scale tiers: `--preset ci` (≈1/100, keeps a giant), `--preset memory` (one giant + includers, nothing
 else), `--preset death` (~90 GB, 12 headers >1 GB, plus the include web), `--preset death-lite` (all of
-death's shapes in ~0.5 GB: 32 MB giants, the web at death's counts with small headers).
+death's shapes in ~0.5 GB: `--scale 0.05`, 32 MB giants, the web at death's counts with small headers).
 
 Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.md)):
 `--preset dense-band` (posting/trigram memory OOM), `--preset broad-token` (`find_references` at scale +

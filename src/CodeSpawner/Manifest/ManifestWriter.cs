@@ -163,6 +163,7 @@ public static class ManifestWriter
             if (s.ExpectedMiss) w.WriteBoolean("expectedMiss", true);
             if (s.TemplateHead is not null) w.WriteString("templateHead", s.TemplateHead);
             if (s.IncludedVia is not null) w.WriteString("includedVia", s.IncludedVia);
+            if (s.DefNotLiteral) w.WriteBoolean("defNotLiteral", true);
             w.WriteEndObject();
         }
         w.WriteEndObject();

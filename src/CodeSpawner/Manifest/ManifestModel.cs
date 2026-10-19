@@ -127,6 +127,9 @@ public sealed class SymbolEntry
     public string? TemplateHead { get; set; }
     /// <summary>A template instance: the template header it was stamped from (<c>inc/tmpl_3.h</c>).</summary>
     public string? IncludedVia { get; set; }
+    /// <summary>The def is not the name's literal text (a template instance's def is an #include line), but the refs
+    /// are real call sites an indexer should resolve. Unlike <see cref="ExpectedMiss"/>, not part of the truth digest.</summary>
+    public bool DefNotLiteral { get; set; }
 }
 
 /// <summary>An include-web unit's closure (docs/include-web-design.md), under the top-level <c>closures</c> key.</summary>

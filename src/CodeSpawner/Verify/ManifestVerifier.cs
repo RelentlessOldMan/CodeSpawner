@@ -305,7 +305,8 @@ public static class ManifestVerifier
 
     /// <summary>The include web's shape: <c>closures</c> maps a unit to its seven non-negative integers and needs
     /// <c>_meta.includeDirs</c>; a template instance carries <c>templateHead</c> and <c>includedVia</c> as strings,
-    /// both or neither, and only next to closures (its truth is recomputed from them).</summary>
+    /// both or neither, and only next to closures (its truth is recomputed from them). <c>defNotLiteral</c>, when
+    /// present, is <c>true</c> and marks an instance (manifests before 1.3.2 leave it off).</summary>
     internal static string? WebShapeError(JsonElement root, JsonElement meta, JsonElement symbols)
     {
         bool has = root.TryGetProperty("closures", out var cl);
@@ -325,6 +326,11 @@ public static class ManifestVerifier
         {
             if (s.Value.ValueKind != JsonValueKind.Object) continue;
             bool th = s.Value.TryGetProperty("templateHead", out var a), iv = s.Value.TryGetProperty("includedVia", out var b);
+            if (s.Value.TryGetProperty("defNotLiteral", out var dn))
+            {
+                if (dn.ValueKind != JsonValueKind.True) return $"symbol '{s.Name}': defNotLiteral must be true when present";
+                if (!th) return $"symbol '{s.Name}': defNotLiteral marks a template instance, and it has no templateHead";
+            }
             if (!th && !iv) continue;
             if (th != iv) return $"symbol '{s.Name}' needs both templateHead and includedVia, or neither";
             if (a.ValueKind != JsonValueKind.String || b.ValueKind != JsonValueKind.String) return $"symbol '{s.Name}': templateHead and includedVia must be strings";
@@ -337,6 +343,8 @@ public static class ManifestVerifier
     /// The include web: recompute every unit's closure with verify's own preprocessor (<see cref="IncludeClosure"/>)
     /// and compare all seven numbers; then match the template instances it finds against the manifest's instance
     /// symbols, both ways: each instance declared once, with the def, templateHead and includedVia the walk sees.
+    /// The closures hold only under the web's -I order, so <c>compile_commands.json</c> must list every unit with it
+    /// (<see cref="CheckWebCompileDb"/>).
     /// </summary>
     private static int CheckWeb(string corpus, JsonElement meta, JsonElement closures, JsonElement symbols,
         Generation.Containment paths, ref int ok)
@@ -381,8 +389,67 @@ public static class ManifestVerifier
         }
         foreach (var n in found.Keys.Where(n => !declared.Contains(n)).Order(StringComparer.Ordinal))
         { Err.WriteLine($"FAIL instance {n}: the walk finds it at {found[n].Unit}:{found[n].UnitLine}, the manifest does not declare it"); fail++; }
+        fail += CheckWebCompileDb(corpus, dirs, units, ref ok);
         if (fail == 0) Console.WriteLine($"  OK  include web: {units.Count} closure(s), {found.Count} template instance(s) recomputed");
         return fail;
+    }
+
+    private static readonly Regex IncludeFlag = new(@"-I""([^""]*)""", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Every web unit has a <c>compile_commands.json</c> entry whose file is the unit under the entry's directory and
+    /// whose -I flags are <c>_meta.includeDirs</c> under it, in order. The db names the tree by its absolute path, so
+    /// a directory other than this corpus is a FAIL for a variant whose db still names its base (a copy that 1.3.1
+    /// mutate made), and a note otherwise: a corpus copied or reached by another path keeps the path it was made at.
+    /// </summary>
+    private static int CheckWebCompileDb(string corpus, List<string> dirs, List<string> units, ref int ok)
+    {
+        string dbPath = Path.Combine(corpus, "compile_commands.json");
+        if (!File.Exists(dbPath)) { Err.WriteLine("FAIL compile_commands.json: missing (the web's units are compiled with its -I order)"); return 1; }
+        // Keyed by the file's path under its entry's directory, '/'-separated like the closures' unit names.
+        var byUnit = new Dictionary<string, (string Dir, List<string> Incs)>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(dbPath));
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.TryGetProperty("file", out var f) && f.ValueKind == JsonValueKind.String &&
+                    e.TryGetProperty("directory", out var d) && d.ValueKind == JsonValueKind.String &&
+                    e.TryGetProperty("command", out var c) && c.ValueKind == JsonValueKind.String &&
+                    Path.IsPathFullyQualified(d.GetString()!))
+                {
+                    string rel = Path.GetRelativePath(d.GetString()!, Path.Combine(d.GetString()!, f.GetString()!)).Replace(Path.DirectorySeparatorChar, '/');
+                    if (!rel.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(rel))
+                        byUnit.TryAdd(rel, (d.GetString()!, IncludeFlag.Matches(c.GetString()!).Select(m => m.Groups[1].Value).ToList()));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or ArgumentException or NotSupportedException)
+        { Err.WriteLine($"FAIL compile_commands.json: not a compile database ({ex.Message})"); return 1; }
+
+        int fail = 0;
+        var roots = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var u in units)
+        {
+            if (!byUnit.TryGetValue(u, out var hit)) { Err.WriteLine($"FAIL compile_commands.json: no entry for web unit {u}"); fail++; continue; }
+            var (dir, incs) = hit;
+            var want = dirs.Select(d => Path.Combine(dir, d.Replace('/', Path.DirectorySeparatorChar))).ToList();
+            if (incs.Count == want.Count && incs.Zip(want).All(p => PathEq(p.First, p.Second))) ok++;
+            else { Err.WriteLine($"FAIL compile_commands.json {u}: -I {string.Join(" ", incs)}, the web's order is {string.Join(" ", want)}"); fail++; continue; }
+            roots.Add(Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir)));
+        }
+        string here = Path.TrimEndingDirectorySeparator(Path.GetFullPath(corpus));
+        foreach (var r in roots.Where(r => !PathEq(r, here)))
+        {
+            // A 3-way variant whose db names its base tree compiles the wrong files.
+            if (PathEq(r + "_v1", here) || PathEq(r + "_v2", here))
+            { Err.WriteLine($"FAIL compile_commands.json: names {r}, this variant's base, not {here}"); fail++; }
+            else Console.WriteLine($"  NOTE compile_commands.json names {r}, not {here}: the tree was made there (moved, copied or reached by another path)");
+        }
+        return fail;
+
+        static bool PathEq(string a, string b) => string.Equals(Path.GetFullPath(a), Path.GetFullPath(b),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     /// <summary>

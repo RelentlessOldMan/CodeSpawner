@@ -11,11 +11,13 @@ namespace CodeSpawner.Verify;
 /// integers and object-like macros), comments (a block comment may span lines; text in it is no directive),
 /// backslash continuations, LF/CRLF/mixed line ends, quoted and angled includes (the includer's directory first for
 /// a quoted one, then the -I dirs in order), relative paths, computed includes (a macro naming a quoted or angled
-/// path) and #include_next (the search resumes after the dir the current file was found in).
+/// path) and #include_next (the search resumes after the dir the current file was found in), #pragma once, and an
+/// active #error (a FAIL: a compiler would stop there). An include nesting deeper than 200 (where gcc and clang stop)
+/// is a FAIL, not a stack overflow.
 ///
 /// It is not a C preprocessor: function-like macros are never expanded, except <c>CAT(a, b)</c>, which pastes
-/// <c>a_b</c> as cfg.h defines it; only names that some condition, computed include or TNAME needs are tracked in
-/// headers (every #define still counts); and a template head is a non-directive line holding
+/// <c>a_b</c> as cfg.h defines it; only names that some condition, computed include or TNAME needs (and the names
+/// their bodies use, transitively) are tracked in headers (every #define still counts); and a template head is a non-directive line holding
 /// <c>CAT(TNAME, x)</c>.
 ///
 /// Each file is parsed once into events (runs of untracked defines merged into one), so a unit's walk costs its
@@ -33,7 +35,10 @@ internal sealed class IncludeClosure
         public string? Error;
     }
 
-    private enum K : byte { DefRun, Define, Undef, If, Ifdef, Ifndef, Elif, Else, Endif, Include, Head }
+    private enum K : byte { DefRun, Define, Undef, If, Ifdef, Ifndef, Elif, Else, Endif, Include, Head, Once, Error }
+
+    /// <summary>gcc's and clang's #include nesting limit.</summary>
+    private const int MaxNesting = 200;
 
     private sealed class Ev
     {
@@ -102,7 +107,10 @@ internal sealed class IncludeClosure
         var names = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         names["TNAME"] = 0;
         var strDefs = new ConcurrentDictionary<string, ConcurrentBag<string>>(StringComparer.Ordinal);
+        // The names each macro's bodies use: a tracked macro's body is evaluated, so its names need tracking too.
+        var uses = new ConcurrentDictionary<string, ConcurrentBag<string>>(StringComparer.Ordinal);
         var incs = new ConcurrentBag<(string From, string Spec, bool Angle, bool Macro)>();
+        var macroIncs = new List<(string From, string Spec)>();
         while (queue.Count > 0)
         {
             Parallel.ForEach(queue, f =>
@@ -116,6 +124,9 @@ internal sealed class IncludeClosure
                         case K.Ifdef: case K.Ifndef: names[name!] = 0; break;
                         case K.Define when !string.IsNullOrEmpty(text) && (text[0] == '"' || text[0] == '<'):
                             strDefs.GetOrAdd(name!, _ => new()).Add(text); break;
+                        case K.Define when !string.IsNullOrEmpty(text):
+                            foreach (var id in Idents(text).Distinct()) uses.GetOrAdd(name!, _ => new()).Add(id);
+                            break;
                         case K.Include:
                             if (name is not null) { names[name] = 0; incs.Add((f, name, false, true)); }
                             else incs.Add((f, text!, angle, false));
@@ -124,18 +135,29 @@ internal sealed class IncludeClosure
                 }, onHead: null);
             });
             queue = new List<string>();
+            // A computed include is retried every round: its macro may be defined in a file found later.
             foreach (var (from, spec, angle, macro) in incs)
-            {
-                var specs = macro
-                    ? (strDefs.TryGetValue(spec, out var vals) ? vals.Select(v => (v.Trim('"', '<', '>'), v[0] == '<')).ToList() : new())
-                    : new List<(string, bool)> { (spec, angle) };
-                foreach (var (s, a) in specs)
-                    foreach (var cand in Candidates(s, a, from))
-                        if (Contained(cand) && Exists(cand) && seen.Add(cand)) queue.Add(cand);
-            }
+                if (macro) macroIncs.Add((from, spec));
+                else Follow(from, spec, angle);
+            foreach (var (from, spec) in macroIncs)
+                if (strDefs.TryGetValue(spec, out var vals))
+                    foreach (var v in vals) Follow(from, v.Trim('"', '<', '>'), v[0] == '<');
             incs.Clear();
         }
-        _tracked = new HashSet<string>(names.Keys, StringComparer.Ordinal);
+
+        var tracked = new HashSet<string>(names.Keys, StringComparer.Ordinal);
+        var work = new Stack<string>(tracked);
+        while (work.Count > 0)
+            if (uses.TryGetValue(work.Pop(), out var used))
+                foreach (var id in used)
+                    if (tracked.Add(id)) work.Push(id);
+        _tracked = tracked;
+
+        void Follow(string from, string spec, bool angle)
+        {
+            foreach (var cand in Candidates(spec, angle, from))
+                if (Contained(cand) && Exists(cand) && seen.Add(cand)) queue.Add(cand);
+        }
     }
 
     private IEnumerable<string> Candidates(string spec, bool angle, string from)
@@ -147,7 +169,28 @@ internal sealed class IncludeClosure
     private bool Exists(string full) => _exists.GetOrAdd(full, File.Exists);
 
     private static readonly Regex Ident = new(@"[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
-    private static IEnumerable<string> Idents(string text) => Ident.Matches(text).Select(m => m.Value).Where(v => v != "defined");
+    // The identifiers in a directive's text: not the letters of a number (0x1Fu) or the text of a string.
+    private static IEnumerable<string> Idents(string text)
+    {
+        for (int i = 0; i < text.Length;)
+        {
+            char c = text[i];
+            if (c is '"' or '\'')
+            {
+                for (i++; i < text.Length && text[i] != c; i++) if (text[i] == '\\') i++;
+                i++;
+            }
+            else if (char.IsAsciiDigit(c) || c == '.' && i + 1 < text.Length && char.IsAsciiDigit(text[i + 1]))
+                while (i < text.Length && (char.IsAsciiLetterOrDigit(text[i]) || text[i] is '_' or '.')) i++;
+            else if (char.IsAsciiLetter(c) || c == '_')
+            {
+                int a = i;
+                while (i < text.Length && (char.IsAsciiLetterOrDigit(text[i]) || text[i] == '_')) i++;
+                if (text[a..i] != "defined") yield return text[a..i];
+            }
+            else i++;
+        }
+    }
 
     // ---- phase 2: events ----
 
@@ -221,7 +264,13 @@ internal sealed class IncludeClosure
                 }
                 if (c == '/' && i + 1 < n && b[i + 1] == '/')
                 {
-                    while (i < n && b[i] != '\n' && !(b[i] == '\r' && i + 1 < n && b[i + 1] == '\n')) i++;
+                    // Lines are spliced before comments are seen: a backslash-newline carries the comment on.
+                    while (i < n && b[i] != '\n' && !(b[i] == '\r' && i + 1 < n && b[i + 1] == '\n'))
+                    {
+                        if (b[i] == '\\' && i + 1 < n && (b[i + 1] == '\n' || b[i + 1] == '\r' && i + 2 < n && b[i + 2] == '\n'))
+                        { i += b[i + 1] == '\n' ? 2 : 3; line++; continue; }
+                        i++;
+                    }
                     continue;
                 }
                 if (c == '"' || c == '\'')
@@ -299,7 +348,14 @@ internal sealed class IncludeClosure
         }
         else if (word.SequenceEqual("else"u8)) sink(K.Else, null, null, false, false);
         else if (word.SequenceEqual("endif"u8)) sink(K.Endif, null, null, false, false);
-        // #error, #pragma, #line, and the null directive: nothing the closure counts.
+        else if (word.SequenceEqual("error"u8)) sink(K.Error, null, Str(s[p..]).Trim(), false, false);
+        else if (word.SequenceEqual("pragma"u8))
+        {
+            int a = p;
+            while (p < s.Length && IsId(s[p])) p++;
+            if (s[a..p].SequenceEqual("once"u8) && SkipWs(s, p) == s.Length) sink(K.Once, null, null, false, false);
+        }
+        // #warning, other pragmas, #line, and the null directive: nothing the closure counts.
     }
 
     private bool Tracked(ReadOnlySpan<byte> name)
@@ -331,6 +387,7 @@ internal sealed class IncludeClosure
     {
         public readonly Dictionary<string, Macro> Macros = new(StringComparer.Ordinal);
         public readonly HashSet<string> Seen = new(PathCmp);
+        public readonly HashSet<string> Once = new(PathCmp);   // files that executed #pragma once
         public required Result R;
         public required string Unit;
     }
@@ -349,6 +406,8 @@ internal sealed class IncludeClosure
     {
         var pf = Parse(full);
         if (pf.Guard is not null && st.Macros.ContainsKey(pf.Guard)) return;   // skipped by its guard: not a read
+        if (st.Once.Contains(full)) return;                                     // #pragma once: likewise
+        if (depth > MaxNesting) throw new WalkError($"{Rel(full)}: #include nested deeper than {MaxNesting}");
         var r = st.R;
         r.Reads++; r.ReadBytes += pf.Bytes;
         if (st.Seen.Add(full)) { r.Files++; r.Bytes += pf.Bytes; }
@@ -401,6 +460,8 @@ internal sealed class IncludeClosure
                 case K.DefRun: r.Defines += e.N; break;
                 case K.Define: r.Defines++; st.Macros[e.Name!] = new Macro(e.Text!, e.FuncLike); break;
                 case K.Undef: st.Macros.Remove(e.Name!); break;
+                case K.Once: st.Once.Add(full); break;
+                case K.Error: throw new WalkError($"{Rel(full)}:{e.Line}: #error {e.Text}");
                 case K.Head:
                     if (head is null) head = (Expand(st, $"CAT(TNAME, {e.Name})", 0), e.Line);
                     break;
@@ -532,10 +593,7 @@ internal sealed class IncludeClosure
             return st.Macros.ContainsKey(name) ? 1 : 0;
         }
         if (char.IsAsciiDigit(x[0]))
-        {
-            string num = x.TrimEnd('u', 'U', 'l', 'L');
-            return num.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? Convert.ToInt64(num[2..], 16) : long.Parse(num);
-        }
+            return Number(x) ?? throw new WalkError($"{Rel(f)}:{l}: #if number {x} is not one this verifier reads");
         if (char.IsAsciiLetter(x[0]) || x[0] == '_')
         {
             if (!st.Macros.TryGetValue(x, out var m)) return 0;   // an undefined name is 0
@@ -548,6 +606,24 @@ internal sealed class IncludeClosure
             return v;
         }
         throw new WalkError($"{Rel(f)}:{l}: unexpected '{x}' in #if");
+    }
+
+    // An integer literal: decimal, 0x hex, 0b binary or 0 octal, with u/l suffixes; null if malformed or past 63 bits.
+    private static long? Number(string x)
+    {
+        string num = x.TrimEnd('u', 'U', 'l', 'L');
+        (string digits, int radix) = num.Length > 2 && num[0] == '0' && num[1] is 'x' or 'X' ? (num[2..], 16)
+            : num.Length > 2 && num[0] == '0' && num[1] is 'b' or 'B' ? (num[2..], 2)
+            : num.Length > 1 && num[0] == '0' ? (num[1..], 8)
+            : (num, 10);
+        ulong v = 0;
+        foreach (char c in digits)
+        {
+            int dv = char.IsAsciiDigit(c) ? c - '0' : char.IsAsciiHexDigit(c) ? (c | 0x20) - 'a' + 10 : 99;
+            if (dv >= radix || v > (ulong.MaxValue - (ulong)dv) / (ulong)radix) return null;
+            v = v * (ulong)radix + (ulong)dv;
+        }
+        return digits.Length == 0 || v > long.MaxValue ? null : (long)v;
     }
 
     /// <summary>Expand object-like macros and <c>CAT(a, b)</c> (pastes <c>a_b</c>) in <paramref name="text"/>.</summary>
