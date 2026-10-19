@@ -268,7 +268,10 @@ mutated sibling trees `B_v1/` + `B_v2/`, their standard `deltaKind:"diff"` delta
 `B-delta-v2.json`, and `B-conflict.json` (`deltaKind:"conflict-3way"`, `_meta.conflictTruthSha`). All edits
 land on **odd base lines** so every even line is a stable anchor (the stable-separator guarantee ⇒ each
 conflict region is one base line, region-level ≡ line-level); `f` = fraction of V2's edited lines that coincide
-with V1's. `conflictTruthSha` canonical form (identical discipline to `diffTruthSha`), two sections in this
+with V1's. `--files-changed N` picks N files, and each variant draws its own edits in them, so a picked file
+can come out with no edits on one side (more often a short file at a low density). Such a file is unchanged in
+that variant and absent from its delta, so each delta lists **up to N** files (death_1.3.1's v1/v2 deltas list
+1,989 and 1,986 of 2,000). `conflictTruthSha` canonical form (identical discipline to `diffTruthSha`), two sections in this
 fixed order:
 
 | # | section | fields (US-joined) |

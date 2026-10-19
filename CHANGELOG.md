@@ -11,6 +11,10 @@ reads it.
 
 ## [Unreleased]
 
+### Docs
+- `mutate --three-way --files-changed N`: each variant's delta lists up to N files, not exactly N. A picked file
+  can draw no edits on one side, and is then unchanged in that variant. Output is unchanged.
+
 ## [1.3.2] - 2026-10-19
 
 Generated trees are byte-identical to 1.3.1. A web corpus's manifest gains `defNotLiteral` on its template instances

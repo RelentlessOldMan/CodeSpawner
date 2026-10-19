@@ -67,7 +67,7 @@ Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the thresho
 | Option | Default | What it does |
 |---|---|---|
 | `--target source\|headers\|giant\|all` | — | Population to change. Its presence selects bulk mode. |
-| `--files-changed <n>` | all matching | How many target files to change (chosen deterministically from `--seed`). |
+| `--files-changed <n>` | all matching | How many target files to change (chosen deterministically from `--seed`). With `--three-way`, each variant's delta lists up to N: a picked file can draw no edits on one side. |
 | `--edit-density <f>` | `0.05` | Fraction of each file's lines changed, 0..1. |
 | `--giant-min-mb <n>` | `100` | Size floor for `--target giant`, and above which a `content` edit uses the giant-file path. |
 | `--giant-edit strided\|single` | `strided` | Giant `content` edit: every stride-th line (one run-rule hunk), or one inserted line mid-file. |
