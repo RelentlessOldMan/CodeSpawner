@@ -117,8 +117,9 @@ Gen --out $dc --preset dup-content --dup-groups 6
 Check "dup-content verify" ($LASTEXITCODE -eq 0)
 Check "dupGroups present" ((Get-Content "$dc-manifest.json" -Raw) -match '"dupGroups"' -and (Get-Content "$dc-manifest.json" -Raw) -match '"sha256"')
 
-# 4d2. INCLUDE WEB: verify recomputes every closure; a tampered closure fails; units compile under the web's -I
-# order when clang is on hand (the closure numbers themselves were cross-checked against clang -H by hand).
+# 4d2. INCLUDE WEB: verify recomputes every closure; a tampered closure fails; when clang is on hand, every unit
+# compiles under the web's -I order and clang -H lists the same files, bytes, reads, readBytes and depth as its
+# recorded closure (an independent check of verify's own preprocessor).
 $wb = Join-Path $Work "wb"
 Gen --out $wb --scale 0.001 --giant-headers 0 --big-headers 0 --med-headers 0 --web-units 40 --web-headers 300 --web-tail 2 --web-tail-mb 2
 & $Exe verify --corpus $wb | Out-Null
@@ -130,12 +131,35 @@ Check "closures + includeDirs present" (($wm -match '"closures"') -and ($wm -mat
 Check "include-web tamper detected" ($LASTEXITCODE -eq 1)
 $clang = @((Get-Command clang -ErrorAction SilentlyContinue).Source, "$env:ProgramFiles\LLVM\bin\clang.exe") | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 if ($clang) {
-    $bad = 0
-    foreach ($u in 0..9) {
-        & $clang -fsyntax-only -Werror "-I$wb\inc" "-I$wb\inc_vnd" "$wb\web\u_$u.c" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { $bad++ }
+    # ConvertFrom-Json (PS 5.1) gives up on a manifest this size; the closures' shape is fixed, so read them by pattern.
+    $rx = '"(web/u_\d+\.c)": \{\s*"files": (\d+),\s*"bytes": (\d+),\s*"reads": (\d+),\s*"readBytes": (\d+),\s*"depth": (\d+)'
+    $closures = @([regex]::Matches($wm, $rx))
+    $size = @{}
+    function Size($f) { if (-not $size.ContainsKey($f)) { $size[$f] = (Get-Item -LiteralPath $f).Length }; $size[$f] }
+    $bad = 0; $off = @()
+    foreach ($c in $closures) {
+        $g = $c.Groups
+        $unit = [IO.Path]::GetFullPath((Join-Path $wb $g[1].Value)).ToLowerInvariant()
+        $lines = @(& $clang -fsyntax-only -Werror -H "-I$wb\inc" "-I$wb\inc_vnd" $unit 2>&1 | ForEach-Object { "$_" })
+        if ($LASTEXITCODE -ne 0) { $bad++; continue }
+        # -H prints each header clang opens, one dot per level. A cycle back into a header still open is opened
+        # but its guard skips the body; the closure does not count it, so drop it (and what it would nest).
+        $stack = New-Object System.Collections.Generic.List[string]
+        $files = @{ $unit = $true }; $reads = 1; $readBytes = Size $unit; $depth = 0
+        foreach ($l in $lines) {
+            if ($l -notmatch '^(\.+) (.+)$') { continue }
+            $d = $Matches[1].Length; $f = [IO.Path]::GetFullPath($Matches[2]).ToLowerInvariant()
+            while ($stack.Count -ge $d) { $stack.RemoveAt($stack.Count - 1) }
+            if ($stack.Contains($f)) { $stack.Add("<re-entry>"); continue }
+            $stack.Add($f)
+            $files[$f] = $true; $reads++; $readBytes += Size $f
+            if ($d -gt $depth) { $depth = $d }
+        }
+        $bytes = 0; foreach ($f in $files.Keys) { $bytes += Size $f }
+        if ("$($files.Count) $bytes $reads $readBytes $depth" -ne "$($g[2]) $($g[3]) $($g[4]) $($g[5]) $($g[6])") { $off += $g[1].Value }
     }
-    Check "include-web units compile (clang -fsyntax-only -Werror)" ($bad -eq 0) "($bad of 10 failed)"
+    Check "include-web units compile (clang -fsyntax-only -Werror)" ($closures.Count -eq 40 -and $bad -eq 0) "($bad of $($closures.Count) failed)"
+    Check "include-web closures match clang -H" ($closures.Count -eq 40 -and $off.Count -eq 0) "($($off.Count) of $($closures.Count) differ: $($off -join ', '))"
 } else { Write-Host "  SKIP  include-web clang compile (no clang)" -ForegroundColor Yellow }
 
 # 4e. MUTATE: digest golden vector + a deterministic delta with correct ripples.
