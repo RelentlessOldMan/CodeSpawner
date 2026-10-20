@@ -101,9 +101,12 @@ These are the definitions, used by both the generator and verify:
 - **`templateInstances`** — template entries made while `TNAME` is defined.
 
 The generator computes all of these from its model of the files, not from the text it wrote. `verify` recomputes
-them from the text with its own preprocessor and compares all seven numbers. As a one-off check when the web was
-built (1.3.0, not run by verify or the tests), clang `-H` listed the same files, reads and depth for all 40 units of
-a small web and 30 of death-lite, once cycle re-entries were dropped; bytes are the sizes of the files it listed.
+them from the text with its own preprocessor and compares all seven numbers. When clang is installed,
+`scripts\bench.ps1` checks verify's preprocessor against a real compiler: for all 40 units of a small web, the headers
+clang `-H` opens give the same files, bytes, reads, readBytes and depth as the closure, once cycle re-entries are
+dropped (bytes and readBytes are the sizes of the files it lists). At 1.3.2 the same check passed by hand on a web
+with death's web knobs (2000-line headers, 48 MB tails): its first 20 units, its deepest (72) and its largest read
+(889 MB). Neither verify nor the tests run clang.
 
 Every closure is at most 190 deep (gen refuses a web whose closures would go deeper), under the 200 nested includes
 gcc and clang allow. `--web-depth` is capped at 150 for that reason; a deep site's chain and the aggregators add
