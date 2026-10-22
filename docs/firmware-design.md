@@ -75,7 +75,12 @@ The traps (8, in every corpus) cover:
 ## The truth rules
 
 These are CodeCarver's header-carve rules (TESTING.md "Header-carve rules the truth is built from"), applied to
-`fw/` and to whatever files the compile db's builds include from outside it:
+`fw/` and to whatever files the compile db's builds include from outside it.
+
+The truth is about the header carve alone. **Every `fw/` file that is not a carved file is kept text, kept whole**,
+whether or not anything includes it: the traps, `dense_60.h`/`dense_70.h` and the other fixtures, and every unit and
+kept header. A carve that also drops unreached files does not match it. Run the carver with every file forced kept
+(CodeCarver: `forceKeepFiles = ["*"]`), so only the carved files' define lines change.
 
 1. **K files.** A file under `fw/` is big when it is longer than `maxParseBytes` (20,000,000 bytes; exactly
    20,000,000 is parsed). It is dense when it is 1,000,000 bytes up to `maxParseBytes` and, over its first 262,144

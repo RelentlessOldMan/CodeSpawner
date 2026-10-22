@@ -11,6 +11,10 @@ reads it.
 
 ## [Unreleased]
 
+### Docs
+- firmware-design.md: the truth keeps every non-carved `fw/` file whole, so a carve is checked with every file
+  forced kept (CodeCarver `forceKeepFiles = ["*"]`).
+
 ## [1.4.1] - 2026-10-22
 
 The firmware corpus's bytes and truth change (one file added under `ext/`). Non-firmware corpora are unchanged.
