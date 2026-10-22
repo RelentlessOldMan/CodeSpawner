@@ -394,7 +394,8 @@ root.
   - **`bytesAfterMax`** = `bytesBefore` − the must-drop define lines without their terminators (the least a carve can
     remove, blanking each line).
 - **`hostile`** lists the hostile files and their kinds: `empty`, `utf8-bom`, `latin1`, `unterminated-comment`,
-  `crlf`, `nul-early` (binary, not read), `nul-late` (text), `utf16`, `hidden`, the size boundaries, and big headers
+  `crlf`, `nul-early` (binary, not read), `nul-late` (text), `utf16`, `hidden` (under `fw/misc/`, and one under
+  `ext/include/` that a build includes), the size boundaries, and big headers
   with no guard or with CRLF.
 - **`cases`** points to a TSV (`name\tcase\tsite`): each case's target name, its case kind, and where it is
   exercised (relative to `root`).

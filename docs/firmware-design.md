@@ -25,7 +25,8 @@ because the truth names their bytes.
     src/bigsrc_0.c           #   a .c past maxParseBytes (carved like a big header)
     src/table_big.c          #   exactly maxParseBytes: parsed, not big
     misc/                    #   hostile files (see below)
-  ext/include/, ext/app/     # outside the root: an OS header every unit includes, one nothing includes, host.c
+  ext/include/, ext/app/     # outside the root: an OS header every unit includes (it includes a Hidden one),
+                             #   one nothing includes, host.c
   fw-build/compile_commands.json   # one entry per unit, plus ext/app/host.c
   fw-truth/                  # main.<list>.txt, union.<list>.txt, cases.tsv
 ```
@@ -129,8 +130,10 @@ files under `fw-truth/`:
   - `bigHeadersKept` counts every K file, big and dense;
   - `denseHeaders`;
   - `wholeIncludedFromOutside`;
-  - `pasteMacros`: names that are paste macros, forwarders included;
-  - `forwardingMacros`: names that are paste macros only by forwarding;
+  - `pasteMacros`: names defined in a carved file that are paste macros by any definition (direct, forwarding, or
+    an object-like alias ending in one), kept or dropped;
+  - `forwardingMacros`: names defined in a carved file as a function-like macro that pastes none of its own
+    parameters and whose body holds a `(`, whatever it calls (so `#define ADD(a) ((a)+1)` counts);
   - `totalDefineLines`: define lines in carved files;
   - `mustKeep`, `mustDrop` and `open`;
   - `bytesBefore`: the carved files' bytes.

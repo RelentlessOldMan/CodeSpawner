@@ -449,6 +449,7 @@ internal static class FirmwareEmitter
         #define KCRL0X 1
         #define ZEXU0Z 1
         #define KOS0X_VAL 1
+        #define KOSH0X_VAL 1
 
         """;
 
@@ -664,7 +665,11 @@ internal static class FirmwareEmitter
     {
         string ext = Path.Combine(p.Root, ExtDir);
         File.WriteAllText(Path.Combine(ext, "include", "fw_os.h"),
-            "#ifndef FW_OS_H\n#define FW_OS_H\n/* outside the firmware root, included by every unit */\n#define FW_OS_LIMIT KOS0X_VAL\n#endif\n");
+            "#ifndef FW_OS_H\n#define FW_OS_H\n/* outside the firmware root, included by every unit */\n#include <fw_osh.h>\n#define FW_OS_LIMIT KOS0X_VAL\n#endif\n");
+        // Hidden (the Windows attribute) and outside the root: a tool that skips hidden files misses its seed.
+        string osh = Path.Combine(ext, "include", "fw_osh.h");
+        File.WriteAllText(osh, "#ifndef FW_OSH_H\n#define FW_OSH_H\n/* hidden, outside the root, included by fw_os.h */\n#define FW_OSH_LIMIT KOSH0X_VAL\n#endif\n");
+        File.SetAttributes(osh, File.GetAttributes(osh) | FileAttributes.Hidden);
         File.WriteAllText(Path.Combine(ext, "include", "unused_os.h"),
             "/* outside the root and included by nothing: not kept text */\n#define FW_OS_UNUSED ZEXU0Z\n");
         File.WriteAllText(Path.Combine(ext, "app", "host.c"),
@@ -699,6 +704,7 @@ internal static class FirmwareEmitter
         Put("misc/.fwhidden", A("KHID0X\n"), "hidden");
         File.SetAttributes(hidden, File.GetAttributes(hidden) | FileAttributes.Hidden);
 
+        hostile.Add(new FwHostile($"{ExtDir}/include/fw_osh.h", "hidden (outside the root)"));
         hostile.Add(new FwHostile($"{FwSpec.FwDir}/big/regs_0.h", $"size {BoundaryBig} (one past maxParseBytes)"));
         if (p.Big > 1) hostile.Add(new FwHostile($"{FwSpec.FwDir}/big/regs_1.h", "no include guard"));
         if (p.Big > 2) hostile.Add(new FwHostile($"{FwSpec.FwDir}/big/regs_2.h", "crlf"));
@@ -776,6 +782,7 @@ internal static class FirmwareEmitter
             ("KHID0X", "hidden-file", "misc/.fwhidden"), ("KBM0X", "utf8-bom", "misc/bom.h"), ("KL1N0X", "latin1", "misc/latin1.c"),
             ("KUNT0X", "unterminated-comment", "misc/unterminated.h"), ("KCRL0X", "crlf", "misc/crlf.h"),
             ("ZEXU0Z", "outside-not-included", $"../{ExtDir}/include/unused_os.h"), ("KOS0X_VAL", "outside-included", $"../{ExtDir}/include/fw_os.h"),
+            ("KOSH0X_VAL", "outside-included-hidden", $"../{ExtDir}/include/fw_osh.h"),
             ("KBS0X_5", "big-source", "src/bigsrc_0.c"),
         })
             Row(name, kase, site);

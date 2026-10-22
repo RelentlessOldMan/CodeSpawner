@@ -11,6 +11,18 @@ reads it.
 
 ## [Unreleased]
 
+The firmware corpus's bytes and truth change (one file added under `ext/`). Non-firmware corpora are unchanged.
+
+### Added
+- Firmware: `ext/include/fw_osh.h`, a header with the Windows Hidden attribute, outside the root and included by
+  `fw_os.h`. Its `KOSH0X_VAL` is must-keep only through it. It is listed in `hostile` and `cases.tsv`.
+
+### Docs
+- `forwardingMacros` and `pasteMacros` were described wrongly in firmware-design.md. The counts did not change.
+  - `forwardingMacros` counts carved-file function-like defines that paste none of their own parameters and whose
+    body holds a `(`.
+  - `pasteMacros` counts carved-file names that are paste macros by any definition.
+
 ## [1.4.0] - 2026-10-22
 
 Generated trees and manifests are byte-identical to 1.3.2 without `--firmware`.

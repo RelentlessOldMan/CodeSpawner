@@ -160,6 +160,8 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Equal((false, true), FwLexer.Density(Path.Combine(fw, "dense/dense_5999.h")));
         Assert.Equal((false, false), FwLexer.Density(Path.Combine(fw, "dense/dense_50.h")));
         Assert.True(File.GetAttributes(Path.Combine(fw, "misc/.fwhidden")).HasFlag(FileAttributes.Hidden));
+        Assert.True(File.GetAttributes(Path.Combine(_c.Path, "ext/include/fw_osh.h")).HasFlag(FileAttributes.Hidden));
+        Assert.Contains("KOSH0X_VAL", List(_c.Path, "main", "mustKeepDefines"));   // seeded only by that hidden header
 
         var f = Manifest(_c.Path)["firmware"]!;
         var big = f["bigHeaders"]!.AsArray().Select(x => x!.GetValue<string>()).ToList();
