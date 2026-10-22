@@ -11,6 +11,8 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-22
+
 The firmware corpus's bytes and truth change (one file added under `ext/`). Non-firmware corpora are unchanged.
 
 ### Added
@@ -886,7 +888,8 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.3.2...v1.4.0
 [1.2.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.1...v1.2.2
