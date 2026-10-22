@@ -45,6 +45,8 @@ internal sealed class FwSpec
 
     // flags beyond NameTable's
     private const ushort FwdC = 512;
+    /// <summary>Seeded under max only: named by an outside header no build includes (a computed include may).</summary>
+    private const ushort SeedMax = 1024;
 
     public readonly NameTable Names = new(1 << 16);
     private readonly string _root, _fwRoot;
@@ -56,8 +58,12 @@ internal sealed class FwSpec
     private bool[] _isK = Array.Empty<bool>(), _isC = Array.Empty<bool>(), _binary = Array.Empty<bool>();
 
     // C defs (struct of arrays)
-    private readonly IntList _cdName = new(), _cdFile = new(), _cdLen = new(), _cdTerm = new(), _cdNext = new();
-    private long[] _cdOff = new long[1024];
+    private readonly IntList _cdName = new(), _cdLenTerm = new();   // name; line length << 2 | terminator bytes
+    private long[] _cdOff = new long[1024];               // offset in all carved bytes (see CFile)
+    private int[] _cdNext = Array.Empty<int>();
+    private readonly List<long> _cBase = new();           // where each carved file starts in all carved bytes
+    private readonly List<int> _cBaseFile = new();
+    private long _cBytes;
     private int[] _cHead = Array.Empty<int>();            // name -> first C def (-1)
 
     // all defs: object-like first/last ident (S5), forward edges, direct pasters
@@ -304,6 +310,25 @@ internal sealed class FwSpec
 
     private IEnumerable<int> ExtClosure() => _closure.Where(f => f >= _fwCount).OrderBy(f => _rel[f], StringComparer.Ordinal);
 
+    /// <summary>The headers in the builds' include dirs outside the root that no build includes (corpus-relative
+    /// order). A computed include could name one, so a sound carver may keep its text: it seeds under max only.</summary>
+    private List<int> MaybeKept()
+    {
+        var opts = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false };
+        var found = new HashSet<int>();
+        foreach (var dir in _units.SelectMany(u => u.IncDirs).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(dir) || !IsUnder(dir, _root) || IsUnder(dir, _fwRoot)) continue;
+            foreach (var p in Directory.EnumerateFiles(dir, "*", opts))
+            {
+                if (!IsCExt(p)) continue;
+                int g = FileIndex(Path.GetFullPath(p));
+                if (g >= _fwCount && !_closure.Contains(g)) found.Add(g);
+            }
+        }
+        return found.OrderBy(g => _rel[g], StringComparer.Ordinal).ToList();
+    }
+
     // ---------------- pass 1: definitions ----------------
 
     private void Pass1()
@@ -315,6 +340,8 @@ internal sealed class FwSpec
             byte[] raw = File.ReadAllBytes(_files[f]);
             var text = FwLexer.TextBytes(raw, out int st);
             bool isC = f < _fwCount && _isC[f];
+            long cbase = _cBytes;
+            if (isC) { _cBase.Add(cbase); _cBaseFile.Add(f); _cBytes += raw.Length; }
             var w = new LineWalker(text, st);
             while (w.Next())
             {
@@ -326,11 +353,10 @@ internal sealed class FwSpec
                     Names.Set(name, NameTable.CName);
                     int k = _cdName.Count;
                     _cdName.Add(name);
-                    _cdFile.Add(f);
-                    if (k == _cdOff.Length) Array.Resize(ref _cdOff, k * 2);
-                    _cdOff[k] = w.Start;      // offset in the file (no BOM shift: text == raw for C files)
-                    _cdLen.Add(w.Length);
-                    _cdTerm.Add(w.TermBytes);
+                    if (k == _cdOff.Length) Array.Resize(ref _cdOff, NameTable.NextCapacity(k));
+                    _cdOff[k] = cbase + w.Start;      // no BOM shift: text == raw for C files
+                    if (w.Length >= 1 << 29 || w.TermBytes > 3) throw new InvalidOperationException($"{_rel[f]}: a define line of {w.Length:N0} bytes");
+                    _cdLenTerm.Add(w.Length << 2 | w.TermBytes);
                     if (d.IsFunc && !d.PastesParam() && d.Body.Any(b => b.Kind == Tok.LParen)) Names.Set(name, FwdC);
                     if (d.EndsInComment) Names.Set(name, NameTable.Seed);   // a comment-open define is kept
                 }
@@ -342,11 +368,11 @@ internal sealed class FwSpec
             }
         }
         _cHead = Enumerable.Repeat(-1, Names.Count).ToArray();
-        for (int k = _cdName.Count - 1; k >= 0; k--) { _cdNext.Add(0); }
+        _cdNext = new int[_cdName.Count];
         for (int k = _cdName.Count - 1; k >= 0; k--)
         {
             int n = _cdName[k];
-            _cdNext.A[k] = _cHead[n];
+            _cdNext[k] = _cHead[n];
             _cHead[n] = k;
         }
         _objHead = Enumerable.Repeat(-1, Names.Count).ToArray();
@@ -429,10 +455,11 @@ internal sealed class FwSpec
     private void Seed(ReadOnlySpan<byte> s)
     {
         int id = Names.Find(s);
-        if (id >= 0 && Names.Has(id, NameTable.CName)) Names.Set(id, NameTable.Seed);
+        if (id >= 0 && Names.Has(id, NameTable.CName)) Names.Set(id, _seedFlag);
     }
 
     private void SeedText(ReadOnlySpan<byte> s) => FwLexer.RawScan(s, Seed);
+    private ushort _seedFlag = NameTable.Seed;
 
     private void Seeds()
     {
@@ -466,14 +493,20 @@ internal sealed class FwSpec
         }
         kept.AddRange(ExtClosure());
         foreach (int f in kept) KeptFile(f, min, shadow, d);
+        var maybeMin = new Tracker(this, 2, commitAtEof: false);
+        foreach (int f in MaybeKept()) KeptFile(f, maybeMin, shadow, d, maybe: true);
     }
 
-    /// <summary>A kept file: all of it seeds; its non-define lines are one stream and each define body its own.</summary>
-    private void KeptFile(int f, Tracker min, Tracker shadow, DefineParse d)
+    /// <summary>A kept file: all of it seeds; its non-define lines are one stream and each define body its own. A
+    /// <paramref name="maybe"/> file (see <see cref="MaybeKept"/>) seeds and gives pieces under max only.</summary>
+    private void KeptFile(int f, Tracker min, Tracker shadow, DefineParse d, bool maybe = false)
     {
+        if (maybe && FwLexer.LooksBinary(_files[f])) return;
         var text = FwLexer.TextBytes(File.ReadAllBytes(_files[f]), out int st);
+        _seedFlag = maybe ? SeedMax : NameTable.Seed;
         SeedText(text.AsSpan(st));
-        var body = new Tracker[] { new(this, 3, false), new(this, 2, true) };
+        _seedFlag = NameTable.Seed;
+        var body = new Tracker[] { new(this, maybe ? 2 : 3, false), new(this, 2, true) };
         min.Begin(null);
         shadow.Begin(null);
         var w = new LineWalker(text, st);
@@ -580,7 +613,8 @@ internal sealed class FwSpec
 
     private void Fixpoint(int run)
     {
-        for (int i = 0; i < Names.Count; i++) if (Names.Has(i, NameTable.Seed)) Want(i, run);
+        ushort seeds = run == 0 ? NameTable.Seed : (ushort)(NameTable.Seed | SeedMax);
+        for (int i = 0; i < Names.Count; i++) if (Names.Has(i, seeds)) Want(i, run);
         var trackers = run == 0
             ? new[] { new Tracker(this, 1, false) }
             : new[] { new Tracker(this, 2, false), new Tracker(this, 2, true) };
@@ -597,9 +631,10 @@ internal sealed class FwSpec
                 int name = wq[wi++];
                 for (int k = _cHead[name]; k >= 0; k = _cdNext[k])
                 {
-                    int len = _cdLen[k];
+                    int len = _cdLenTerm[k] >> 2;
+                    int cf = CFile(k, out long off);
                     if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
-                    RandomAccess.Read(Handle(_cdFile[k]), buf.AsSpan(0, len), _cdOff[k]);
+                    RandomAccess.Read(Handle(cf), buf.AsSpan(0, len), off);
                     var w = new LineWalker(buf.AsSpan(0, len), 0);
                     if (!w.Next() || !d.Parse(w.Spliced)) continue;
                     var b = w.Spliced[d.BodyStart..];
@@ -619,6 +654,16 @@ internal sealed class FwSpec
                 if (pi < pq.Count) break;
             }
         }
+    }
+
+    /// <summary>The carved file holding C def <paramref name="k"/>, and the def's offset in it.</summary>
+    private int CFile(int k, out long off)
+    {
+        long x = _cdOff[k];
+        int lo = 0, hi = _cBase.Count;   // the last file starting at or before x (an empty file holds no def)
+        while (hi - lo > 1) { int mid = (lo + hi) >> 1; if (_cBase[mid] <= x) lo = mid; else hi = mid; }
+        off = x - _cBase[lo];
+        return _cBaseFile[lo];
     }
 
     private SafeFileHandle Handle(int f)
@@ -661,8 +706,9 @@ internal sealed class FwSpec
             t.TotalDefineLines++;
             if (drop) t.DefinesDroppedMin++;
             if (!keep) t.DefinesDroppedMax++;
-            if (!keep) t.BytesAfterMin += _cdLen[k];
-            if (drop) t.BytesAfterMax += _cdLen[k] - _cdTerm[k];
+            int lt = _cdLenTerm[k];
+            if (!keep) t.BytesAfterMin += lt >> 2;
+            if (drop) t.BytesAfterMax += (lt >> 2) - (lt & 3);
         }
         for (int f = 0; f < _fwCount; f++) if (_isC[f]) t.BytesBefore += new FileInfo(_files[f]).Length;
         t.BytesAfterMin = t.BytesBefore - t.BytesAfterMin;
@@ -695,7 +741,7 @@ internal sealed class FwSpec
 
         // files: defining a must-keep name, the fw units, and their closures
         var files = new SortedSet<string>(StringComparer.Ordinal);
-        for (int k = 0; k < _cdName.Count; k++) if (Names.Has(_cdName[k], NameTable.WantMin)) files.Add(_rel[_cdFile[k]]);
+        for (int k = 0; k < _cdName.Count; k++) if (Names.Has(_cdName[k], NameTable.WantMin)) files.Add(_rel[CFile(k, out _)]);
         for (int k = 0; k < _fwDefName.Count; k++) if (Names.Has(_fwDefName[k], NameTable.WantMin)) files.Add(_rel[_fwDefFile[k]]);
         foreach (int f in _closure) if (f < _fwCount) files.Add(_rel[f]);
         using (var fw = new ListWriter(listDir, "mustKeepFiles"))

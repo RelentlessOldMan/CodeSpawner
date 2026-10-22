@@ -26,7 +26,7 @@ because the truth names their bytes.
     src/table_big.c          #   exactly maxParseBytes: parsed, not big
     misc/                    #   hostile files (see below)
   ext/include/, ext/app/     # outside the root: an OS header every unit includes (it includes a Hidden one),
-                             #   one nothing includes, host.c
+                             #   one nothing includes (maybe-kept), host.c
   fw-build/compile_commands.json   # one entry per unit, plus ext/app/host.c
   fw-truth/                  # main.<list>.txt, union.<list>.txt, cases.tsv
 ```
@@ -105,6 +105,10 @@ kept header. A carve that also drops unreached files does not match it. Run the 
 
    It grows to a fixpoint through the bodies of wanted defines. A carved-file define is also wanted when its name
    starts or ends with a piece.
+
+   A header in a build's include dir outside the root that no build includes is **maybe-kept** text: a computed
+   `#include MACRO` could name it, so a sound carver may keep it, and one that proves it unused may drop it. It
+   seeds and gives pieces under max only, so the defines only it reaches are open.
 5. **Classes.** The tracker runs twice:
    - **min** skips comments and strings, and drops a call left open at end of file;
    - **max** reads comments and strings, and commits a call left open at end of file.

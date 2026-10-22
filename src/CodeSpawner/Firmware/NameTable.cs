@@ -3,13 +3,14 @@ using System.Text;
 namespace CodeSpawner.Firmware;
 
 /// <summary>
-/// Interned identifiers for the firmware analyzer (docs/firmware-design.md). A full-scale corpus has hundreds of
-/// millions of define names, so names live as bytes in 64 MB chunks (never as strings), looked up by span through
-/// open addressing, with a bit set of flags per name. Not thread-safe: the analyzer is single-threaded.
+/// Interned identifiers for the firmware analyzer (docs/firmware-design.md). A full-scale corpus has about a hundred
+/// million define names, so names live as length-prefixed bytes in 64 MB chunks (never as strings), at a 32-bit
+/// offset, looked up by span through open addressing, with a set of flags per name: about 6 bytes per name besides
+/// its bytes and its slots. Not thread-safe: the analyzer is single-threaded.
 /// </summary>
 internal sealed class NameTable
 {
-    private const int ChunkBytes = 64 << 20;
+    private const int ChunkShift = 26, ChunkBytes = 1 << ChunkShift;
 
     /// <summary>The name has a define in a carved (C) file.</summary>
     public const ushort CName = 1;
@@ -23,9 +24,7 @@ internal sealed class NameTable
 
     private readonly List<byte[]> _chunks = new();
     private int _chunkUsed = ChunkBytes;   // forces a first chunk
-    private long[] _off = new long[1024];
-    private int[] _len = new int[1024];
-    private int[] _hash = new int[1024];
+    private uint[] _off = new uint[1024];  // chunk << ChunkShift | offset of the length prefix
     private int[] _slots = new int[2048];  // id + 1; 0 = empty
     public ushort[] Flags = new ushort[1024];
     public int Count { get; private set; }
@@ -42,22 +41,29 @@ internal sealed class NameTable
         return (int)(h & 0x7FFFFFFF);
     }
 
+    /// <summary>The next capacity past <paramref name="n"/>: 1.25x, so a big table wastes and copies less.</summary>
+    public static int NextCapacity(int n) => (int)Math.Min(Array.MaxLength, Math.Max(1024L, n + (long)n / 4));
+
     public ReadOnlySpan<byte> Get(int id)
     {
-        long o = _off[id];
-        return new ReadOnlySpan<byte>(_chunks[(int)(o / ChunkBytes)], (int)(o % ChunkBytes), _len[id]);
+        uint o = _off[id];
+        var c = _chunks[(int)(o >> ChunkShift)];
+        int i = (int)(o & (ChunkBytes - 1));
+        int len = c[i];
+        if (len < 255) return new ReadOnlySpan<byte>(c, i + 1, len);
+        return new ReadOnlySpan<byte>(c, i + 5, BitConverter.ToInt32(c, i + 1));
     }
 
     public string Str(int id) => Encoding.ASCII.GetString(Get(id));
 
     public int Find(ReadOnlySpan<byte> s)
     {
-        int h = Hash(s), mask = _slots.Length - 1;
-        for (int i = h & mask; ; i = (i + 1) & mask)
+        int mask = _slots.Length - 1;
+        for (int i = Hash(s) & mask; ; i = (i + 1) & mask)
         {
             int v = _slots[i];
             if (v == 0) return -1;
-            if (_hash[v - 1] == h && Get(v - 1).SequenceEqual(s)) return v - 1;
+            if (Get(v - 1).SequenceEqual(s)) return v - 1;
         }
     }
 
@@ -65,27 +71,32 @@ internal sealed class NameTable
 
     public int GetOrAdd(ReadOnlySpan<byte> s)
     {
-        int h = Hash(s), mask = _slots.Length - 1;
-        int i = h & mask;
+        if (Count == _off.Length) Grow(NextCapacity(Count));   // before probing: growing can rebuild the slots
+        int mask = _slots.Length - 1;
+        int i = Hash(s) & mask;
         for (; ; i = (i + 1) & mask)
         {
             int v = _slots[i];
             if (v == 0) break;
-            if (_hash[v - 1] == h && Get(v - 1).SequenceEqual(s)) return v - 1;
+            if (Get(v - 1).SequenceEqual(s)) return v - 1;
         }
         int id = Count;
-        if (id == _off.Length) Grow(id * 2);
-        if (_chunkUsed + s.Length > ChunkBytes)
+        int need = (s.Length < 255 ? 1 : 5) + s.Length;
+        if (need > ChunkBytes) throw new InvalidOperationException($"an identifier of {s.Length:N0} bytes is too long");
+        if (_chunkUsed + need > ChunkBytes)
         {
-            _chunks.Add(new byte[Math.Max(ChunkBytes, s.Length)]);
+            if (_chunks.Count == 1 << (32 - ChunkShift))
+                throw new InvalidOperationException("the firmware names exceed 4 GB; the corpus is too big for the analyzer");
+            _chunks.Add(new byte[ChunkBytes]);
             _chunkUsed = 0;
         }
         var chunk = _chunks[^1];
-        s.CopyTo(chunk.AsSpan(_chunkUsed));
-        _off[id] = (long)(_chunks.Count - 1) * ChunkBytes + _chunkUsed;
-        _chunkUsed += s.Length;
-        _len[id] = s.Length;
-        _hash[id] = h;
+        int at = _chunkUsed;
+        if (s.Length < 255) chunk[at] = (byte)s.Length;
+        else { chunk[at] = 255; BitConverter.TryWriteBytes(chunk.AsSpan(at + 1), s.Length); }
+        s.CopyTo(chunk.AsSpan(at + need - s.Length));
+        _off[id] = (uint)(_chunks.Count - 1) << ChunkShift | (uint)at;
+        _chunkUsed += need;
         Count = id + 1;
         _slots[i] = id + 1;
         if (Count * 2 > _slots.Length) Rehash();
@@ -97,10 +108,8 @@ internal sealed class NameTable
     private void Grow(int n)
     {
         Array.Resize(ref _off, n);
-        Array.Resize(ref _len, n);
-        Array.Resize(ref _hash, n);
         Array.Resize(ref Flags, n);
-        if (_slots.Length < n * 2) { _slots = new int[(int)Math.Min(1L << 30, BitOps(n * 2L))]; Reinsert(); }
+        if (_slots.Length < n * 2L) { _slots = new int[(int)Math.Min(1L << 30, BitOps(n * 2L))]; Reinsert(); }
     }
 
     private static long BitOps(long n) { long p = 1; while (p < n) p <<= 1; return p; }
@@ -116,7 +125,7 @@ internal sealed class NameTable
         int mask = _slots.Length - 1;
         for (int id = 0; id < Count; id++)
         {
-            int i = _hash[id] & mask;
+            int i = Hash(Get(id)) & mask;
             while (_slots[i] != 0) i = (i + 1) & mask;
             _slots[i] = id + 1;
         }
@@ -154,7 +163,7 @@ internal sealed class IntList
     public int Count;
     public void Add(int v)
     {
-        if (Count == A.Length) Array.Resize(ref A, A.Length * 2);
+        if (Count == A.Length) Array.Resize(ref A, NameTable.NextCapacity(A.Length));
         A[Count++] = v;
     }
     public int this[int i] => A[i];

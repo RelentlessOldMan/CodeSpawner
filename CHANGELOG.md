@@ -11,6 +11,29 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-10-22
+
+The firmware corpus's bytes and truth change: the `outside-not-included` case is now open. Non-firmware corpora are
+unchanged.
+
+### Changed
+- Firmware truth: a header in a build's include dir outside the root that no build includes is maybe-kept text. A
+  computed `#include MACRO` could name it, so a sound carver may keep it. It seeds under max only, so its defines
+  are open. Its case is renamed from `ZEXU0Z` (must-drop) to `YEXU0Y` (open). This is CodeCarver's rule.
+
+### Fixed
+- Firmware truth: the name table could lose a name when it grew. It probed for a slot, then grew and rebuilt the
+  slots, then wrote the new name at the stale slot. Re-verifying the 1.4.1 corpora with the fix shows no change, but
+  a bigger corpus could have interned a name twice.
+
+### Performance
+- Firmware truth memory is about 30% lower:
+  - names are stored as length-prefixed bytes at a 32-bit offset;
+  - define records are packed into one global offset plus a length/terminator int;
+  - big arrays grow by 1.25x instead of 2x.
+- The GC runs with `ConserveMemory=7`. At 0.1, verify's peak went from about 2.0 GB to about 1.0 GB at the same
+  speed.
+
 ### Docs
 - firmware-design.md: the truth keeps every non-carved `fw/` file whole, so a carve is checked with every file
   forced kept (CodeCarver `forceKeepFiles = ["*"]`).
@@ -892,7 +915,8 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.3.2...v1.4.0
 [1.2.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.2...v1.2.3

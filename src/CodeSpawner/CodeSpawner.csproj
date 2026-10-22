@@ -27,6 +27,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSpawner.Tests" />
+    <!-- The firmware truth holds ~70 bytes per name live, but big file reads leave the LOH fragmented: conserving
+         memory halved the 0.1 verify peak (1.96 GB to 0.99 GB) at the same speed. -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
   </ItemGroup>
 
 </Project>

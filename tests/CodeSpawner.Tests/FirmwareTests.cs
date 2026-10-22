@@ -162,6 +162,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.True(File.GetAttributes(Path.Combine(fw, "misc/.fwhidden")).HasFlag(FileAttributes.Hidden));
         Assert.True(File.GetAttributes(Path.Combine(_c.Path, "ext/include/fw_osh.h")).HasFlag(FileAttributes.Hidden));
         Assert.Contains("KOSH0X_VAL", List(_c.Path, "main", "mustKeepDefines"));   // seeded only by that hidden header
+        Assert.Contains("YEXU0Y", List(_c.Path, "main", "openDefines"));          // only in an outside header nothing includes
 
         var f = Manifest(_c.Path)["firmware"]!;
         var big = f["bigHeaders"]!.AsArray().Select(x => x!.GetValue<string>()).ToList();
