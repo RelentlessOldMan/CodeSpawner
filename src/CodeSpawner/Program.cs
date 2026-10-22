@@ -216,6 +216,7 @@ public static class Program
               codespawner scan <tree> --out <profile>    measure a real tree -> numbers-only shape profile
               codespawner gen --from-profile <p> --out <dir>   regenerate a look-alike from a profile
               codespawner verify --corpus <dir> [--manifest <path>]   self-check a corpus against its manifest
+              codespawner verify --corpus <dir> --reference-carve <out>   also write the firmware truth's carve (to compile)
               codespawner mutate --corpus <dir> [opts]   deterministically edit + emit a delta manifest (C corpora)
               codespawner gen --lang cpp --out <dir> [cpp knobs]   a C++ program + manifest v2 (call-graph truth)
               codespawner digest-selftest                reproduce the five golden digest vectors (exit 1 on drift)
@@ -324,6 +325,7 @@ public static class Program
               --preset many-tiny     tiny-file-dominated (walker / stat pressure)
               --preset pathological-symbols  token-paste (expected-miss)/long idents/deep nesting
               --preset dup-content   byte-identical groups (content-hash dedup / posting collapse)
+              --preset firmware      a bare tree + the firmware corpus (big paste-macro headers, carve truth)
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly; full table: docs/knobs.md):
               --out <dir>            output directory (required; cleared if it exists)
@@ -391,6 +393,18 @@ public static class Program
               --web-relative-frac <f>    share of includes spelled ../inc/x.h (default 0.05)
               --web-crlf-frac <f>        share of register maps, templates and units with CRLF (default 0.05)
               --web-mixed-eol-frac <f>   share of them with mixed LF/CRLF (default 0.02)
+
+            FIRMWARE (off unless --firmware; counts scale with --scale; docs/firmware-design.md):
+              --firmware                 a firmware tree (fw/, ext/, fw-build/, fw-truth/) + its header-carve truth
+                                         (manifest "firmware": must-keep/must-drop/open defines, counts, treeSha256)
+              --fw-big-headers <n>       headers past maxParseBytes, full of paste macros (default 400)
+              --fw-big-mb <m>            size of each big header, 20..2000 (default 24; regs_0.h is maxParseBytes+1)
+              --fw-files <n>             files under fw/src: units + kept headers (default 38000)
+              --fw-families <n>          must-keep families across 18 paste kinds (default 1000000)
+              --fw-pasters <n>           paste macros in the big headers, most never called (default 6000000)
+              --fw-dense-headers <n>     dense headers (1 MB..maxParseBytes, mostly defines; default 200)
+              --fw-chain-max <n>         longest forwarder chain (default 40)
+              --fw-db-paths <absolute|relative>   how fw-build/compile_commands.json names paths (default absolute)
 
             Flags take --flag, --flag=false or --flag false; values take --knob v or --knob=v.
             '<command> --help' prints this help.

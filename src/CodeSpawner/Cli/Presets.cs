@@ -64,6 +64,9 @@ public static class Presets
     // dup-content: byte-identical copies + near-identical controls — content-hash dedup / posting collapse.
     private static readonly string[] DupContent = [.. Bare, "--dup-groups", "200", "--dup-copies", "4"];
 
+    // firmware: the firmware corpus (docs/firmware-design.md) beside a bare tree: big and dense headers, paste macros.
+    private static readonly string[] Firmware = [.. Bare, "--firmware"];
+
     // Single source of truth: resolution (TryGet), the advertised name list (Names), and the error-message
     // hints all derive from this one ordered registry, so a preset can't be added in one place and forgotten
     // in another. Order here is the advertised order.
@@ -80,6 +83,7 @@ public static class Presets
         ("many-tiny", ManyTiny),
         ("pathological-symbols", PathologicalSymbols),
         ("dup-content", DupContent),
+        ("firmware", Firmware),
     ];
 
     /// <summary>The advertised preset names, in registry order.</summary>

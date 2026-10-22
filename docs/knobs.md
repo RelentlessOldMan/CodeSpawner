@@ -146,6 +146,18 @@ full table, the layout and the closure definitions are in [include-web-design.md
 `--web-mixed-eol-frac` (0.02). The web needs the manifest (`--manifest false` is refused), and a template knob
 with `--web-templates 0` or `--web-tail-mb` without `--web-tail` is refused.
 
+## Firmware corpus (`gen --firmware`)
+
+Off by default. Every `--fw-*` knob is refused without `--firmware`. The firmware corpus is C-only, needs the
+manifest, and is refused with `--from-profile`. The counts scale with `--scale` (an explicit knob is used as given),
+and `_meta.gen` records the effective values. The full table, the layout and the truth rules are in
+[firmware-design.md](firmware-design.md).
+
+- **Scaled counts:** `--fw-big-headers` (400, at least 1), `--fw-files` (38,000), `--fw-families` (1,000,000),
+  `--fw-pasters` (6,000,000) and `--fw-dense-headers` (200).
+- **Not scaled:** `--fw-big-mb` (24, 20–2000), `--fw-chain-max` (40, 2–10,000) and `--fw-db-paths` (`absolute` or
+  `relative`).
+
 ## Presets
 
 | Preset | Expands to | Use |
@@ -161,6 +173,7 @@ with `--web-templates 0` or `--web-tail-mb` without `--web-tail` is refused.
 | `--preset many-tiny` | `--tiny-files 500000` (noise off) | Walker throughput / per-file & SMB stat pressure. |
 | `--preset pathological-symbols` | `--pathological-symbols 50` (noise off) | Symbol-extractor cost + honest-miss (`expectedMiss`) correctness. |
 | `--preset dup-content` | `--dup-groups 200 --dup-copies 4` (noise off) | Content-hash dedup / posting-collapse (`dupGroups`). |
+| `--preset firmware` | `--firmware` (noise off) | The firmware corpus and its header-carve truth (~10 GB at 1x, estimated; `--scale 0.01` is 0.16 GB). |
 
 Your own knobs after a `--preset` override it (e.g. `--preset death --giant-headers 4`).
 

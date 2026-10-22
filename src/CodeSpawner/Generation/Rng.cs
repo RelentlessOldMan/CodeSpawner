@@ -122,4 +122,6 @@ public enum Category
     CppGen,
     // include web (appended):
     Web,
+    // firmware corpus (appended):
+    Firmware,
 }

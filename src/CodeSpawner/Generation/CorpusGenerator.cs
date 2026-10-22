@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using CodeSpawner.Cli;
 using CodeSpawner.Manifest;
+using CodeSpawner.Firmware;
 
 namespace CodeSpawner.Generation;
 
@@ -116,11 +117,19 @@ public sealed class CorpusGenerator
 
         Timed("compile_commands", () => CompileDbEmitter.Write(_o, outFull, src.Files, web?.Units));
 
+        FirmwareResult? fw = null;
+        if (_o.Firmware)
+        {
+            fw = Timed("firmware", () => FirmwareEmitter.Emit(_o, outFull, HeaderParallel));
+            Console.WriteLine($"    ^ {fw.Units} units, {fw.Truth.BigHeadersKept} big + {fw.Truth.DenseHeaders} dense headers; must keep {fw.Truth.MustKeepCount:N0}, must drop {fw.Truth.MustDropCount:N0}, open {fw.Truth.OpenCount:N0}");
+        }
+
         if (_o.Manifest)
         {
             var model = Timed("manifest", () =>
             {
                 var m = BuildManifest(outFull, src, unres, broad, patho, dups, web, stats);
+                m.Firmware = fw;
                 ManifestWriter.Write(m, mpath);
                 return m;
             });
@@ -310,6 +319,21 @@ public sealed class CorpusGenerator
         }
     }
 
+    /// <summary>The firmware corpus's knobs, recorded only when it is on, so a manifest without one keeps its bytes.</summary>
+    internal static void AddFirmwareKnobs(GenOptions o, List<GenKnob> g)
+    {
+        if (!o.Firmware) return;
+        g.Add(GenKnob.Of("firmware", true));
+        g.Add(GenKnob.Of("fwBigHeaders", (long)o.Eff("fw-big-headers", o.FwBigHeaders, keepOne: true)));
+        g.Add(GenKnob.Of("fwFiles", (long)o.Eff("fw-files", o.FwFiles)));
+        g.Add(GenKnob.Of("fwFamilies", (long)o.Eff("fw-families", o.FwFamilies)));
+        g.Add(GenKnob.Of("fwPasters", (long)o.Eff("fw-pasters", o.FwPasters)));
+        g.Add(GenKnob.Of("fwDenseHeaders", (long)o.Eff("fw-dense-headers", o.FwDenseHeaders)));
+        g.Add(GenKnob.Of("fwBigMb", (long)o.FwBigMb));
+        g.Add(GenKnob.Of("fwChainMax", (long)o.FwChainMax));
+        g.Add(GenKnob.Of("fwDbPaths", o.FwDbPaths));
+    }
+
     /// <summary>The include web's truth: its -I order, the template instances as symbols, and the closures.</summary>
     internal static void AddWeb(ManifestModel model, WebEmitResult web)
     {
@@ -382,6 +406,7 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("oracleReachableFrac", _o.OracleReachableFrac));
         g.Add(GenKnob.Of("oracleIndirect", (long)_o.OracleIndirect));
         AddWebKnobs(_o, g);
+        AddFirmwareKnobs(_o, g);
         // (no fromProfile knob here: `gen --from-profile` is dispatched to ProfileGenerator, not this path, so
         //  _o.FromProfile is always null here. A profile-genned corpus's reproduction recipe IS the profile file.)
     }

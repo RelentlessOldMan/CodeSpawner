@@ -169,7 +169,8 @@ public class RngTests
         Assert.Equal(21, (int)Category.ProfileOracle);
         Assert.Equal(22, (int)Category.CppGen);
         Assert.Equal(23, (int)Category.Web);
+        Assert.Equal(24, (int)Category.Firmware);
         // Fails if a member is added or removed without updating the pins above.
-        Assert.Equal(23, Enum.GetValues<Category>().Length);
+        Assert.Equal(24, Enum.GetValues<Category>().Length);
     }
 }

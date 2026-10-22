@@ -1130,9 +1130,10 @@ public static class Mutator
             if (string.Equals(Path.GetFileName(abs), MarkerName, StringComparison.Ordinal)) continue;
             if (string.Equals(abs, compileDb, StringComparison.OrdinalIgnoreCase)) continue;
             if (abs.EndsWith(".mut.tmp", StringComparison.OrdinalIgnoreCase)) continue;
-            // The include web's closure truth names every byte of its files, so a bulk edit there would make it stale.
+            // The include web and the firmware corpus have truth that names every byte of their files, so a bulk edit there would make it stale.
             string rel = RelOf(corpus, abs);
             if (Generation.WebEmitter.Dirs.Any(d => rel.StartsWith(d + "/", StringComparison.Ordinal))) continue;
+            if (Firmware.FirmwareEmitter.Dirs.Any(d => rel.StartsWith(d + "/", StringComparison.Ordinal))) continue;
             bool match = target switch
             {
                 "source"  => HasExt(abs, ".c", ".cc", ".cpp", ".cxx"),

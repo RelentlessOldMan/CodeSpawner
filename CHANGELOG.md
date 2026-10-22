@@ -11,6 +11,30 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-22
+
+Generated trees and manifests are byte-identical to 1.3.2 without `--firmware`.
+
+### Added
+- **Firmware corpus** (`gen --firmware`, `--preset firmware`; [docs/firmware-design.md](docs/firmware-design.md)).
+  This is phase 1 of the plan agreed with CodeCarver: a header-carve test tree with its sound-carve truth.
+  - **The tree:** under `fw/`, paste-macro register headers past `maxParseBytes`, dense headers, units that reach
+    their defines by 18 paste shapes, and traps and hostile files. Beside it: a compile db in `fw-build/` and
+    headers outside the root in `ext/`.
+  - **Name spelling:** each name carries its class in its spelling: `Z…Z` must drop, `Y…Y` is open, anything else
+    must keep. Gen computes the truth from the written tree and fails on any disagreement with a name's spelling.
+  - **The truth:** the manifest's top-level `firmware` object holds the counts and bounds, the big, dense and
+    whole-from-outside lists, the hostile files, `treeSha256`, and the per-build truth lists (`fw-truth/`, each with
+    sha256 and count). It is additive; `manifestVersion` stays 1.
+  - **Knobs:** `--fw-big-headers`, `--fw-big-mb`, `--fw-files`, `--fw-families`, `--fw-pasters`,
+    `--fw-dense-headers`, `--fw-chain-max` and `--fw-db-paths`. The counts scale with `--scale`, and `_meta.gen`
+    records the effective values.
+- `verify` recomputes the firmware truth from the tree and FAILs on any difference. `verify --reference-carve <dir>`
+  writes the carve the truth describes (every carved define that is not must-keep removed), for compiling against.
+
+### Changed
+- `mutate` leaves the firmware dirs (`fw/`, `ext/`, `fw-build/`, `fw-truth/`) alone.
+
 ### Docs
 - `mutate --three-way --files-changed N`: each variant's delta lists up to N files, not exactly N. A picked file
   can draw no edits on one side, and is then unchanged in that variant. Output is unchanged.
@@ -850,7 +874,8 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.3.2...v1.4.0
 [1.2.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.0...v1.2.1

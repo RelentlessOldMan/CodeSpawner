@@ -118,6 +118,25 @@ codespawner gen --out C:\corpora\web --scale 0.001 --web-units 200 --web-headers
 codespawner verify --corpus C:\corpora\web
 ```
 
+### `gen --firmware --out <dir> [--fw-* knobs…]`
+Adds a **firmware corpus** beside the C corpus, for testing a header carve. The tree has:
+
+- paste-macro register headers past `maxParseBytes` (20,000,000 bytes);
+- dense headers;
+- units reaching those headers' defines by every paste shape;
+- trap files and hostile files;
+- a compile db (`fw-build/`) and headers outside the root (`ext/`).
+
+The manifest's `firmware` object holds the truth for a sound carve: must-keep, must-drop and open define lists
+(written under `fw-truth/`), exact counts and bounds, and `treeSha256`. `verify` recomputes all of it from the
+tree. `verify --reference-carve <dir>` also writes the carve the truth describes, so it can be compiled. Contract,
+rules and knobs: [firmware-design.md](firmware-design.md).
+
+```powershell
+codespawner gen --out C:\corpora\fw --preset firmware --scale 0.01
+codespawner verify --corpus C:\corpora\fw --reference-carve C:\corpora\fw-carve
+```
+
 ### `verify --corpus <dir> [--manifest <file>]`
 Tool-independent self-check: asserts the manifest accurately describes the emitted files — every
 `def`/`ref` site exists at `path:line` and contains the expected token; every `unreachableRef` site holds
@@ -223,7 +242,8 @@ Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.m
 sidecar reads), `--preset long-lines` (long-line / no-newline), `--preset encoding-mix` (UTF-16/BOM/
 invalid bytes / non-ASCII idents), `--preset many-tiny` (walker / stat pressure),
 `--preset pathological-symbols` (symbol-extractor cost + `expectedMiss` honest-miss),
-`--preset dup-content` (content-hash dedup / posting collapse).
+`--preset dup-content` (content-hash dedup / posting collapse), `--preset firmware` (the firmware corpus and its
+header-carve truth; see above).
 
 Your own knobs after a preset override it (e.g. `--preset dense-band --dense-headers 80`); one preset per
 run. Pathology
@@ -283,6 +303,7 @@ reports actual size.
       hdr_7.h  blob_3.c  data_9.csv  ...
     .codespawner               # marker (internal; identifies a CodeSpawner corpus)
     inc/  inc_vnd/  web/       # only with --web-units: the include web (headers, vendor dir, units)
+    fw/  ext/  fw-build/  fw-truth/   # only with --firmware: the firmware tree, outside headers, compile db, truth lists
     compile_commands.json      # if --compile-db partial|full, or with the include web (its units)
   <out>-manifest.json          # ground-truth manifest (SIBLING of the corpus dir)
 ```

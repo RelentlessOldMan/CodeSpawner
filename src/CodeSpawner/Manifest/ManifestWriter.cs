@@ -211,8 +211,87 @@ public static class ManifestWriter
             w.WriteEndObject();
         }
 
+        if (m.Firmware is not null) WriteFirmware(w, m.Firmware);
+
         w.WriteEndObject();
         w.Flush();
+    }
+
+    // Top-level: the firmware corpus's truth (docs/firmware-design.md). Additive, v1.
+    private static void WriteFirmware(Utf8JsonWriter w, CodeSpawner.Firmware.FirmwareResult r)
+    {
+        var t = r.Truth;
+        w.WriteStartObject("firmware");
+        w.WriteString("root", CodeSpawner.Firmware.FwSpec.FwDir);
+        w.WriteString("compileDb", CodeSpawner.Firmware.FwSpec.DbPath);
+        w.WriteNumber("maxParseBytes", CodeSpawner.Firmware.FwSpec.MaxParseBytes);
+        w.WriteString("treeSha256", t.TreeSha);
+        w.WriteString("cases", CodeSpawner.Firmware.FirmwareEmitter.CasesPath);
+        w.WriteStartObject("counts");
+        w.WriteNumber("units", r.Units);
+        w.WriteNumber("families", r.Families);
+        w.WriteNumber("traps", r.Traps);
+        w.WriteNumber("cases", r.Cases);
+        w.WriteNumber("bigHeadersKept", t.BigHeadersKept);
+        w.WriteNumber("denseHeaders", t.DenseHeaders);
+        w.WriteNumber("wholeIncludedFromOutside", t.WholeIncludedFromOutside);
+        w.WriteNumber("pasteMacros", t.PasteMacros);
+        w.WriteNumber("forwardingMacros", t.ForwardingMacros);
+        w.WriteNumber("totalDefineLines", t.TotalDefineLines);
+        w.WriteNumber("mustKeep", t.MustKeepCount);
+        w.WriteNumber("mustDrop", t.MustDropCount);
+        w.WriteNumber("open", t.OpenCount);
+        w.WriteNumber("bytesBefore", t.BytesBefore);
+        w.WriteNumber("definesDroppedMin", t.DefinesDroppedMin);
+        w.WriteNumber("definesDroppedMax", t.DefinesDroppedMax);
+        w.WriteNumber("bytesAfterMin", t.BytesAfterMin);
+        w.WriteNumber("bytesAfterMax", t.BytesAfterMax);
+        w.WriteEndObject();
+        w.WriteStartArray("bigHeaders");
+        foreach (var p in t.BigHeaders) w.WriteStringValue(p);
+        w.WriteEndArray();
+        w.WriteStartArray("denseHeaders");
+        foreach (var d in t.Dense)
+        {
+            w.WriteStartObject();
+            w.WriteString("path", d.Path);
+            w.WriteBoolean("edge", d.Edge);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteStartArray("wholeIncludedFromOutside");
+        foreach (var p in t.WholeFromOutside) w.WriteStringValue(p);
+        w.WriteEndArray();
+        w.WriteStartArray("hostile");
+        foreach (var h in r.Hostile)
+        {
+            w.WriteStartObject();
+            w.WriteString("path", h.Path);
+            w.WriteString("kind", h.Kind);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+        w.WriteStartObject("builds");
+        foreach (var b in new[] { "main", "union" })
+        {
+            w.WriteStartObject(b);
+            void L(string key, CodeSpawner.Firmware.FwList l)
+            {
+                w.WriteStartObject(key);
+                w.WriteString("path", CodeSpawner.Firmware.FirmwareEmitter.TruthDir + "/" + (b == "main" ? l.Path : "union" + l.Path!["main".Length..]));
+                w.WriteString("sha256", l.Sha256);
+                w.WriteNumber("count", l.Count);
+                w.WriteEndObject();
+            }
+            L("mustKeepDefines", t.MustKeepDefines);
+            L("mustDropDefines", t.MustDropDefines);
+            L("openDefines", t.OpenDefines);
+            L("mustKeepFunctions", t.MustKeepFunctions);
+            L("mustKeepFiles", t.MustKeepFiles);
+            w.WriteEndObject();
+        }
+        w.WriteEndObject();
+        w.WriteEndObject();
     }
 
     /// <summary>A symbol's <c>indirectEdges</c> array (omitted when it has none), as in the base manifest and in a

@@ -339,6 +339,70 @@ program's digest is pinned too: `gen --lang cpp` at the default seed 1337 gives
 `2cf4070df906e79da20248902e948ebb3b76fe289f1baee186fc5f0d9f2c4e99` (unit test + bench), and a release that moves
 it says so in the CHANGELOG.
 
+## `firmware` — the firmware corpus (optional)
+
+The top-level `firmware` object is present with `gen --firmware`
+([docs/firmware-design.md](firmware-design.md), which also gives the rules the truth is built from). It is additive:
+`manifestVersion` stays 1, and the object is absent without `--firmware`. Paths in `bigHeaders`, `denseHeaders`,
+`wholeIncludedFromOutside` and the lists' contents are relative to `root`. Every other path is relative to the corpus
+root.
+
+```json
+"firmware": {
+  "root": "fw", "compileDb": "fw-build/compile_commands.json", "maxParseBytes": 20000000,
+  "treeSha256": "…", "cases": "fw-truth/cases.tsv",
+  "counts": { "units": 285, "families": 10000, "traps": 8, "cases": 229,
+              "bigHeadersKept": 10, "denseHeaders": 5, "wholeIncludedFromOutside": 1,
+              "pasteMacros": …, "forwardingMacros": …, "totalDefineLines": …,
+              "mustKeep": 17019, "mustDrop": 1197207, "open": 1118, "bytesBefore": …,
+              "definesDroppedMin": …, "definesDroppedMax": …, "bytesAfterMin": …, "bytesAfterMax": … },
+  "bigHeaders": ["big/regs_0.h", "…", "src/bigsrc_0.c"],
+  "denseHeaders": [{ "path": "dense/dense_5999.h", "edge": true }, …],
+  "wholeIncludedFromOutside": ["dense/shared_0.h"],
+  "hostile": [{ "path": "fw/misc/late.bin", "kind": "nul-late" }, …],
+  "builds": {
+    "main":  { "mustKeepDefines": { "path": "fw-truth/main.mustKeepDefines.txt", "sha256": "…", "count": 17019 },
+               "mustDropDefines": {…}, "openDefines": {…}, "mustKeepFunctions": {…}, "mustKeepFiles": {…} },
+    "union": { "mustKeepDefines": { "path": "fw-truth/union.mustKeepDefines.txt", … }, … }
+  }
+}
+```
+
+- **`treeSha256`** is a sha256 over every file under `root`, in ordinal order of its root-relative path (`/`
+  separators): the path, `\n`, the decimal byte length, `\n`, then the bytes. Check it before carving.
+- **`bigHeaders`** are the files longer than `maxParseBytes`; `.c` files count too.
+- **`denseHeaders`** lists every dense file, plus any file that one line would make dense (`edge: true`).
+  - An edge file may be dense (the 0.60 fixture) or not (the 0.5999 decoy).
+  - `counts.denseHeaders` counts only the dense ones.
+  - `counts.bigHeadersKept` counts every big or dense file.
+- **`wholeIncludedFromOutside`** lists the big or dense files that a unit outside `root` includes. They are kept
+  whole and are not carved.
+- **`builds`**: one build, `main`, in phase 1. `union` is the union of all builds (here the same lists).
+  - Each list is a file of names (or `root`-relative paths for `mustKeepFiles`), ordinal-sorted, one per line, LF.
+  - `sha256` and `count` are over the uncompressed text. A list over 100 MB is written as `.txt.gz`.
+  - **`mustKeepDefines`** (soundness: carve ⊇ it), **`mustDropDefines`** (precision: carve ∩ it = ∅) and
+    **`openDefines`** (undecided) cover every name defined in a carved file.
+  - **`mustKeepFunctions`** is empty until phase 2.
+  - **`mustKeepFiles`** lists the files under `root` that define a must-keep name, and every file under `root` in a
+    unit's include closure.
+- **`counts`** are exact, except the `…Min`/`…Max` pairs, which bound a sound carve: definesKept + definesDropped =
+  `totalDefineLines`.
+  - **`definesDroppedMin`** is the must-drop define lines in carved files, and **`definesDroppedMax`** every define
+    line there that is not must-keep.
+  - **`bytesAfterMin`** = `bytesBefore` − every non-must-keep define line, terminator included (the most a carve can
+    remove).
+  - **`bytesAfterMax`** = `bytesBefore` − the must-drop define lines without their terminators (the least a carve can
+    remove, blanking each line).
+- **`hostile`** lists the hostile files and their kinds: `empty`, `utf8-bom`, `latin1`, `unterminated-comment`,
+  `crlf`, `nul-early` (binary, not read), `nul-late` (text), `utf16`, `hidden`, the size boundaries, and big headers
+  with no guard or with CRLF.
+- **`cases`** points to a TSV (`name\tcase\tsite`): each case's target name, its case kind, and where it is
+  exercised (relative to `root`).
+
+`verify` recomputes all of it from the tree and FAILs on any difference. `verify --reference-carve <dir>` writes the
+carve the truth describes, so that it can be compiled. Sizes and generation times at each scale, the per-kind cases
+and the hostile-file list are in [firmware-design.md](firmware-design.md).
+
 ## Stable invariants consumers may rely on
 
 - `func_i` is defined in `src_i.c` and calls `func_{i-1}` (the linear chain). Keyed on the `src_<i>.c`

@@ -107,6 +107,9 @@ public static class ManifestVerifier
         int defsOk = 0, refsOk = 0, gatedOk = 0, edgesOk = 0, missOk = 0, dupOk = 0, indirectOk = 0, cppOk = 0, webOk = 0;
         if (v2) fail += CheckCpp(corpus, meta, symbols, names, ref cppOk, paths, lineCache);
         if (root.TryGetProperty("closures", out var closuresEl)) fail += CheckWeb(corpus, meta, closuresEl, symbols, paths, ref webOk);
+        int fwOk = 0;
+        if (root.TryGetProperty("firmware", out var fwEl)) fail += FirmwareVerifier.Check(corpus, fwEl, o.ReferenceCarve, Err, ref fwOk);
+        else if (o.ReferenceCarve is not null) { Err.WriteLine("error: --reference-carve needs a manifest with a firmware corpus"); return 2; }
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree, its linked roots included (the
         // unresolved-include premise: an include path may span every root).
@@ -255,9 +258,9 @@ public static class ManifestVerifier
         }
 
         Console.WriteLine($"  checked: {defsOk} defs, {refsOk} refs, {edgesOk} edges, {gatedOk} gated refs, {missOk} expected-miss, {dupOk} dup copies, {indirectOk} indirect edges" +
-                          (v2 ? $", {cppOk} C++ facts" : "") + (webOk > 0 ? $", {webOk} include-web facts" : ""));
+                          (v2 ? $", {cppOk} C++ facts" : "") + (webOk > 0 ? $", {webOk} include-web facts" : "") + (fwOk > 0 ? $", {fwOk} firmware facts" : ""));
         // A manifest that declares nothing checkable used to PASS, having proved nothing.
-        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk + cppOk + webOk == 0)
+        if (fail == 0 && defsOk + refsOk + edgesOk + gatedOk + missOk + dupOk + indirectOk + cppOk + webOk + fwOk == 0)
         { Err.WriteLine("error: the manifest declares nothing to check (no symbol sites, dup groups or indirect edges)"); return 2; }
         if (fail == 0) { Console.WriteLine($"verify: PASS ({names.Count} symbols)"); return 0; }
         Err.WriteLine($"verify: FAIL ({fail} problem(s))");

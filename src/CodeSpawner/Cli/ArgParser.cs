@@ -90,6 +90,16 @@ public static class ArgParser
                 case "web-relative-frac": o.WebRelativeFrac = D(); break;
                 case "web-crlf-frac": o.WebCrlfFrac = D(); break;
                 case "web-mixed-eol-frac": o.WebMixedEolFrac = D(); break;
+                // firmware corpus:
+                case "firmware": o.Firmware = B(); break;
+                case "fw-big-headers": o.FwBigHeaders = I(); break;
+                case "fw-files": o.FwFiles = I(); break;
+                case "fw-families": o.FwFamilies = I(); break;
+                case "fw-pasters": o.FwPasters = I(); break;
+                case "fw-dense-headers": o.FwDenseHeaders = I(); break;
+                case "fw-big-mb": o.FwBigMb = I(); break;
+                case "fw-chain-max": o.FwChainMax = I(); break;
+                case "fw-db-paths": o.FwDbPaths = Val().ToLowerInvariant(); break;
                 // scan/shape-profile regeneration:
                 case "from-profile": o.FromProfile = Val(); break;
                 case "with-oracle": o.WithOracle = B(); break;
@@ -226,10 +236,35 @@ public static class ArgParser
             if (v < min) throw new ArgException($"--{k} must be >= {min}, got {v}");
         if (o.Depth is < 1 or > 12) throw new ArgException($"--depth must be in 1..12, got {o.Depth}");
         CheckWeb(o, given);
+        CheckFirmware(o, given);
         if (o.HotTokenShare is < 0 or > 1) throw new ArgException("--hot-token-share must be in [0, 1]");
         // 0 = all reachable; a tiny fraction would size the dead block as live/frac nodes.
         if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
             throw new ArgException("--oracle-reachable-frac must be 0 (all reachable) or in [0.01, 1]");
+    }
+
+    /// <summary>The firmware corpus knobs (docs/firmware-design.md). Without --firmware they would be ignored and are
+    /// refused, like a web-* knob without the web.</summary>
+    private static void CheckFirmware(GenOptions o, HashSet<string> given)
+    {
+        if (!o.Firmware)
+        {
+            var stray = given.Where(k => k.StartsWith("fw-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
+            if (stray is not null) throw new ArgException($"--{stray} shapes the firmware corpus, which is off; add --firmware");
+            return;
+        }
+        if (o.Lang == SourceLang.Cpp) throw new ArgException("--firmware is C-only (not with --lang cpp)");
+        if (o.FromProfile is not null) throw new ArgException("--firmware is not taken with --from-profile");
+        if (!o.Manifest) throw new ArgException("--firmware needs the manifest (it holds the firmware truth); drop --manifest false");
+        foreach (var (k, v, min, max) in new (string, int, int, int)[]
+        {
+            ("fw-big-headers", o.FwBigHeaders, 1, 100_000), ("fw-files", o.FwFiles, 0, 10_000_000),
+            ("fw-families", o.FwFamilies, 0, 100_000_000), ("fw-pasters", o.FwPasters, 0, 1_000_000_000),
+            ("fw-dense-headers", o.FwDenseHeaders, 0, 100_000), ("fw-big-mb", o.FwBigMb, 20, 2000),
+            ("fw-chain-max", o.FwChainMax, 2, 10_000),
+        })
+            if (v < min || v > max) throw new ArgException($"--{k} must be in {min}..{max}, got {v}");
+        if (o.FwDbPaths is not ("absolute" or "relative")) throw new ArgException($"--fw-db-paths must be absolute or relative, got '{o.FwDbPaths}'");
     }
 
     /// <summary>The include-web knobs (docs/include-web-design.md). They shape the web only, so without --web-units
@@ -308,6 +343,7 @@ public static class ArgParser
             {
                 case "corpus": o.Corpus = c.Val(); break;
                 case "manifest": o.Manifest = c.Val(); break;
+                case "reference-carve": o.ReferenceCarve = c.Val(); break;
                 default: throw new ArgException($"unknown option --{c.Key}");
             }
         }

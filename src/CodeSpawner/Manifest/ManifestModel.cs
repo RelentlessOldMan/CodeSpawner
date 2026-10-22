@@ -216,4 +216,7 @@ public sealed class ManifestModel
 
     /// <summary>Include web: each unit's closure, the top-level <c>closures</c> object. Empty = no web.</summary>
     public List<ClosureRecord> Closures { get; } = new();
+
+    /// <summary>The firmware corpus's truth, the top-level <c>firmware</c> object. Null = no firmware corpus.</summary>
+    internal global::CodeSpawner.Firmware.FirmwareResult? Firmware { get; set; }
 }

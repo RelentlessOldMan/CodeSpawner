@@ -129,6 +129,27 @@ public sealed class GenOptions
     /// <summary>Fraction of web files written with mixed LF/CRLF line ends.</summary>
     public double WebMixedEolFrac { get; set; } = 0.02;
 
+    // --- firmware corpus (docs/firmware-design.md; OFF unless --firmware). The count knobs scale with --scale. ---
+
+    /// <summary>Writes the firmware corpus (fw/, ext/, fw-build/, fw-truth/) and its truth.</summary>
+    public bool Firmware { get; set; } = false;
+    /// <summary>Big headers (fw/big/regs_N.h, over maxParseBytes). Scaled, never below 1.</summary>
+    public int FwBigHeaders { get; set; } = 400;
+    /// <summary>Files under fw/src (units and their kept headers). Scaled.</summary>
+    public int FwFiles { get; set; } = 38_000;
+    /// <summary>Must-keep families, each a set of big-header defines reached by one rule. Scaled.</summary>
+    public int FwFamilies { get; set; } = 1_000_000;
+    /// <summary>Paste macros in the big headers (most never called, so dropped). Scaled.</summary>
+    public int FwPasters { get; set; } = 6_000_000;
+    /// <summary>Dense headers (fw/dense, 1 MB to maxParseBytes, mostly defines). Scaled.</summary>
+    public int FwDenseHeaders { get; set; } = 200;
+    /// <summary>Size of each big header in MB (header #0 is exactly maxParseBytes + 1).</summary>
+    public int FwBigMb { get; set; } = 24;
+    /// <summary>Longest forwarder chain (a forwarder to a forwarder ... to a paste macro).</summary>
+    public int FwChainMax { get; set; } = 40;
+    /// <summary>"absolute" or "relative": how fw-build/compile_commands.json writes its directory and paths.</summary>
+    public string FwDbPaths { get; set; } = "absolute";
+
     // --- scan/shape-profile regeneration (gen --from-profile). ---
 
     /// <summary>Path to a scan profile — when set, gen synthesizes a look-alike from it instead of the knobs.</summary>
