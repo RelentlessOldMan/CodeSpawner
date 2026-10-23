@@ -11,6 +11,45 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.7] - 2026-10-23
+
+Review round 9 of the firmware corpus (1.4.0–1.4.6). Firmware corpora change in one file: `fw-truth/cases.tsv`
+(the `KDV_VAL` row's site). `fw/` and the truth lists are unchanged at default knobs.
+
+### Fixed
+- `cases.tsv`: the `-DKDV_9=KDV_VAL` row's site was the corpus-relative `fw-build/compile_commands.json`. The contract
+  says sites are relative to `fw/`, so it is now `../fw-build/compile_commands.json`.
+- The work carve wrote an applier `WAP<k>` for every level, even one with no higher-order use (a level of under 18
+  uses). Nothing called it, so the generator refused its own tree: `--depth 12`, or a small `--scale`, failed. Now a
+  level gets an applier only when it has a higher-order use, and `work.appliers` counts what was written.
+- A work forwarder chain could nest past what a preprocessor recurses (a big forwarder pool over a small paster
+  pool). It now goes back to a paster every `--fw-chain-max` links. Default corpora are unchanged.
+- `--preset firmware-work --firmware false` was refused for the preset's own `--fw-*` knobs. Now only knobs you type
+  count.
+- A `--scale` that pushes a count past 2,147,483,647 is refused instead of wrapping.
+- A failed gen no longer leaves a multi-GB `.txt.tmp` list behind. A gzipped list is compressed once, and the union
+  is a copy of it.
+- Reading a firmware header no longer treats an IO error as "not dense"; it fails.
+
+### Changed
+- `verify` (firmware) checks more:
+  - the names' spelling against their class, as gen does;
+  - the big, dense and whole-from-outside lists element by element (a dense entry's `edge` must be a JSON bool);
+  - `counts.units`, `traps` and `cases`, recounted from the tree;
+  - each `cases.tsv` row (three fields, a site that is a file of the corpus);
+  - each `hostile` entry (missing `hostile` is a FAIL);
+  - `work`, now required when `_meta.gen.fwWork` is true or `fw/work/` exists, and its per-level uses and live cross
+    decoys, recounted from the lists.
+
+  A malformed compile db, or one whose absolute paths point where a moved corpus used to be, is a
+  `FAIL firmware compileDb` instead of a crash.
+- `verify --reference-carve <dir>` empties `<dir>` first, so it now refuses (exit 2) a dir that is the corpus, is
+  inside it or holds it, is a file, is somewhere gen refuses to clear, or isn't empty and wasn't made by a carve
+  (marked `.codespawner-carve`). It skips links when copying, and deletes a carve that fails halfway. The carve's
+  compile db replaces the corpus root only at path boundaries.
+- The truth uses less memory: names with no definition share one empty template list and expansion, and the sorted
+  name arrays are built once.
+
 ## [1.4.6] - 2026-10-23
 
 Adds the work-shaped firmware carve. Existing corpora, firmware ones included, are unchanged: the work carve is off

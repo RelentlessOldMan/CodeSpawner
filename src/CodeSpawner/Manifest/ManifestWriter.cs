@@ -310,7 +310,7 @@ public static class ManifestWriter
         w.WriteNumber("keptUnderGlobalPools", k.Exact + k.CrossDecoys);
         w.WriteNumber("pasters", k.Pasters);
         w.WriteNumber("forwarders", k.Forwarders);
-        w.WriteNumber("appliers", k.Level.Length);
+        w.WriteNumber("appliers", k.Appliers);
         w.WriteStartObject("uses");
         w.WriteNumber("direct", k.UsesDirect);
         w.WriteNumber("forwarded", k.UsesForwarded);

@@ -120,6 +120,8 @@ internal sealed class NameTable
 
     private void Rehash()
     {
+        // the slots are an int[] of a power of two, half full at most: 2^30 slots hold 2^29 names
+        if (_slots.Length >= 1 << 30) throw new InvalidOperationException($"more than {1 << 29:N0} distinct names: past what the truth's name table holds");
         _slots = new int[_slots.Length * 2];
         Reinsert();
     }

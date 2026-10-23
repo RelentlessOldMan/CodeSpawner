@@ -45,6 +45,8 @@ public static class ManifestVerifier
 
         if (!Directory.Exists(corpus)) { Err.WriteLine($"error: corpus dir not found: {corpus}"); return 2; }
         if (!File.Exists(manifestPath)) { Err.WriteLine($"error: manifest not found: {manifestPath}"); return 2; }
+        if (o.ReferenceCarve is not null && FirmwareVerifier.CarveDestProblem(corpus, o.ReferenceCarve) is { } carveWhy)
+        { Err.WriteLine($"error: --reference-carve {carveWhy}"); return 2; }
 
         Console.WriteLine($"verify: corpus={corpus}");
         Console.WriteLine($"verify: manifest={manifestPath}");
@@ -108,7 +110,9 @@ public static class ManifestVerifier
         if (v2) fail += CheckCpp(corpus, meta, symbols, names, ref cppOk, paths, lineCache);
         if (root.TryGetProperty("closures", out var closuresEl)) fail += CheckWeb(corpus, meta, closuresEl, symbols, paths, ref webOk);
         int fwOk = 0;
-        if (root.TryGetProperty("firmware", out var fwEl)) fail += FirmwareVerifier.Check(corpus, fwEl, o.ReferenceCarve, Err, ref fwOk);
+        bool wantWork = meta.ValueKind == JsonValueKind.Object && meta.TryGetProperty("gen", out var genEl) && genEl.ValueKind == JsonValueKind.Object
+            && genEl.TryGetProperty("fwWork", out var fwWorkEl) && fwWorkEl.ValueKind == JsonValueKind.True;
+        if (root.TryGetProperty("firmware", out var fwEl)) fail += FirmwareVerifier.Check(corpus, fwEl, wantWork, o.ReferenceCarve, Err, ref fwOk);
         else if (o.ReferenceCarve is not null) { Err.WriteLine("error: --reference-carve needs a manifest with a firmware corpus"); return 2; }
 
         // A file named VENDOR_missing_*.h must exist NOWHERE in the tree, its linked roots included (the

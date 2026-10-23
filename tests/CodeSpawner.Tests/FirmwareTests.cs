@@ -528,4 +528,198 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Contains("KP0_Q0", keep);
         Assert.Contains("KP3_XQ9", keep);
     }
+
+    // ---------- review round 9 ----------
+
+    // a firmware corpus without the size of the shared one: one big header, no dense ones
+    private static readonly string[] SmallFw =
+    [
+        "--firmware", "--fw-big-headers", "1", "--fw-files", "40", "--fw-families", "64", "--fw-pasters", "200", "--fw-dense-headers", "0",
+    ];
+
+    private static readonly string[] SmallFwDense = [.. SmallFw[..^2], "--fw-dense-headers", "2"];
+
+    private static (int code, string err) VerifyWith(string corpus, Action<JsonObject> edit, string dir)
+    {
+        var m = Manifest(corpus);
+        edit(m["firmware"]!.AsObject());
+        string mp = Path.Combine(dir, "m.json");
+        File.WriteAllText(mp, m.ToJsonString());
+        return Verify(corpus, mp);
+    }
+
+    [Fact]
+    public void Verify_ComparesListsElementByElement_RecountsCounts_AndNeedsHostile()
+    {
+        // one verify per manifest (each recomputes the truth): every edit must show up as its own FAIL
+        using var tmp = new TempDir();
+        var big = Manifest(_c.Path)["firmware"]!["bigHeaders"]!.AsArray().Select(x => x!.GetValue<string>()).ToArray();
+        Assert.True(big.Length > 1);
+        var (code, err) = VerifyWith(_c.Path, f =>
+        {
+            f["bigHeaders"] = new JsonArray(JsonValue.Create(string.Join(", ", big)));                 // one string is not the list
+            f["denseHeaders"]![0]!["edge"] = f["denseHeaders"]![0]!["edge"]!.ToJsonString();        // edge as a string
+            f["hostile"]![0]!["path"] = "fw/misc/nothing.h";
+            f["counts"]!["units"] = f["counts"]!["units"]!.GetValue<long>() + 1;
+            f["counts"]!["traps"] = f["counts"]!["traps"]!.GetValue<long>() - 1;
+            f["counts"]!["families"] = -1;
+            f["counts"]!["cases"] = f["counts"]!["cases"]!.GetValue<long>() + 1;
+        }, tmp.Path);
+        Assert.True(code == 1, $"exit {code}: {err}");
+        foreach (var what in new[] { "bigHeaders", "denseHeaders", "hostile", "counts.units", "counts.traps", "counts.families", "counts.cases" })
+            Assert.Contains($"FAIL firmware {what}", err);
+        (code, err) = VerifyWith(_c.Path, f => f.Remove("hostile"), tmp.Path);
+        Assert.True(code == 1, $"exit {code}: {err}");
+        Assert.Contains("FAIL firmware hostile: missing", err);
+    }
+
+    [Fact]
+    public void ReferenceCarve_RefusesADestThatIsNotItsOwn_AndRecarvesItsOwn()
+    {
+        using var tmp = new TempDir();
+        string c = Gen(tmp.Path, "c", SmallFwDense);
+        string foreign = Path.Combine(tmp.Path, "foreign"), file = Path.Combine(tmp.Path, "afile");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, "keep.txt"), "mine");
+        File.WriteAllText(file, "mine");
+        foreach (var dest in new[]
+        {
+            c, Path.Combine(c, FwSpec.FwDir), Path.GetDirectoryName(c)!, foreign, file,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        })
+        {
+            var (code, err) = Verify(c, carve: dest);
+            Assert.True(code == 2, $"{dest}: exit {code}: {err}");
+            Assert.Contains("--reference-carve", err);
+        }
+        Assert.Equal("mine", File.ReadAllText(Path.Combine(foreign, "keep.txt")));
+        Assert.Equal("mine", File.ReadAllText(file));
+        Assert.True(Verify(c).code == 0);
+
+        // a carve dir verify made itself is carved again, its old contents gone
+        string carve = Path.Combine(tmp.Path, "carve");
+        Assert.True(Verify(c, carve: carve).code == 0);
+        Assert.True(File.Exists(Path.Combine(carve, FirmwareVerifier.CarveMarker)));
+        File.WriteAllText(Path.Combine(carve, "stale.txt"), "x");
+        var (code2, err2) = Verify(c, carve: carve);
+        Assert.True(code2 == 0, err2);
+        Assert.False(File.Exists(Path.Combine(carve, "stale.txt")));
+    }
+
+    [Fact]
+    public void ListWriter_AFailedListLeavesNoTemp()
+    {
+        using var tmp = new TempDir();
+        using (var w = new ListWriter(tmp.Path, "x")) w.Add("KA"u8);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(tmp.Path));
+    }
+
+    [Fact]
+    public void Lists_PastTheGzipSeam_AreGzipped_UnionIsACopy_AndVerifyPasses()
+    {
+        using var tmp = new TempDir();
+        long was = ListWriter.GzipPast;
+        string c;
+        try { ListWriter.GzipPast = 1000; c = Gen(tmp.Path, "g", SmallFw); }
+        finally { ListWriter.GzipPast = was; }
+        var b = Manifest(c)["firmware"]!["builds"]!;
+        foreach (var name in new[] { "mustKeepDefines", "mustDropDefines" })
+        {
+            string main = b["main"]![name]!["path"]!.GetValue<string>(), union = b["union"]![name]!["path"]!.GetValue<string>();
+            Assert.EndsWith(".gz", main);
+            Assert.EndsWith(".gz", union);
+            Assert.Equal(File.ReadAllBytes(Path.Combine(c, main)), File.ReadAllBytes(Path.Combine(c, union)));
+            using var gz = new System.IO.Compression.GZipStream(File.OpenRead(Path.Combine(c, main)), System.IO.Compression.CompressionMode.Decompress);
+            using var r = new StreamReader(gz);
+            long lines = 0;
+            while (r.ReadLine() is not null) lines++;
+            Assert.Equal(b["main"]![name]!["count"]!.GetValue<long>(), lines);
+        }
+        Assert.Empty(Directory.EnumerateFiles(c, "*.tmp", SearchOption.AllDirectories));
+        var (code, err) = Verify(c);
+        Assert.True(code == 0, err);
+    }
+
+    [Fact]
+    public void IoParallelism_SameBytes_AndVerifyFailsTamperedListsCasesAndDb()
+    {
+        using var tmp = new TempDir();
+        string a = Gen(tmp.Path, "a", [.. SmallFw, "--io-parallelism", "1"]);
+        string b = Gen(tmp.Path, "b", [.. SmallFw, "--io-parallelism", "8"]);
+        Assert.Equal(Snap(a), Snap(b));
+        // the union list is its own file with the main list's bytes
+        string truth = Path.Combine(a, Path.GetDirectoryName(FirmwareEmitter.CasesPath)!);
+        Assert.Equal(File.ReadAllBytes(Path.Combine(truth, "main.mustKeepDefines.txt")), File.ReadAllBytes(Path.Combine(truth, "union.mustKeepDefines.txt")));
+
+        void Fails(string corpus, string what, string? manifest = null)
+        {
+            var (code, err) = Verify(corpus, manifest);
+            Assert.True(code == 1, $"{what}: exit {code}: {err}");
+            Assert.Contains(what, err);
+        }
+        // a list edited on disk
+        string open = Path.Combine(truth, "main.openDefines.txt");
+        byte[] keepOpen = File.ReadAllBytes(open);
+        File.AppendAllText(open, "YNEWY\n");
+        Fails(a, "openDefines");
+        File.WriteAllBytes(open, keepOpen);
+        // a cases row whose site is no file
+        string cases = Path.Combine(a, FirmwareEmitter.CasesPath);
+        byte[] keepCases = File.ReadAllBytes(cases);
+        File.AppendAllText(cases, "KNOPE\tdefine\tsrc/nothing.c\n");
+        Fails(a, "cases");
+        File.WriteAllBytes(cases, keepCases);
+        Assert.True(Verify(a).code == 0, "restored");
+        // a malformed compile db: a FAIL, not a crash
+        File.WriteAllText(Path.Combine(a, FwSpec.DbPath), "[{\"directory\": 3");
+        Fails(a, "compileDb");
+        // a moved corpus whose db names absolute paths
+        string moved = Path.Combine(tmp.Path, "moved");
+        Directory.Move(b, moved);
+        Fails(moved, "compileDb", b + "-manifest.json");
+    }
+
+    [Fact]
+    public void Work_MissingIsAFail_AndAppliersOnlyWithHigherOrderUses()
+    {
+        using var tmp = new TempDir();
+        string c = Gen(tmp.Path, "w", [.. SmallFw, "--depth", "12",
+            "--fw-work", "--fw-work-defines", "3000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180"]);
+        var (code, err) = Verify(c);
+        Assert.True(code == 0, err);
+        var w = Manifest(c)["firmware"]!["work"]!;
+        var keep = List(c, "main", "mustKeepDefines");
+        Assert.Equal(w["appliers"]!.GetValue<long>(), keep.Count(n => n.StartsWith("WAP", StringComparison.Ordinal)));
+        Assert.Equal(w["uses"]!["higherOrder"]!.GetValue<long>() > 0, w["appliers"]!.GetValue<long>() > 0);
+
+        foreach (var edit in new Action<JsonObject>[]
+        {
+            f => f.Remove("work"),
+            f => f["work"]!["byLevel"]![0]!["uses"] = f["work"]!["byLevel"]![0]!["uses"]!.GetValue<long>() + 1,
+            f => f["work"]!["expectedPasses"] = f["work"]!["expectedPasses"]!.GetValue<long>() + 1,
+        })
+        {
+            var (code2, err2) = VerifyWith(c, edit, tmp.Path);
+            Assert.True(code2 == 1, $"exit {code2}: {err2}");
+            Assert.Contains("FAIL firmware work", err2);
+        }
+    }
+
+    [Fact]
+    public void Preset_FirmwareWork_CanBeSwitchedOff()
+    {
+        var args = Presets.Expand(["--preset", "firmware-work", "--out", "x", "--firmware", "false"], out int pt);
+        Assert.False(ArgParser.ParseGen(args, pt).Firmware);
+        // a firmware knob the user typed with it off is still refused
+        args = Presets.Expand(["--preset", "firmware-work", "--out", "x", "--firmware", "false", "--fw-files", "9"], out pt);
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(args, pt));
+    }
+
+    [Fact]
+    public void Scale_PastIntMax_IsRefused()
+    {
+        var o = ArgParser.ParseGen(["--out", "x", "--firmware"]);
+        o.Scale = 1e6;
+        Assert.Throws<ArgException>(() => o.Eff("fw-work-defines", 2_000_000_000));
+    }
 }

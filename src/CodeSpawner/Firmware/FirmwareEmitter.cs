@@ -827,7 +827,7 @@ internal static class FirmwareEmitter
         foreach (var (name, kase, site) in new[]
         {
             ("__KRS0", "reserved", "big/regs_0.h"), ("_KRS0", "reserved", "big/regs_0.h"), ("NOMINMAX", "reserved", "big/regs_0.h"),
-            ("KDV_VAL", "define-arg", FwSpec.DbPath), ("KBIN0X", "late-nul-text", "misc/late.bin"),
+            ("KDV_VAL", "define-arg", "../" + FwSpec.DbPath), ("KBIN0X", "late-nul-text", "misc/late.bin"),
             ("ZBIN0Z", "binary-not-read", "misc/blob.bin"), ("KU16V0X", "utf16-text", "misc/notes_u16.txt"),
             ("KHID0X", "hidden-file", "misc/.fwhidden"), ("KBM0X", "utf8-bom", "misc/bom.h"), ("KL1N0X", "latin1", "misc/latin1.c"),
             ("KUNT0X", "unterminated-comment", "misc/unterminated.h"), ("KCRL0X", "crlf", "misc/crlf.h"),

@@ -129,8 +129,9 @@ Adds a **firmware corpus** beside the C corpus, for testing a header carve. The 
 
 The manifest's `firmware` object holds the truth for a sound carve: must-keep, must-drop and open define lists
 (written under `fw-truth/`), exact counts and bounds, and `treeSha256`. `verify` recomputes all of it from the
-tree. `verify --reference-carve <dir>` also writes the carve the truth describes, so it can be compiled. Contract,
-rules and knobs: [firmware-design.md](firmware-design.md).
+tree. `verify --reference-carve <dir>` also writes the carve the truth describes, so it can be compiled. It empties
+`<dir>` first, so it refuses a dir it didn't make that isn't empty, and the corpus itself or anything around it.
+Contract, rules and knobs: [firmware-design.md](firmware-design.md).
 
 ```powershell
 codespawner gen --out C:\corpora\fw --preset firmware --scale 0.01

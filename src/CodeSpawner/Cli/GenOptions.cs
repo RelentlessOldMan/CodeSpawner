@@ -239,7 +239,10 @@ public sealed class GenOptions
     {
         if (value <= 0) return 0;
         if (WasSet(knob)) return value;
-        int n = (int)Math.Round(value * Scale);
+        double d = Math.Round(value * Scale);
+        // a cast past int.MaxValue is not an error in C#: it gives int.MinValue, a negative count
+        if (d > int.MaxValue) throw new ArgException($"--scale {Scale.ToString(System.Globalization.CultureInfo.InvariantCulture)} makes --{knob} {d:0} (above {int.MaxValue}); lower --scale or give --{knob} outright");
+        int n = (int)d;
         if (keepOne && n < 1) n = 1;
         return n;
     }

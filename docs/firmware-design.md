@@ -32,8 +32,8 @@ because the truth names their bytes.
   fw-truth/                  # main.<list>.txt, union.<list>.txt, cases.tsv
 ```
 
-Every compile db entry is `cc -std=c11 -I fw/include -I fw/big -I fw/dense -I ext/include -DKD_7 -DKDV_9=KDV_VAL -c
-<file>`. With `--fw-work`, `-I fw/work` comes after `-I fw/dense`. With `--fw-db-paths absolute` (the default)
+Every compile db entry is `cc -std=c11 -I fw/include -I fw/big -I fw/dense -I ext/include -DKD_7 -DKDV_9=KDV_VAL
+-DKDE_N=4 -c <file>`. With `--fw-work`, `-I fw/work` comes after `-I fw/dense`. With `--fw-db-paths absolute` (the default)
 `directory` and every path are absolute. With `relative`, `directory` is `"."` and the paths are relative to the
 corpus root, so the db resolves against the directory it names, resolved from the corpus root. Every unit compiles
 cleanly with `-std=c11 -Wall -Werror`, with or without `-DFW_ALT`, and with `-DFW_SEL=7` or `-DFW_SEL=19`. 1.4.0
@@ -51,7 +51,8 @@ Gen computes the truth from the tree it wrote, using the rules below, and fails 
 its spelling. A slip in the generator can never ship as truth.
 
 `fw-truth/cases.tsv` (`name\tcase\tsite`, LF) names each case's target and where it is exercised. The site is
-relative to `fw/`, or `../ext/…` for a site outside the root. It lists:
+relative to `fw/`, or `../…` for a site outside the root (`../ext/…`; the `-DKDV_9=KDV_VAL` case is
+`../fw-build/compile_commands.json`, since 1.4.7). It lists:
 
 - every trap;
 - the hostile and reserved cases;
@@ -183,7 +184,8 @@ files under `fw-truth/`:
 
   So both blanking and removing fall inside the bounds.
 - **`treeSha256`** is a sha256 over every `fw/` file, in ordinal order of its `fw/`-relative path: the path, `\n`,
-  the byte length, `\n`, then the bytes. Check it before carving, to catch a stale or damaged copy.
+  the byte length, `\n`, then the bytes. Check it before carving, to catch a stale or damaged copy. It does not
+  cover `ext/` or the compile db; verify checks those by recomputing the truth from them.
 
 ## Work shape (`--fw-work`, `--preset firmware-work`)
 
@@ -207,6 +209,17 @@ pasters, no dense headers), so nearly all of its size and time is the work carve
 - **Filler** (`ZWF…Z`) makes up the rest and pads each header past `maxParseBytes`.
 
 With the defaults, 4% of the work defines are kept, and 20% would be kept under global pools.
+
+At the edges the counts give way to the shape, and the manifest records what was written:
+
+- Level 0 has at least one use a header, so at tiny sizes more than `--fw-work-keep-pct` is kept.
+- The tree ends at the first level smaller than the header count, so `levels` can be fewer than `--fw-work-depth`.
+- Cross decoys are capped at the A pieces × B pieces there are. Half decoys need both sides; without them there are
+  none. Filler takes up the rest, so `--fw-work-defines 0` still writes one padded header.
+- A level with no forwarders folds its forwarded uses into direct ones. A level with no higher-order use (a level of
+  under 18 uses) gets no applier, so `appliers` can be fewer than `levels`.
+- A forwarder chain goes back to a paster every `--fw-chain-max` links.
+- `byLevel[k].piecesSoFar` counts the uses (one start and one end piece each) seeded by the end of level `k`.
 
 `firmware.work` in the manifest gives the construction counts, which verify recounts from the lists:
 
@@ -236,14 +249,33 @@ Measured on the 1.4.6 release exe (`--preset firmware-work`), on an otherwise id
 
 ## Verify
 
-`verify` recomputes the truth from the tree and FAILs on any difference: each count, each list's sha and count, the
-lists on disk, `treeSha256`, the big, dense and whole-from-outside lists, and that the cases file and the hostile
-paths are files of the corpus.
+`verify` recomputes the truth from the tree with the same engine gen used, and FAILs on any difference. That makes
+it a check that the corpus is the one gen wrote and is undamaged, not an independent oracle: a rule the engine gets
+wrong, gen and verify both get wrong. It checks:
+
+- the spelling rule (`Z…Z`, `Y…Y`, the rest) against every name's class, as gen does;
+- each count; `units`, `traps` and `cases` are recounted from the tree, and `families` must be a count;
+- each list's sha and count, and the lists on disk;
+- `treeSha256`;
+- the big, dense (each `edge` a JSON bool) and whole-from-outside lists, element by element;
+- every `cases.tsv` row: three fields, and a site that is a file of the corpus;
+- the `hostile` entries: each a file of the corpus, with a kind;
+- `work`, when `_meta.gen.fwWork` is true or `fw/work/` exists: its counts add up, and its per-level uses and live
+  cross decoys are recounted from the lists.
+
+A compile db it cannot read (malformed, or with absolute paths from where the corpus was before it moved) is a
+`FAIL firmware compileDb`, not a crash. Regenerate a moved corpus, or generate it with `--fw-db-paths relative`.
 
 `verify --reference-carve <dir>` also writes the carve the truth describes. It copies `fw/` and `ext/` (hidden
-files included), and in every carved file removes each define line whose name is not must-keep. A define line that
-leaves a block comment open becomes `/*`. It also writes the compile db with the corpus root replaced by `<dir>`.
-Compiling every unit against it with the db's flags checks that must-keep is enough to build.
+files included, links skipped), and in every carved file removes each define line whose name is not must-keep. A
+define line that leaves a block comment open becomes `/*`. It also writes the compile db with the corpus root
+replaced by `<dir>`, at path boundaries only. Compiling every unit against it with the db's flags checks that
+must-keep is enough to build.
+
+`<dir>` is emptied first, so verify refuses (exit 2, before reading anything) a `<dir>` that is the corpus, inside it
+or holds it, a file, a place gen refuses to clear (a drive root, the home folder, …), or a non-empty dir it did not
+make. It marks the dirs it makes with `.codespawner-carve`, so a carve dir can be carved again. A carve that fails
+halfway is deleted.
 
 ## Knobs
 

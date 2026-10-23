@@ -30,7 +30,11 @@ internal sealed class FwWork
     public const long MinHeaderBytes = FwSpec.MaxParseBytes + 1_000_000;
 
     public long Defines, Pasters, Forwarders;
+    /// <summary>Appliers WAP{k} written: one for each level with a higher-order use (a level under 18 uses has none).</summary>
+    public int Appliers;
     public int Growth, Depth, Headers;
+    /// <summary>Longest forwarder chain (--fw-chain-max).</summary>
+    public int ChainMax;
     public long Exact, CrossDecoys, HalfDecoys, Filler;
     public long UsesDirect, UsesForwarded, UsesHigherOrder;
     /// <summary>Filler written past the plan to bring a header over maxParseBytes.</summary>
@@ -57,6 +61,7 @@ internal sealed class FwWork
             Forwarders = o.Eff("fw-work-forwarders", o.FwWorkForwarders),
             Growth = o.FwWorkGrowth,
             Depth = o.FwWorkDepth,
+            ChainMax = o.FwChainMax,
         };
         long exact = w.Defines * o.FwWorkKeepPct / 100;
         w.CrossDecoys = w.Defines * o.FwWorkDecoyPct / 100;
@@ -105,7 +110,7 @@ internal sealed class FwWork
         // Each level has its own pasters, forwarders and applier: a use expands its children inside its own
         // expansion, where a macro it is in cannot expand again. A pool is cut to the uses that take it, so every
         // paster and forwarder is used.
-        w._pBase = new long[K]; w._pN = new long[K]; w._fBase = new long[K]; w._fN = new long[K];
+        w._pBase = new long[K]; w._pN = new long[K]; w._fBase = new long[K]; w._fN = new long[K]; w._ap = new bool[K];
         long pTotal = w.Pasters, fTotal = w.Forwarders;
         w.Pasters = w.Forwarders = 0;
         for (int k = 0; k < K; k++)
@@ -118,6 +123,8 @@ internal sealed class FwWork
             w._pBase[k] = w.Pasters; w._pN[k] = p; w.Pasters += p;
             w._fBase[k] = w.Forwarders; w._fN[k] = f; w.Forwarders += f;
             w.UsesDirect += m[0]; w.UsesForwarded += m[1]; w.UsesHigherOrder += m[2];
+            w._ap[k] = m[2] > 0;
+            if (w._ap[k]) w.Appliers++;
         }
 
         w.CrossByLevel = new long[K];
@@ -139,6 +146,7 @@ internal sealed class FwWork
     public static string ExactName(int h, int k, long l) => StartPiece(h, k, l) + EndPiece(h, k, l);
 
     private long[] _pBase = [], _pN = [], _fBase = [], _fN = [];   // per level: its pasters and forwarders
+    private bool[] _ap = [];   // per level: it has an applier (a higher-order use)
 
     // 0 direct, 1 through a forwarder, 2 higher-order; by index in the level: 10 / 7 / 3 of every 20
     private static int RawMode(long g) => g % 20 < 10 ? 0 : g % 20 < 17 ? 1 : 2;
@@ -247,12 +255,15 @@ internal sealed class FwWork
         if (h == 0)
         {
             for (long j = 0; j < Pasters; j++) line($"#define WRP{j}(p, r) p##r");
-            // a level's forwarder f goes to its paster f, or past the pool to its forwarder f - pool
+            // a level's forwarder f goes to its paster f, or past the pool to its forwarder f - pool; a chain is cut
+            // at --fw-chain-max links (forwarder f, f / pool a multiple of it, goes to paster f % pool), so a big
+            // forwarder pool over a small paster pool cannot nest past what a preprocessor (or the truth) recurses
             for (int k = 0; k < Level.Length; k++)
                 for (long f = 0; f < _fN[k]; f++)
-                    line(f < _pN[k] ? $"#define WFW{_fBase[k] + f}(p, r) WRP{_pBase[k] + f}(p, r)"
+                    line(f / _pN[k] % ChainMax == 0 ? $"#define WFW{_fBase[k] + f}(p, r) WRP{_pBase[k] + f % _pN[k]}(p, r)"
                         : $"#define WFW{_fBase[k] + f}(p, r) WFW{_fBase[k] + f - _pN[k]}(p, r)");
-            for (int k = 0; k < Level.Length; k++) line($"#define WAP{k}(m, p, r) m(p, r)");
+            // an applier no use takes would be an unused macro the truth drops, against its K spelling
+            for (int k = 0; k < Level.Length; k++) if (_ap[k]) line($"#define WAP{k}(m, p, r) m(p, r)");
         }
         else line("#include \"wreg_0.h\"");
 

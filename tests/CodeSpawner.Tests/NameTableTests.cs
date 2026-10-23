@@ -37,4 +37,19 @@ public class NameTableTests
         Assert.Equal(ib, t.Find(Encoding.ASCII.GetBytes(b)));
         Assert.Equal(4, t.Count);
     }
+
+    [Fact]
+    public void Names_RollOverIntoNewChunks()
+    {
+        // 1 MB names: a 64 MB chunk fills after ~63, and the rest land in the next chunk
+        var t = new NameTable();
+        const int n = 70;
+        string Name(int i) => new string((char)('A' + i % 26), (1 << 20) + i);
+        for (int i = 0; i < n; i++) Assert.Equal(i, t.GetOrAdd(Name(i)));
+        for (int i = 0; i < n; i++)
+        {
+            Assert.Equal(Name(i), t.Str(i));
+            Assert.Equal(i, t.Find(Name(i)));
+        }
+    }
 }

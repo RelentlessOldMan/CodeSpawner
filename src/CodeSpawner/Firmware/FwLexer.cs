@@ -160,20 +160,17 @@ internal static class FwLexer
     /// <summary>Carver's verdict, plus whether a one-line change flips it (<c>edge</c>).</summary>
     public static (bool Dense, bool Edge) Density(string path)
     {
-        try
-        {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            var buf = new char[DensePrefixChars];
-            int read = sr.ReadBlock(buf, 0, buf.Length);
-            if (read <= 0) return (false, false);
-            var (nonBlank, defines) = DensityCounts(buf.AsSpan(0, read), read == buf.Length);
-            bool dense = Verdict(nonBlank, defines);
-            bool edge = Verdict(nonBlank, defines + 1) != dense || (defines > 0 && Verdict(nonBlank, defines - 1) != dense)
-                || Verdict(nonBlank + 1, defines) != dense || (nonBlank > 0 && Verdict(nonBlank - 1, Math.Min(defines, nonBlank - 1)) != dense);
-            return (dense, edge);
-        }
-        catch { return (false, false); }
+        // an unreadable file is not "not dense": the truth would be silently wrong, so the error goes to the caller
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var sr = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var buf = new char[DensePrefixChars];
+        int read = sr.ReadBlock(buf, 0, buf.Length);
+        if (read <= 0) return (false, false);
+        var (nonBlank, defines) = DensityCounts(buf.AsSpan(0, read), read == buf.Length);
+        bool dense = Verdict(nonBlank, defines);
+        bool edge = Verdict(nonBlank, defines + 1) != dense || (defines > 0 && Verdict(nonBlank, defines - 1) != dense)
+            || Verdict(nonBlank + 1, defines) != dense || (nonBlank > 0 && Verdict(nonBlank - 1, Math.Min(defines, nonBlank - 1)) != dense);
+        return (dense, edge);
     }
 
     private static bool Verdict(long nonBlank, long defines) => nonBlank >= 50 && (double)defines / nonBlank >= 0.60;

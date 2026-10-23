@@ -16,11 +16,15 @@ public static class ArgParser
         var o = new GenOptions { Out = "" };
         var c = new Cursor(args, presetTokens);
         var given = new HashSet<string>(StringComparer.Ordinal);
+        // knobs the user typed (not a preset's own): --preset firmware-work --firmware false switches the preset's
+        // firmware off without its fw-* tokens counting as stray
+        var userGiven = new HashSet<string>(StringComparer.Ordinal);
         while (c.Next())
         {
             if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}' (expected --knob)");
             string key = c.Key;
             given.Add(key);
+            if (c.FromUser) userGiven.Add(key);
             string Val() => c.Val();
             int I() { o.Explicit.Add(Canon(key)); return c.Int(); }
             double D() { o.Explicit.Add(Canon(key)); return c.Dbl(); }
@@ -135,7 +139,7 @@ public static class ArgParser
         }
 
         if (string.IsNullOrWhiteSpace(o.Out)) throw new ArgException("--out <dir> is required");
-        CheckGen(o, given);
+        CheckGen(o, given, userGiven);
         return o;
     }
 
@@ -151,7 +155,7 @@ public static class ArgParser
         "out", "seed", "force", "lang", "oracle-chain", "oracle-fanout", "oracle-depth", "oracle-shared-leaves", "oracle-reachable-frac",
     };
 
-    private static void CheckGen(GenOptions o, HashSet<string> given)
+    private static void CheckGen(GenOptions o, HashSet<string> given, HashSet<string> userGiven)
     {
         var cppKnob = given.Where(k => k.StartsWith("cpp-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
         if (o.Lang == SourceLang.Cpp)
@@ -245,7 +249,7 @@ public static class ArgParser
             if (v < min) throw new ArgException($"--{k} must be >= {min}, got {v}");
         if (o.Depth is < 1 or > 12) throw new ArgException($"--depth must be in 1..12, got {o.Depth}");
         CheckWeb(o, given);
-        CheckFirmware(o, given);
+        CheckFirmware(o, userGiven);
         if (o.HotTokenShare is < 0 or > 1) throw new ArgException("--hot-token-share must be in [0, 1]");
         // 0 = all reachable; a tiny fraction would size the dead block as live/frac nodes.
         if (o.OracleReachableFrac != 0 && o.OracleReachableFrac is < 0.01 or > 1)
@@ -429,7 +433,10 @@ public static class ArgParser
     {
         var o = new Mutation.MutateOptions { Corpus = "" };
         var c = new Cursor(args);
-        var given = new HashSet<string>(StringComparer.Ordinal);   // knobs the user typed, to refuse ones the mode ignores
+        var given = new HashSet<string>(StringComparer.Ordinal);
+        // knobs the user typed (not a preset's own): --preset firmware-work --firmware false switches the preset's
+        // firmware off without its fw-* tokens counting as stray
+        var userGiven = new HashSet<string>(StringComparer.Ordinal);   // knobs the user typed, to refuse ones the mode ignores
         while (c.Next())
         {
             if (c.Key is null) throw new ArgException($"unexpected argument '{c.Raw}'");
@@ -512,6 +519,8 @@ public static class ArgParser
         private string? _inline;
         public string Raw { get; private set; } = "";
         public string? Key { get; private set; }
+        /// <summary>The current arg was typed by the user, not expanded from a preset.</summary>
+        public bool FromUser => _i >= userFrom;
 
         public bool Next()
         {

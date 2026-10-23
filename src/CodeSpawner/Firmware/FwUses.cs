@@ -184,6 +184,7 @@ internal sealed partial class FwSpec
     // ---------------- templates ----------------
 
     private readonly Dictionary<int, List<Tpl>> _tpls = new();
+    private static readonly List<Tpl> NoTpl = new();
     private readonly DefineParse _tplParse = new();
     private byte[] _tplBuf = new byte[4096];
 
@@ -205,7 +206,8 @@ internal sealed partial class FwSpec
         if (_ncByName.TryGetValue(id, out var nl))
             foreach (int k in nl)
                 if (d.Parse(_ncDefs[k].Text)) l.Add(MakeTpl(d, _ncDefs[k].Mask));
-        _tpls[id] = l;
+        // most names have no definition: they share one empty list (read only) instead of one each
+        _tpls[id] = l = l.Count == 0 ? NoTpl : l;
         return l;
     }
 
@@ -832,6 +834,7 @@ internal sealed partial class FwSpec
     }
 
     private readonly Dictionary<int, Val>[] _expMemo = { new(), new() };
+    private static readonly Val NoVal = new();
     private readonly Dictionary<int, int> _expAt = new();   // names being expanded: their depth
     private int _expLow = int.MaxValue;
 
@@ -859,6 +862,8 @@ internal sealed partial class FwSpec
             _active = savedActive;
             _expAt.Remove(id);
         }
+        // an empty expansion (most names) is kept as the one shared, never-written NoVal
+        if (v.First.Count == 0 && v.Last.Count == 0 && !v.Empty) v = NoVal;
         if (_expLow >= depth) _expMemo[_run][id] = v;
         _expLow = Math.Min(savedLow, _expLow);
         return v;

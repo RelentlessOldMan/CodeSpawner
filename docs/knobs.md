@@ -157,10 +157,13 @@ and `_meta.gen` records the effective values. The full table, the layout and the
   `--fw-pasters` (6,000,000) and `--fw-dense-headers` (200).
 - **Not scaled:** `--fw-big-mb` (24, 20–2000), `--fw-chain-max` (40, 2–10,000) and `--fw-db-paths` (`absolute` or
   `relative`).
-- **The work carve** (`--fw-work`): `--fw-work-defines` (18,900,000), `--fw-work-pasters` (5,000) and
-  `--fw-work-forwarders` (15,000) scale; `--fw-work-depth` (6), `--fw-work-growth` (9), `--fw-work-keep-pct` (4),
-  `--fw-work-decoy-pct` (16) and `--fw-work-half-pct` (20) do not. Each `--fw-work-*` knob is refused without
-  `--fw-work`.
+- **The work carve** (`--fw-work`): `--fw-work-defines` (18,900,000, 0–1e9), `--fw-work-pasters` (5,000, 1–1e8)
+  and `--fw-work-forwarders` (15,000, 0–1e8) scale; `--fw-work-depth` (6, 1–64), `--fw-work-growth` (9, 2–1000),
+  `--fw-work-keep-pct` (4, 1–100), `--fw-work-decoy-pct` (16, 0–100) and `--fw-work-half-pct` (20, 0–100) do not. The
+  three percents add up to at most 100. Each `--fw-work-*` knob is refused without `--fw-work`.
+- A knob the preset set doesn't count as given: `--preset firmware-work --firmware false` switches the firmware off.
+  A `--fw-*` knob you type yourself is still refused with it off.
+- A `--scale` that makes a count past 2,147,483,647 is refused (give the knob outright).
 
 ## Presets
 

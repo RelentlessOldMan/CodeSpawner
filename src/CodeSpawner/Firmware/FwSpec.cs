@@ -11,6 +11,9 @@ internal sealed record FwList(string? Path, string Sha256, long Count);
 /// <summary>A dense header and whether a one-line change flips Carver's verdict.</summary>
 internal sealed record FwDense(string Path, bool Edge);
 
+/// <summary>The corpus's compile db cannot be read as one, or does not describe this corpus.</summary>
+internal sealed class FwDbException(string message) : Exception(message);
+
 /// <summary>Everything the firmware truth says (docs/firmware-design.md), as computed from the tree.</summary>
 internal sealed class FwTruth
 {
@@ -198,12 +201,25 @@ internal sealed partial class FwSpec
     private void ReadDb()
     {
         string db = Path.Combine(_root, DbPath);
-        using var doc = JsonDocument.Parse(File.ReadAllBytes(db));
+        byte[] bytes = File.ReadAllBytes(db);
+        // a db that is not an array of { directory, file, arguments | command } is a bad corpus, not a crash
+        try { ReadDb(bytes); }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or NullReferenceException)
+        { throw new FwDbException($"{DbPath} is not a compile db this generator writes ({ex.Message})"); }
+    }
+
+    private void ReadDb(byte[] bytes)
+    {
+        using var doc = JsonDocument.Parse(bytes);
         foreach (var e in doc.RootElement.EnumerateArray())
         {
             string dir = e.GetProperty("directory").GetString()!;
             if (!Path.IsPathRooted(dir)) dir = Path.Combine(_root, dir);
             dir = Path.GetFullPath(dir);
+            // --fw-db-paths absolute names the corpus where it was generated: once moved, every path misses
+            if (!string.Equals(Path.TrimEndingDirectorySeparator(dir), Path.TrimEndingDirectorySeparator(_root), StringComparison.OrdinalIgnoreCase))
+                throw new FwDbException($"{DbPath} names directory {dir}, not this corpus ({_root}): an absolute-path db " +
+                                        "only fits the corpus where it was generated; regenerate it there, or with --fw-db-paths relative");
             var args = new List<string>();
             if (e.TryGetProperty("arguments", out var a)) foreach (var x in a.EnumerateArray()) args.Add(x.GetString()!);
             else if (e.TryGetProperty("command", out var c))
@@ -468,10 +484,12 @@ internal sealed partial class FwSpec
 
     private void SortNames()
     {
-        var c = new List<int>();
-        for (int i = 0; i < Names.Count; i++) if (Names.Has(i, NameTable.CName)) c.Add(i);
-        _sortedFwd = c.ToArray();
-        _sortedRev = c.ToArray();
+        int n = 0;
+        for (int i = 0; i < Names.Count; i++) if (Names.Has(i, NameTable.CName)) n++;
+        _sortedFwd = new int[n];
+        n = 0;
+        for (int i = 0; i < Names.Count; i++) if (Names.Has(i, NameTable.CName)) _sortedFwd[n++] = i;
+        _sortedRev = (int[])_sortedFwd.Clone();
         Array.Sort(_sortedFwd, Comparer<int>.Create((a, b) => Names.Compare(a, b, false)));
         Array.Sort(_sortedRev, Comparer<int>.Create((a, b) => Names.Compare(a, b, true)));
     }
@@ -745,7 +763,9 @@ internal sealed partial class FwSpec
 /// </summary>
 internal sealed class ListWriter : IDisposable
 {
-    public const long GzipPast = 100L << 20;
+    /// <summary>A list longer than this is written gzipped. Settable only so a test can reach the gz path.</summary>
+    internal static long GzipPast = 100L << 20;
+    private bool _finished;
     private readonly string? _dir, _name;
     private readonly IncrementalHash _sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly FileStream? _out;
@@ -782,13 +802,12 @@ internal sealed class ListWriter : IDisposable
         string rel;
         if (_bytes > GzipPast)
         {
-            foreach (var target in new[] { main + ".gz", union + ".gz" })
-            {
-                using var src = File.OpenRead(_tmp!);
-                using var dst = File.Create(target);
-                using var gz = new System.IO.Compression.GZipStream(dst, System.IO.Compression.CompressionLevel.Fastest);
+            // compressed once; the union (one build in phase 1) is a copy
+            using (var src = File.OpenRead(_tmp!))
+            using (var dst = File.Create(main + ".gz"))
+            using (var gz = new System.IO.Compression.GZipStream(dst, System.IO.Compression.CompressionLevel.Fastest))
                 src.CopyTo(gz);
-            }
+            File.Copy(main + ".gz", union + ".gz", true);
             File.Delete(_tmp!);
             rel = $"main.{_name}.txt.gz";
         }
@@ -798,12 +817,15 @@ internal sealed class ListWriter : IDisposable
             File.Move(_tmp!, main, true);
             rel = $"main.{_name}.txt";
         }
+        _finished = true;
         return new FwList(rel, sha, Count);
     }
 
     public void Dispose()
     {
         _out?.Dispose();
+        // a failed gen leaves no multi-GB temp behind
+        if (!_finished && _tmp is not null) try { File.Delete(_tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         _sha.Dispose();
     }
 }
