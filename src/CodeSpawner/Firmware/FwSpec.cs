@@ -420,10 +420,12 @@ internal sealed class FwSpec
         if (d.PastesParam()) _directPasters.Add((name, mask));
         var body = d.Body;
         bool alias = !d.IsFunc && body.Count > 0 && body[^1].Kind == Tok.Ident;
-        if (d.IsFunc)
+        // A function-like body with a call forwards to every identifier in it: a paste macro it names without a call
+        // (`APPLY2(CAT, a)`) is reached through the call.
+        if (d.IsFunc && body.Any(t => t.Kind == Tok.LParen))
         {
-            for (int k = 0; k + 1 < body.Count; k++)
-                if (body[k].Kind == Tok.Ident && body[k + 1].Kind == Tok.LParen && !d.IsParam(d.Text(k))) Edge(name, Names.GetOrAdd(d.Text(k)), mask);
+            for (int k = 0; k < body.Count; k++)
+                if (body[k].Kind == Tok.Ident && !d.IsParam(d.Text(k))) Edge(name, Names.GetOrAdd(d.Text(k)), mask);
         }
         else if (alias) Edge(name, Names.GetOrAdd(d.Text(body.Count - 1)), mask);
         var s = Names.Get(name);
@@ -666,6 +668,13 @@ internal sealed class FwSpec
             return ds;
         }
         int va = d.Variadic ? d.Params.Count - 1 : -1;
+        var bare = new List<int>();   // paste macros named without a call: a non-paster call's arguments may reach them
+        for (int k = 0; k < b.Count; k++)
+        {
+            if (b[k].Kind != Tok.Ident || (k + 1 < b.Count && b[k + 1].Kind == Tok.LParen) || ParamIndex(d, k) >= 0) continue;
+            int q = Names.Find(d.Text(k));
+            if (q >= 0 && IsPaster(q, run) && !bare.Contains(q)) bare.Add(q);
+        }
         var ops = new List<int>();
         for (int k = 0; k < b.Count;)
         {
@@ -699,7 +708,11 @@ internal sealed class FwSpec
                 else
                 {
                     q = Names.Find(d.Text(k - 1));
-                    if (q < 0 || !IsPaster(q, run)) continue;
+                    if (q < 0 || !IsPaster(q, run))
+                    {
+                        if (bare.Count == 0) continue;
+                        q = -1;   // a higher-order call: its arguments take the union of the named paste macros' slots
+                    }
                 }
             }
             int depth = 0, argStart = k + 1, arg = 0;
@@ -720,7 +733,8 @@ internal sealed class FwSpec
                 else
                 {
                     int p = ParamIndex(d, argStart);
-                    if (p >= 0) ds.Refs.Add((p, q, arg, p == va));
+                    if (p >= 0 && q >= 0) ds.Refs.Add((p, q, arg, p == va));
+                    else if (p >= 0) foreach (int r in bare) ds.Refs.Add((p, r, 0, true));
                 }
                 if (kind == Tok.RParen) break;
                 argStart = j + 1;

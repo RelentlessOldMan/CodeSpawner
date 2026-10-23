@@ -36,14 +36,14 @@ internal static class FirmwareEmitter
     /// under the dense floor.</summary>
     public const long BoundaryBig = FwSpec.MaxParseBytes + 1, BoundaryTable = FwSpec.MaxParseBytes, BoundarySmall = FwLexer.DenseMinBytes - 1;
     private const long BigSrcBytes = 21_000_000, DenseBytes = 1_100_000;
-    private const int Kinds = 25, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
+    private const int Kinds = 26, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
 
     private static readonly string[] KindNames =
     [
         "direct", "cat-prefix", "cat-suffix", "multi-line-call", "forwarder-chain", "alias", "higher-order",
         "computed-call", "wanted-body", "beside-paste", "object-expansion", "if0-call", "comment-seed", "cat3-split",
         "redefinition", "kept-header-body", "comment-call-open", "string-call-open", "numeric-object", "call-arg",
-        "nested-call-edge", "number-suffix", "empty-edge", "call-edge", "digraph",
+        "nested-call-edge", "number-suffix", "empty-edge", "call-edge", "digraph", "higher-order-forwarder",
     ];
 
     // Kinds whose big-header text is define lines only, so a dense header can host them.
@@ -317,6 +317,7 @@ internal static class FirmwareEmitter
             case 22: sb.Append($"#define KEX{f}X KEA{f}X KEB{f}X KEE{f}X\n#define KEA{f}X 1 +\n#define KEE{f}X\n#define KEB{f}X_3 {v}\n"); break;
             case 23: sb.Append($"#define KCE{f}H(x) x\n#define KCE{f}X KCE{f}H(KCF{f}X)\n#define KCF{f}X_4 {v}\n"); break;
             case 24: sb.Append($"#define KDG{f}Q_5 {v}\n"); break;
+            case 25: sb.Append($"#define KHF{f}F(a) KAPPLY(CAT, a, _6)\n#define ZHG{f}X_6 {v}\n#define ZHG{f}X_REGZ 1\n"); break;
         }
     }
 
@@ -363,6 +364,7 @@ internal static class FirmwareEmitter
             22 => $"CAT(KEX{f}X, _3)",
             23 => $"CAT(KCE{f}X, _4)",
             24 => $"KDG{f}G(5)",
+            25 => $"KHF{f}F(ZHG{f}X)",
             _ => null,
         };
         switch (p.Kind(f))
@@ -848,7 +850,8 @@ internal static class FirmwareEmitter
         21 => $"KUU{f}X_2u",
         22 => $"KEB{f}X_3",
         23 => $"KCF{f}X_4",
-        _ => $"KDG{f}Q_5",
+        24 => $"KDG{f}Q_5",
+        _ => $"ZHG{f}X_6",
     };
 
     // A name beside the target that has only one side of it, so it is dropped: a start piece with no end, or the reverse.
@@ -856,6 +859,7 @@ internal static class FirmwareEmitter
     {
         1 => $"ZA{f}X_REGZ",
         2 => $"ZSC_S{f}XZ",
+        25 => $"ZHG{f}X_REGZ",
         _ => null,
     };
 }

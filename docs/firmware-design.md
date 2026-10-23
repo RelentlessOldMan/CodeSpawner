@@ -53,11 +53,11 @@ relative to `fw/`, or `../ext/…` for a site outside the root. It lists:
 
 - every trap;
 - the hostile and reserved cases;
-- three families of each of the 25 kinds: direct, cat-prefix, cat-suffix, multi-line-call, forwarder-chain, alias,
+- three families of each of the 26 kinds: direct, cat-prefix, cat-suffix, multi-line-call, forwarder-chain, alias,
   higher-order, computed-call, wanted-body, beside-paste, object-expansion, if0-call, comment-seed, cat3-split,
   redefinition, kept-header-body, comment-call-open, string-call-open, numeric-object, call-arg, nested-call-edge,
-  number-suffix, empty-edge, call-edge and digraph;
-- a **decoy** beside each cat-prefix and cat-suffix target: a must-drop name that has only the target's start piece,
+  number-suffix, empty-edge, call-edge, digraph and higher-order-forwarder;
+- a **decoy** beside each cat-prefix, cat-suffix and higher-order-forwarder target: a must-drop name that has only the target's start piece,
   or only its end piece;
 - `interior-letter` (a one-letter argument between two pastes, as in `KHWP(Z, Z)`) and `define-arg-value` (a `-D`
   value used as a piece).
@@ -94,15 +94,16 @@ kept header. A carve that also drops unreached files does not match it. Run the 
    the K files. A K file included whole from outside the root (here `dense/shared_0.h`, via `ext/app/host.c`) is
    kept whole. The rest are the **carved** files.
 2. **Paste macros.** A name is a paste macro if any of its definitions pastes a parameter (`a##b`, not
-   `, ##__VA_ARGS__`), or forwards to one. A function-like body forwards when it calls one; an object-like define
-   forwards when its body's last token is one. This is computed to a fixpoint, so order does not matter.
+   `, ##__VA_ARGS__`), or forwards to one. A function-like body forwards when it holds a call and names
+   one, called or not (`APPLY2(CAT, a)`); an object-like define forwards when its body's last token is one. This is computed to a fixpoint, so order does not matter.
 3. **Pieces** come from kept text, and each has a side: it can **start** a pasted name, **end** one, or both. A
    piece is an identifier or an identifier-like pp-number (`2`, `2u`, `0x1F`).
    - In a `##` chain, an operand starts a name if every operand before it is a parameter, and ends one if every
      operand after it is. A parameter with neither side is interior: its argument has no side, but that argument's
      expansion is followed both ways.
    - A paste-macro call's argument takes the sides of the parameter slot it reaches, through forwarders, to a
-     fixpoint. An argument of more than one token, a call left open across a directive or at end of file, a
+     fixpoint. A forwarder that names a paste macro without calling it gives a parameter passed whole to another
+     call the union of that paste macro's slots. An argument of more than one token, a call left open across a directive or at end of file, a
      higher-order call and a computed call's trailing arguments give both sides.
    - A piece's expansion follows its definitions' edges: a start piece's last tokens start names, and an end
      piece's first tokens end them. The walk skips parameters, `##` and tokens that expand to nothing, and takes a
@@ -193,7 +194,7 @@ All counts scale with `--scale` (an explicit knob is used as given). `_meta.gen`
 | `--fw-big-headers` | 400 | Big headers `big/regs_N.h` (at least 1, at most 100,000). |
 | `--fw-big-mb` | 24 | Size of each big header in MB (20–2000). `regs_0.h` is always exactly `maxParseBytes + 1`. |
 | `--fw-files` | 38,000 | Files under `fw/src` (at least 4 are written): every fourth is a kept header, the rest units. |
-| `--fw-families` | 1,000,000 | Must-keep families, cycling through the 25 kinds. |
+| `--fw-families` | 1,000,000 | Must-keep families, cycling through the 26 kinds. |
 | `--fw-pasters` | 6,000,000 | Paste macros in the big headers, most never called. |
 | `--fw-dense-headers` | 200 | Dense headers `dense/dx_N.h`, besides the fixtures. |
 | `--fw-chain-max` | 40 | The long forwarder chains' length (2–10,000; not scaled). |

@@ -11,6 +11,20 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-10-22
+
+The firmware corpus's bytes and truth change (one kind added). Non-firmware corpora are unchanged.
+
+### Changed
+- Firmware truth, rule 1 (CodeCarver): a function-like body that holds a call forwards to every identifier in it,
+  so a paste macro named without a call (`#define MYCAT(a) APPLY2(CAT, a)`) makes MYCAT a paste macro. A parameter
+  passed whole to another call in such a body takes the union of the named paste macros' slots; one passed with
+  other tokens gets both sides. `pasteMacros` can grow; `forwardingMacros` is unchanged.
+
+### Added
+- Firmware kind 26, `higher-order-forwarder`: `KHF{f}F(ZHG{f}X)` with `#define KHF{f}F(a) KAPPLY(CAT, a, _6)` keeps
+  `ZHG{f}X_6`, and the start-only decoy `ZHG{f}X_REGZ` is dropped.
+
 ## [1.4.3] - 2026-10-22
 
 The firmware corpus's bytes and truth change: a define is now wanted only when its name both starts and ends with a

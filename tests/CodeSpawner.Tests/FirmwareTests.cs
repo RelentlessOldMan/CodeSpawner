@@ -366,4 +366,16 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Empty(t.AlphabetErrors);
         Assert.Contains("ZV_Q", Lists(tmp, "mustKeep"));
     }
+
+    [Fact]
+    public void Rules_AHigherOrderForwarderIsAPasteMacro()
+    {
+        // MYCAT names CAT without calling it: it forwards to CAT, so its argument is a piece
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define KAP(m, a, b) m(a, b)\n#define MYCAT(a) KAP(CAT, a, _6)\n#define ZHG_6 1\n#define ZHG_REGZ 1\n",
+            "int a = MYCAT(ZHG);\n");
+        Assert.Empty(t.AlphabetErrors);
+        Assert.Contains("ZHG_6", Lists(tmp, "mustKeep"));
+        Assert.Contains("ZHG_REGZ", File.ReadAllLines(Path.Combine(tmp.Path, "lists", "main.mustDropDefines.txt")));
+    }
 }
