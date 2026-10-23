@@ -66,10 +66,17 @@ internal sealed class FwSpec
     private long _cBytes;
     private int[] _cHead = Array.Empty<int>();            // name -> first C def (-1)
 
-    // all defs: object-like first/last ident (S5), forward edges, direct pasters
-    private readonly IntList _objName = new(), _objFirst = new(), _objLast = new(), _objNext = new();
-    private int[] _objHead = Array.Empty<int>();
-    private readonly IntList _edgeFrom = new(), _edgeTo = new();
+    // all defs: edge pieces (rule 2), forward edges and direct pasters (rule 1), each with the runs it counts for
+    // (bit 0 min, bit 1 max: a maybe-kept header's defines count under max only)
+    private readonly IntList _xName = new(), _xOff = new(), _xMask = new(), _xItems = new();   // items: nS, S..., nE, E...
+    private int[] _xHead = Array.Empty<int>(), _xNext = Array.Empty<int>();
+    private readonly IntList _edgeFrom = new(), _edgeTo = new(), _edgeMask = new();
+    private readonly List<(int Name, int Mask)> _directPasters = new();
+    private readonly HashSet<int> _definedUnder = new();   // names starting `__` that something defines
+    // the defines outside the carved files (kept fw files, ext, -D, maybe-kept): their text, for rule 2's sides
+    private readonly List<(int Name, byte[] Text, int Mask)> _ncDefs = new();
+    private readonly Dictionary<int, List<int>> _ncByName = new();
+    private List<int> _maybe = new();
     private readonly IntList _fwDefFile = new(), _fwDefName = new();   // defs in kept (non-C) fw files
 
     // the build
@@ -78,11 +85,14 @@ internal sealed class FwSpec
     private readonly List<int> _wholeFromOutside = new();
 
     private int[] _sortedFwd = Array.Empty<int>(), _sortedRev = Array.Empty<int>();
-    private readonly IntList[] _pieceQueue = { new(), new() };
+    private readonly IntList[] _pieceQueue = { new(), new() };   // id << 1 | (1: an end piece), or a wildcard
     private readonly IntList[] _wantQueue = { new(), new() };
-    private static readonly ushort[] PieceFlag = { NameTable.PieceMin, NameTable.PieceMax };
+    private static readonly ushort[] StartFlag = { NameTable.StartMin, NameTable.StartMax };
+    private static readonly ushort[] EndFlag = { NameTable.EndMin, NameTable.EndMax };
+    private static readonly ushort[] ExpSFlag = { NameTable.ExpSMin, NameTable.ExpSMax };
+    private static readonly ushort[] ExpEFlag = { NameTable.ExpEMin, NameTable.ExpEMax };
+    private static readonly ushort[] PasterFlag = { NameTable.Paster, NameTable.PasterMax };
     private static readonly ushort[] WantFlag = { NameTable.WantMin, NameTable.WantMax };
-    private static readonly ushort[] S5Flag = { NameTable.S5Min, NameTable.S5Max };
     private readonly Dictionary<int, SafeFileHandle> _handles = new();
 
     private sealed class Unit
@@ -115,13 +125,15 @@ internal sealed class FwSpec
         ReadDb();
         ClassifyFiles(t);
         Closure();
+        _maybe = MaybeKept();
         foreach (int f in _wholeFromOutside) _isC[f] = false;
         t.WholeFromOutside = _wholeFromOutside.Select(f => _rel[f]).OrderBy(x => x, StringComparer.Ordinal).ToList();
         t.WholeIncludedFromOutside = _wholeFromOutside.Count;
         for (int f = 0; f < _fwCount; f++) if (_isC[f]) t.Carved.Add(_rel[f]);
 
         Pass1();
-        PasterFixpoint();
+        PasterFixpoint(0);
+        PasterFixpoint(1);
         SortNames();
         Seeds();
         Pass2();
@@ -250,7 +262,7 @@ internal sealed class FwSpec
         {
             if (w.Kind != LineKind.OtherDirective) continue;
             var s = w.Spliced;
-            int i = s.IndexOf((byte)'#') + 1;
+            int i = FwLexer.DirectiveStart(s);
             while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
             if (!s[i..].StartsWith("include"u8)) continue;
             i += 7;
@@ -331,42 +343,26 @@ internal sealed class FwSpec
 
     // ---------------- pass 1: definitions ----------------
 
+    private readonly List<byte[]> _dashDefines = new();
+
     private void Pass1()
     {
         var d = new DefineParse();
-        var files = Enumerable.Range(0, _fwCount).Where(i => IsCExt(_files[i]) && !_binary[i]).Concat(ExtClosure());
-        foreach (int f in files)
-        {
-            byte[] raw = File.ReadAllBytes(_files[f]);
-            var text = FwLexer.TextBytes(raw, out int st);
-            bool isC = f < _fwCount && _isC[f];
-            long cbase = _cBytes;
-            if (isC) { _cBase.Add(cbase); _cBaseFile.Add(f); _cBytes += raw.Length; }
-            var w = new LineWalker(text, st);
-            while (w.Next())
+        foreach (int f in Enumerable.Range(0, _fwCount).Where(i => IsCExt(_files[i]) && !_binary[i]).Concat(ExtClosure())) DefFile(f, d, 3);
+        foreach (int f in _maybe) if (!FwLexer.LooksBinary(_files[f])) DefFile(f, d, 2);
+        // -DN=v is `#define N v`, -DN is `#define N 1`
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var u in _units)
+            foreach (var a in u.DefineArgs)
             {
-                if (w.Kind != LineKind.Define || !d.Parse(w.Spliced)) continue;
-                int name = Names.GetOrAdd(w.Spliced.Slice(d.NameStart, d.NameLen));
-                RecordDef(d, name);
-                if (isC)
-                {
-                    Names.Set(name, NameTable.CName);
-                    int k = _cdName.Count;
-                    _cdName.Add(name);
-                    if (k == _cdOff.Length) Array.Resize(ref _cdOff, NameTable.NextCapacity(k));
-                    _cdOff[k] = cbase + w.Start;      // no BOM shift: text == raw for C files
-                    if (w.Length >= 1 << 29 || w.TermBytes > 3) throw new InvalidOperationException($"{_rel[f]}: a define line of {w.Length:N0} bytes");
-                    _cdLenTerm.Add(w.Length << 2 | w.TermBytes);
-                    if (d.IsFunc && !d.PastesParam() && d.Body.Any(b => b.Kind == Tok.LParen)) Names.Set(name, FwdC);
-                    if (d.EndsInComment) Names.Set(name, NameTable.Seed);   // a comment-open define is kept
-                }
-                else if (f < _fwCount)
-                {
-                    _fwDefFile.Add(f);
-                    _fwDefName.Add(name);
-                }
+                if (!seen.Add(a)) continue;
+                int eq = a.IndexOf('=');
+                var line = Encoding.UTF8.GetBytes(eq < 0 ? $"#define {a} 1" : $"#define {a[..eq]} {a[(eq + 1)..]}");
+                if (!d.Parse(line)) continue;
+                _dashDefines.Add(line);
+                RecordDef(d, line, Names.GetOrAdd(line.AsSpan(d.NameStart, d.NameLen)), 3, keepText: true);
             }
-        }
+
         _cHead = Enumerable.Repeat(-1, Names.Count).ToArray();
         _cdNext = new int[_cdName.Count];
         for (int k = _cdName.Count - 1; k >= 0; k--)
@@ -375,70 +371,364 @@ internal sealed class FwSpec
             _cdNext[k] = _cHead[n];
             _cHead[n] = k;
         }
-        _objHead = Enumerable.Repeat(-1, Names.Count).ToArray();
-        for (int k = 0; k < _objName.Count; k++) _objNext.Add(-1);
-        for (int k = _objName.Count - 1; k >= 0; k--)
+        _xHead = Enumerable.Repeat(-1, Names.Count).ToArray();
+        _xNext = new int[_xName.Count];
+        for (int k = _xName.Count - 1; k >= 0; k--)
         {
-            int n = _objName[k];
-            _objNext.A[k] = _objHead[n];
-            _objHead[n] = k;
+            int n = _xName[k];
+            _xNext[k] = _xHead[n];
+            _xHead[n] = k;
         }
     }
 
-    private readonly List<int> _directPasters = new();
-
-    private void RecordDef(DefineParse d, int name)
+    /// <summary>The defines of one file, counting for the runs in <paramref name="mask"/>.</summary>
+    private void DefFile(int f, DefineParse d, int mask)
     {
-        if (d.PastesParam()) _directPasters.Add(name);
+        byte[] raw = File.ReadAllBytes(_files[f]);
+        var text = FwLexer.TextBytes(raw, out int st);
+        bool isC = f < _fwCount && _isC[f];
+        long cbase = _cBytes;
+        if (isC) { _cBase.Add(cbase); _cBaseFile.Add(f); _cBytes += raw.Length; }
+        var w = new LineWalker(text, st);
+        while (w.Next())
+        {
+            if (w.Kind != LineKind.Define || !d.Parse(w.Spliced)) continue;
+            int name = Names.GetOrAdd(w.Spliced.Slice(d.NameStart, d.NameLen));
+            RecordDef(d, w.Spliced, name, mask, keepText: !isC);
+            if (isC)
+            {
+                Names.Set(name, NameTable.CName);
+                int k = _cdName.Count;
+                _cdName.Add(name);
+                if (k == _cdOff.Length) Array.Resize(ref _cdOff, NameTable.NextCapacity(k));
+                _cdOff[k] = cbase + w.Start;      // no BOM shift: text == raw for C files
+                if (w.Length >= 1 << 29 || w.TermBytes > 3) throw new InvalidOperationException($"{_rel[f]}: a define line of {w.Length:N0} bytes");
+                _cdLenTerm.Add(w.Length << 2 | w.TermBytes);
+                if (d.IsFunc && !d.PastesParam() && d.Body.Any(b => b.Kind == Tok.LParen)) Names.Set(name, FwdC);
+                if (d.EndsInComment) Names.Set(name, NameTable.Seed);   // a comment-open define is kept
+            }
+            else if (f < _fwCount)
+            {
+                _fwDefFile.Add(f);
+                _fwDefName.Add(name);
+            }
+        }
+    }
+
+    private void RecordDef(DefineParse d, ReadOnlySpan<byte> line, int name, int mask, bool keepText)
+    {
+        if (d.PastesParam()) _directPasters.Add((name, mask));
         var body = d.Body;
+        bool alias = !d.IsFunc && body.Count > 0 && body[^1].Kind == Tok.Ident;
         if (d.IsFunc)
         {
             for (int k = 0; k + 1 < body.Count; k++)
-                if (body[k].Kind == Tok.Ident && body[k + 1].Kind == Tok.LParen && !d.IsParam(d.Text(k)))
-                {
-                    _edgeFrom.Add(name);
-                    _edgeTo.Add(Names.GetOrAdd(d.Text(k)));
-                }
+                if (body[k].Kind == Tok.Ident && body[k + 1].Kind == Tok.LParen && !d.IsParam(d.Text(k))) Edge(name, Names.GetOrAdd(d.Text(k)), mask);
         }
-        else if (body.Count > 0)
+        else if (alias) Edge(name, Names.GetOrAdd(d.Text(body.Count - 1)), mask);
+        var s = Names.Get(name);
+        if (s.Length >= 2 && s[0] == '_' && s[1] == '_') _definedUnder.Add(name);
+        EdgeList(d, name, mask);
+        if (keepText && (d.IsFunc || alias))
         {
-            if (body[^1].Kind == Tok.Ident)
-            {
-                _edgeFrom.Add(name);
-                _edgeTo.Add(Names.GetOrAdd(d.Text(body.Count - 1)));
-            }
-            int first = body[0].Kind == Tok.Ident ? Names.GetOrAdd(d.Text(0)) : -1;
-            int last = body[^1].Kind == Tok.Ident ? Names.GetOrAdd(d.Text(body.Count - 1)) : -1;
-            if (first >= 0 || last >= 0)
-            {
-                _objName.Add(name);
-                _objFirst.Add(first);
-                _objLast.Add(last);
-            }
+            if (!_ncByName.TryGetValue(name, out var l)) _ncByName[name] = l = new();
+            l.Add(_ncDefs.Count);
+            _ncDefs.Add((name, line.ToArray(), mask));
         }
     }
 
-    /// <summary>Rule 1 to a fixpoint: a name forwarding to a paste macro is one.</summary>
-    private void PasterFixpoint()
+    private void Edge(int from, int to, int mask)
     {
-        int n = Names.Count;
+        _edgeFrom.Add(from);
+        _edgeTo.Add(to);
+        _edgeMask.Add(mask);
+    }
+
+    private readonly IntList _edgeS = new(), _edgeE = new();
+
+    /// <summary>Rule 2's edge pieces of one body: walking in from the end gives the last edges (S), from the start the
+    /// first edges (E). An identifier is one (a parameter is not) and the walk goes on past it; a call gives its name
+    /// and every identifier and number among its arguments, and the walk goes on; <c>##</c> is skipped; a number
+    /// ends the walk (a piece if it is identifier characters); anything else ends it.</summary>
+    private void EdgeList(DefineParse d, int name, int mask)
+    {
+        var b = d.Body;
+        _edgeS.Count = _edgeE.Count = 0;
+        for (int k = b.Count - 1; k >= 0;)
+        {
+            var kind = b[k].Kind;
+            if (kind == Tok.HashHash) { k--; continue; }
+            if (kind == Tok.Ident) { EdgeToken(d, k, _edgeS); k--; continue; }
+            if (kind == Tok.Number) { EdgeToken(d, k, _edgeS); break; }
+            if (kind != Tok.RParen) break;
+            int open = k, depth = 0;
+            for (; open >= 0; open--)
+            {
+                if (b[open].Kind == Tok.RParen) depth++;
+                else if (b[open].Kind == Tok.LParen && --depth == 0) break;
+            }
+            if (open <= 0 || b[open - 1].Kind != Tok.Ident) break;
+            for (int j = open - 1; j < k; j++) EdgeToken(d, j, _edgeS);
+            k = open - 2;
+        }
+        for (int k = 0; k < b.Count;)
+        {
+            var kind = b[k].Kind;
+            if (kind == Tok.HashHash) { k++; continue; }
+            if (kind == Tok.Number) { EdgeToken(d, k, _edgeE); break; }
+            if (kind != Tok.Ident) break;
+            if (k + 1 >= b.Count || b[k + 1].Kind != Tok.LParen) { EdgeToken(d, k, _edgeE); k++; continue; }
+            int close = k + 1, depth = 0;
+            for (; close < b.Count; close++)
+            {
+                if (b[close].Kind == Tok.LParen) depth++;
+                else if (b[close].Kind == Tok.RParen && --depth == 0) break;
+            }
+            for (int j = k; j < close && j < b.Count; j++) EdgeToken(d, j, _edgeE);
+            k = close + 1;
+        }
+        if (_edgeS.Count == 0 && _edgeE.Count == 0) return;
+        _xName.Add(name);
+        _xMask.Add(mask);
+        _xOff.Add(_xItems.Count);
+        _xItems.Add(_edgeS.Count);
+        for (int i = 0; i < _edgeS.Count; i++) _xItems.Add(_edgeS[i]);
+        _xItems.Add(_edgeE.Count);
+        for (int i = 0; i < _edgeE.Count; i++) _xItems.Add(_edgeE[i]);
+    }
+
+    private void EdgeToken(DefineParse d, int k, IntList to)
+    {
+        var kind = d.Body[k].Kind;
+        var t = d.Text(k);
+        if ((kind == Tok.Ident && !d.IsParam(t)) || (kind == Tok.Number && IsIdNumber(t))) to.Add(Names.GetOrAdd(t));
+    }
+
+    /// <summary>A pp-number made only of identifier characters (<c>1</c>, <c>0x1F</c>, <c>2u</c>; not <c>1.5</c>).</summary>
+    public static bool IsIdNumber(ReadOnlySpan<byte> s)
+    {
+        foreach (byte c in s) if (!FwLexer.IsIdChar(c)) return false;
+        return s.Length > 0;
+    }
+
+    /// <summary>Rule 1 to a fixpoint for one run: a name forwarding to a paste macro is one.</summary>
+    private void PasterFixpoint(int run)
+    {
+        int n = Names.Count, bit = 1 << run;
         var start = new int[n + 1];
-        for (int k = 0; k < _edgeTo.Count; k++) start[_edgeTo[k] + 1]++;
+        for (int k = 0; k < _edgeTo.Count; k++) if ((_edgeMask[k] & bit) != 0) start[_edgeTo[k] + 1]++;
         for (int i = 0; i < n; i++) start[i + 1] += start[i];
-        var callers = new int[_edgeTo.Count];
+        var callers = new int[start[n]];
         var fill = (int[])start.Clone();
-        for (int k = 0; k < _edgeTo.Count; k++) callers[fill[_edgeTo[k]]++] = _edgeFrom[k];
+        for (int k = 0; k < _edgeTo.Count; k++) if ((_edgeMask[k] & bit) != 0) callers[fill[_edgeTo[k]]++] = _edgeFrom[k];
         var work = new Stack<int>();
-        foreach (int p in _directPasters) if (Names.Set(p, NameTable.Paster)) work.Push(p);
+        foreach (var (p, m) in _directPasters) if ((m & bit) != 0 && Names.Set(p, PasterFlag[run])) work.Push(p);
         while (work.Count > 0)
         {
             int x = work.Pop();
             for (int k = start[x]; k < start[x + 1]; k++)
-                if (Names.Set(callers[k], NameTable.Paster)) work.Push(callers[k]);
+                if (Names.Set(callers[k], PasterFlag[run])) work.Push(callers[k]);
         }
     }
 
-    public bool IsPaster(int id) => Names.Has(id, NameTable.Paster);
+    public bool IsPaster(int id, int run) => Names.Has(id, PasterFlag[run]);
+
+    // ---------------- rule 2: a paste macro's argument sides ----------------
+
+    /// <summary>A slot's sides beyond Start/End: the argument sits inside a chain, so only its expansion joins.</summary>
+    public const int Interior = 4;
+
+    /// <summary>A paste macro's sides per argument position; past the end, <see cref="Rest"/>.</summary>
+    private sealed class Sig
+    {
+        public int[] Pos = Array.Empty<int>();
+        public int Rest;
+    }
+
+    /// <summary>One definition of a paste macro: its parameters' own sides and the slots they are passed on to.</summary>
+    private sealed class DefSig
+    {
+        public int Owner, AliasOf = -1, NParams;
+        public bool Variadic;
+        public int[] Const = Array.Empty<int>();
+        public readonly List<(int Param, int Q, int K, bool FromK)> Refs = new();
+    }
+
+    private readonly Dictionary<int, Sig>?[] _sigs = new Dictionary<int, Sig>?[2];
+
+    /// <summary>The sides (Start, End, <see cref="Interior"/>) argument <paramref name="arg"/> of a call to
+    /// <paramref name="paster"/> takes under <paramref name="run"/>.</summary>
+    public int SlotOf(int paster, int arg, int run)
+    {
+        var sigs = _sigs[run] ??= Sigs(run);
+        if (!sigs.TryGetValue(paster, out var s)) return Tracker.Both;
+        return arg < s.Pos.Length ? s.Pos[arg] : s.Rest;
+    }
+
+    private Dictionary<int, Sig> Sigs(int run)
+    {
+        var defs = new List<DefSig>();
+        var d = new DefineParse();
+        var buf = new byte[4096];
+        int bit = 1 << run;
+        for (int id = 0; id < Names.Count; id++)
+        {
+            if (!IsPaster(id, run)) continue;
+            if (id < _cHead.Length)
+                for (int k = _cHead[id]; k >= 0; k = _cdNext[k])
+                {
+                    int len = _cdLenTerm[k] >> 2;
+                    int cf = CFile(k, out long off);
+                    if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
+                    RandomAccess.Read(Handle(cf), buf.AsSpan(0, len), off);
+                    var w = new LineWalker(buf.AsSpan(0, len), 0);
+                    if (w.Next() && d.Parse(w.Spliced)) defs.Add(Analyze(d, id, run));
+                }
+            if (_ncByName.TryGetValue(id, out var l))
+                foreach (int k in l)
+                    if ((_ncDefs[k].Mask & bit) != 0 && d.Parse(_ncDefs[k].Text)) defs.Add(Analyze(d, id, run));
+        }
+        var sigs = new Dictionary<int, Sig>();
+        foreach (var ds in defs) if (!sigs.ContainsKey(ds.Owner)) sigs[ds.Owner] = new Sig();
+        var vals = new List<int>();
+        for (bool changed = true; changed;)
+        {
+            changed = false;
+            foreach (var ds in defs)
+            {
+                var s = sigs[ds.Owner];
+                if (ds.AliasOf >= 0)
+                {
+                    if (sigs.TryGetValue(ds.AliasOf, out var q)) changed |= Union(s, q.Pos.ToArray(), q.Rest);
+                    else changed |= Union(s, Array.Empty<int>(), Tracker.Both);
+                    continue;
+                }
+                if (ds.NParams == 0 && !ds.Variadic) continue;
+                vals.Clear();
+                for (int i = 0; i < ds.NParams; i++) vals.Add(ds.Const[i]);
+                foreach (var (p, q, k, fromK) in ds.Refs) vals[p] |= SlotRange(sigs, q, k, fromK);
+                int fixedN = ds.Variadic ? ds.NParams - 1 : ds.NParams;
+                changed |= Union(s, vals.Take(fixedN).ToArray(), ds.Variadic ? vals[ds.NParams - 1] : Tracker.Both);
+            }
+        }
+        return sigs;
+    }
+
+    private static int SlotRange(Dictionary<int, Sig> sigs, int q, int k, bool fromK)
+    {
+        if (!sigs.TryGetValue(q, out var s)) return Tracker.Both;
+        if (!fromK) return k < s.Pos.Length ? s.Pos[k] : s.Rest;
+        int v = s.Rest;
+        for (int i = k; i < s.Pos.Length; i++) v |= s.Pos[i];
+        return v;
+    }
+
+    private static bool Union(Sig s, int[] pos, int rest)
+    {
+        if (pos.Length > s.Pos.Length)
+        {
+            var np = new int[pos.Length];
+            for (int i = 0; i < np.Length; i++) np[i] = i < s.Pos.Length ? s.Pos[i] : s.Rest;
+            s.Pos = np;
+        }
+        bool changed = false;
+        for (int i = 0; i < s.Pos.Length; i++)
+        {
+            int v = s.Pos[i] | (i < pos.Length ? pos[i] : rest);
+            if (v != s.Pos[i]) { s.Pos[i] = v; changed = true; }
+        }
+        if ((s.Rest | rest) != s.Rest) { s.Rest |= rest; changed = true; }
+        return changed;
+    }
+
+    private static int ParamIndex(DefineParse d, int k)
+    {
+        if (d.Body[k].Kind != Tok.Ident) return -1;
+        var t = d.Text(k);
+        for (int i = 0; i < d.Params.Count; i++) if (t.SequenceEqual(d.Params[i])) return i;
+        return -1;
+    }
+
+    /// <summary>A parameter's sides from its <c>##</c> chains (one at neither end is interior, unless variadic: both),
+    /// and the slots of the paste macros it is passed to whole; passed as part of a longer argument, or to a computed
+    /// or parameter-named call, it gets both.</summary>
+    private DefSig Analyze(DefineParse d, int owner, int run)
+    {
+        var ds = new DefSig { Owner = owner, NParams = d.Params.Count, Variadic = d.Variadic, Const = new int[d.Params.Count] };
+        var b = d.Body;
+        if (!d.IsFunc)
+        {
+            if (b.Count > 0 && b[^1].Kind == Tok.Ident)
+            {
+                int q = Names.Find(d.Text(b.Count - 1));
+                if (q >= 0 && IsPaster(q, run)) ds.AliasOf = q;
+            }
+            return ds;
+        }
+        int va = d.Variadic ? d.Params.Count - 1 : -1;
+        var ops = new List<int>();
+        for (int k = 0; k < b.Count;)
+        {
+            if (k + 2 >= b.Count || b[k + 1].Kind != Tok.HashHash) { k++; continue; }
+            ops.Clear();
+            int j = k;
+            ops.Add(j);
+            while (j + 2 < b.Count && b[j + 1].Kind == Tok.HashHash) { j += 2; ops.Add(j); }
+            k = j + 1;
+            if (ops.Count == 2 && b[ops[0]].Kind == Tok.Comma && va >= 0 && ParamIndex(d, ops[1]) == va) continue;   // , ## __VA_ARGS__
+            int n = ops.Count, fnp = 0, lnp = n - 1;
+            while (fnp < n && ParamIndex(d, ops[fnp]) >= 0) fnp++;
+            while (lnp >= 0 && ParamIndex(d, ops[lnp]) >= 0) lnp--;
+            for (int i = 0; i < n; i++)
+            {
+                int p = ParamIndex(d, ops[i]);
+                if (p < 0) continue;
+                int sides = (i <= fnp ? Tracker.S : 0) | (i >= lnp ? Tracker.E : 0);
+                ds.Const[p] |= sides != 0 ? sides : p == va ? Tracker.Both : Interior;
+            }
+        }
+        for (int k = 1; k < b.Count; k++)
+        {
+            if (b[k].Kind != Tok.LParen) continue;
+            bool unknown = b[k - 1].Kind == Tok.RParen;   // computed
+            int q = -1;
+            if (!unknown)
+            {
+                if (b[k - 1].Kind != Tok.Ident) continue;
+                if (ParamIndex(d, k - 1) >= 0) unknown = true;
+                else
+                {
+                    q = Names.Find(d.Text(k - 1));
+                    if (q < 0 || !IsPaster(q, run)) continue;
+                }
+            }
+            int depth = 0, argStart = k + 1, arg = 0;
+            for (int j = k + 1; ; j++)
+            {
+                var kind = j < b.Count ? b[j].Kind : Tok.RParen;
+                if (j < b.Count && kind == Tok.LParen) { depth++; continue; }
+                if (j < b.Count && kind == Tok.RParen && depth > 0) { depth--; continue; }
+                if (depth > 0 || (kind != Tok.Comma && kind != Tok.RParen)) continue;
+                if (unknown || j - argStart != 1)
+                {
+                    for (int t = argStart; t < j; t++)
+                    {
+                        int p = ParamIndex(d, t);
+                        if (p >= 0) ds.Const[p] |= Tracker.Both;
+                    }
+                }
+                else
+                {
+                    int p = ParamIndex(d, argStart);
+                    if (p >= 0) ds.Refs.Add((p, q, arg, p == va));
+                }
+                if (kind == Tok.RParen) break;
+                argStart = j + 1;
+                arg++;
+            }
+        }
+        return ds;
+    }
 
     private void SortNames()
     {
@@ -473,10 +763,42 @@ internal sealed class FwSpec
         }
     }
 
+    /// <summary>One stream's trackers for the runs in a mask: min lexing per run, and under max the shadow lexing too
+    /// (comments and strings are tokens; calls open at the end commit).</summary>
+    private sealed class Streams : ITokenSink
+    {
+        private readonly Tracker? _min0, _min1, _shadow;
+
+        public Streams(FwSpec a, int runs)
+        {
+            if ((runs & 1) != 0) _min0 = new Tracker(a, 0, commitAtEof: false);
+            if ((runs & 2) == 0) return;
+            _min1 = new Tracker(a, 1, commitAtEof: false);
+            _shadow = new Tracker(a, 1, commitAtEof: true);
+        }
+
+        public void Token(Tok kind, ReadOnlySpan<byte> text)
+        {
+            _min0?.Token(kind, text);
+            _min1?.Token(kind, text);
+        }
+
+        public void Begin(DefineParse? d) { _min0?.Begin(d); _min1?.Begin(d); _shadow?.Begin(d); }
+        public void Directive(LineKind k) { _min0?.Directive(k); _min1?.Directive(k); _shadow?.Directive(k); }
+        public void End() { _min0?.End(); _min1?.End(); _shadow?.End(); }
+
+        public void Lex(ReadOnlySpan<byte> s, bool startsInComment)
+        {
+            bool ib = startsInComment;
+            FwLexer.Lex(s, ref ib, false, this);
+            if (_shadow is not null) FwLexer.Lex(s, ref ib, true, _shadow);
+        }
+    }
+
     private void Pass2()
     {
-        var min = new Tracker(this, 3, commitAtEof: false);
-        var shadow = new Tracker(this, 2, commitAtEof: true);
+        var main = new Streams(this, 3);
+        var body = new Streams(this, 3);
         var d = new DefineParse();
         var kept = new List<int>();
         for (int f = 0; f < _fwCount; f++)
@@ -488,122 +810,155 @@ internal sealed class FwSpec
                 SeedText(text.AsSpan(st));
                 continue;
             }
-            if (_isC[f]) CarvedStream(f, min, shadow);
+            if (_isC[f]) CarvedStream(f, main);
             else kept.Add(f);
         }
         kept.AddRange(ExtClosure());
-        foreach (int f in kept) KeptFile(f, min, shadow, d);
-        var maybeMin = new Tracker(this, 2, commitAtEof: false);
-        foreach (int f in MaybeKept()) KeptFile(f, maybeMin, shadow, d, maybe: true);
+        foreach (int f in kept) KeptFile(f, main, body, d);
+        foreach (var line in _dashDefines)
+        {
+            if (!d.Parse(line)) continue;
+            body.Begin(d);
+            body.Lex(line.AsSpan(d.BodyStart), false);
+            body.End();
+        }
+        var maybeMain = new Streams(this, 2);
+        var maybeBody = new Streams(this, 2);
+        foreach (int f in _maybe) KeptFile(f, maybeMain, maybeBody, d, maybe: true);
     }
 
     /// <summary>A kept file: all of it seeds; its non-define lines are one stream and each define body its own. A
     /// <paramref name="maybe"/> file (see <see cref="MaybeKept"/>) seeds and gives pieces under max only.</summary>
-    private void KeptFile(int f, Tracker min, Tracker shadow, DefineParse d, bool maybe = false)
+    private void KeptFile(int f, Streams main, Streams body, DefineParse d, bool maybe = false)
     {
         if (maybe && FwLexer.LooksBinary(_files[f])) return;
         var text = FwLexer.TextBytes(File.ReadAllBytes(_files[f]), out int st);
         _seedFlag = maybe ? SeedMax : NameTable.Seed;
         SeedText(text.AsSpan(st));
         _seedFlag = NameTable.Seed;
-        var body = new Tracker[] { new(this, maybe ? 2 : 3, false), new(this, 2, true) };
-        min.Begin(null);
-        shadow.Begin(null);
+        main.Begin(null);
         var w = new LineWalker(text, st);
         while (w.Next())
         {
             if (w.Kind == LineKind.Define && d.Parse(w.Spliced))
             {
-                var b = w.Spliced[d.BodyStart..];
-                body[0].Begin(d);
-                bool ib = false;
-                FwLexer.Lex(b, ref ib, false, body[0]);
-                body[0].End();
-                body[1].Begin(d);
-                FwLexer.Lex(b, ref ib, true, body[1]);
-                body[1].End();
+                body.Begin(d);
+                body.Lex(w.Spliced[d.BodyStart..], false);
+                body.End();
                 continue;
             }
-            StreamLine(ref w, min, shadow);
+            StreamLine(ref w, main);
         }
-        min.End();
-        shadow.End();
+        main.End();
     }
 
     /// <summary>A carved file: its non-define lines seed and are one stream; its defines were recorded in pass 1.</summary>
-    private void CarvedStream(int f, Tracker min, Tracker shadow)
+    private void CarvedStream(int f, Streams main)
     {
         byte[] text = File.ReadAllBytes(_files[f]);
         int st = text.Length >= 3 && text[0] == 0xEF && text[1] == 0xBB && text[2] == 0xBF ? 3 : 0;
-        min.Begin(null);
-        shadow.Begin(null);
+        main.Begin(null);
         var w = new LineWalker(text, st);
         while (w.Next())
         {
             if (w.Kind == LineKind.Define && IsNamedDefine(w.Spliced)) continue;
             SeedText(w.Raw);
-            StreamLine(ref w, min, shadow);
+            StreamLine(ref w, main);
         }
-        min.End();
-        shadow.End();
+        main.End();
     }
 
     private readonly DefineParse _probe = new();
     private bool IsNamedDefine(ReadOnlySpan<byte> s) => _probe.Parse(s);
 
-    private static void StreamLine(ref LineWalker w, Tracker min, Tracker shadow)
+    private static void StreamLine(ref LineWalker w, Streams main)
     {
         switch (w.Kind)
         {
             case LineKind.Cond:
             case LineKind.Else:
             case LineKind.EndIf:
-                min.Directive(w.Kind);
-                shadow.Directive(w.Kind);
+                main.Directive(w.Kind);
                 return;
             case LineKind.OtherDirective:
             case LineKind.Define:
                 return;
         }
-        bool ib = w.StartsInComment;
-        FwLexer.Lex(w.Spliced, ref ib, false, min);
-        FwLexer.Lex(w.Spliced, ref ib, true, shadow);
+        main.Lex(w.Spliced, w.StartsInComment);
     }
 
-    // ---------------- pieces, S5, wanted ----------------
+    // ---------------- pieces, expansion, wanted ----------------
 
-    private readonly Stack<(int Id, int Mask)> _s5 = new();
+    private readonly Stack<(int Id, int Dir)> _expand = new();
+    private readonly bool[] _digitEnd = new bool[2], _anyEnd = new bool[2];
+    private readonly bool[][] _startLen = { new bool[64], new bool[64] }, _endLen = { new bool[64], new bool[64] };
 
-    /// <summary>A piece for the runs in <paramref name="mask"/> (bit 0 min, bit 1 max); <paramref name="s5"/> expands
-    /// an argument through its object-like definitions.</summary>
-    public void Piece(int id, int mask, bool s5)
+    /// <summary>A piece with <paramref name="sides"/> (<see cref="Tracker.S"/>, <see cref="Tracker.E"/>) under
+    /// <paramref name="run"/>; its definitions' edges join in <paramref name="dirs"/>: the last edges (Start) as start
+    /// pieces, the first edges (End) as end pieces, transitively.</summary>
+    public void Piece(int id, int run, int sides, int dirs)
     {
-        AddPiece(id, mask);
-        if (!s5) return;
-        _s5.Push((id, mask));
-        while (_s5.Count > 0)
+        AddPiece(id, run, sides);
+        int bit = 1 << run;
+        if ((dirs & Tracker.S) != 0) _expand.Push((id, Tracker.S));
+        if ((dirs & Tracker.E) != 0) _expand.Push((id, Tracker.E));
+        while (_expand.Count > 0)
         {
-            var (x, m) = _s5.Pop();
-            int fresh = 0;
-            for (int r = 0; r < 2; r++)
-                if ((m & (1 << r)) != 0 && Names.Set(x, S5Flag[r])) fresh |= 1 << r;
-            if (fresh == 0 || x >= _objHead.Length) continue;
-            for (int k = _objHead[x]; k >= 0; k = _objNext[k])
+            var (x, dir) = _expand.Pop();
+            if (!Names.Set(x, dir == Tracker.S ? ExpSFlag[run] : ExpEFlag[run]) || x >= _xHead.Length) continue;
+            for (int k = _xHead[x]; k >= 0; k = _xNext[k])
             {
-                foreach (int t in new[] { _objFirst[k], _objLast[k] })
+                if ((_xMask[k] & bit) == 0) continue;
+                int o = _xOff[k], nS = _xItems[o];
+                int from = dir == Tracker.S ? o + 1 : o + 2 + nS, n = dir == Tracker.S ? nS : _xItems[o + 1 + nS];
+                for (int i = from; i < from + n; i++)
                 {
-                    if (t < 0) continue;
-                    AddPiece(t, fresh);
-                    _s5.Push((t, fresh));
+                    AddPiece(_xItems[i], run, dir);
+                    _expand.Push((_xItems[i], dir));
                 }
             }
         }
     }
 
-    private void AddPiece(int id, int mask)
+    private void AddPiece(int id, int run, int sides)
     {
-        for (int r = 0; r < 2; r++)
-            if ((mask & (1 << r)) != 0 && Names.Set(id, PieceFlag[r])) _pieceQueue[r].Add(id);
+        int len = Names.Get(id).Length;
+        if ((sides & Tracker.S) != 0 && Names.Set(id, StartFlag[run]))
+        {
+            MarkLen(ref _startLen[run], len);
+            _pieceQueue[run].Add(id << 1);
+        }
+        if ((sides & Tracker.E) != 0 && Names.Set(id, EndFlag[run]))
+        {
+            MarkLen(ref _endLen[run], len);
+            _pieceQueue[run].Add(id << 1 | 1);
+            Wildcard(id, run);
+        }
+    }
+
+    private static void MarkLen(ref bool[] lens, int len)
+    {
+        if (len >= lens.Length) Array.Resize(ref lens, Math.Max(len + 1, lens.Length * 2));
+        lens[len] = true;
+    }
+
+    /// <summary>An end piece that stands for many: pasting <c>__LINE__</c> or <c>__COUNTER__</c> ends a name in any
+    /// digits, and an undefined <c>__x</c> (a compiler-predefined name) in anything.</summary>
+    private void Wildcard(int id, int run)
+    {
+        var s = Names.Get(id);
+        if (s.Length < 2 || s[0] != '_' || s[1] != '_') return;
+        if (s.SequenceEqual("__LINE__"u8) || s.SequenceEqual("__COUNTER__"u8))
+        {
+            if (_digitEnd[run]) return;
+            _digitEnd[run] = true;
+        }
+        else
+        {
+            if (_anyEnd[run] || _definedUnder.Contains(id)) return;
+            _anyEnd[run] = true;
+        }
+        _pieceQueue[run].Add(-1);   // every name again
     }
 
     private void Want(int id, int run)
@@ -615,9 +970,7 @@ internal sealed class FwSpec
     {
         ushort seeds = run == 0 ? NameTable.Seed : (ushort)(NameTable.Seed | SeedMax);
         for (int i = 0; i < Names.Count; i++) if (Names.Has(i, seeds)) Want(i, run);
-        var trackers = run == 0
-            ? new[] { new Tracker(this, 1, false) }
-            : new[] { new Tracker(this, 2, false), new Tracker(this, 2, true) };
+        var streams = new Streams(this, 1 << run);
         var d = new DefineParse();
         var pq = _pieceQueue[run];
         var wq = _wantQueue[run];
@@ -625,7 +978,7 @@ internal sealed class FwSpec
         var buf = new byte[4096];
         while (pi < pq.Count || wi < wq.Count)
         {
-            while (pi < pq.Count) Ranges(pq[pi++], run);
+            while (pi < pq.Count) Directional(pq[pi++], run);
             while (wi < wq.Count)
             {
                 int name = wq[wi++];
@@ -643,13 +996,9 @@ internal sealed class FwSpec
                         if (d.IsParam(s)) return;
                         Want(Names.Find(s), run);
                     });
-                    for (int t = 0; t < trackers.Length; t++)
-                    {
-                        trackers[t].Begin(d);
-                        bool ib = false;
-                        FwLexer.Lex(b, ref ib, t == 1, trackers[t]);
-                        trackers[t].End();
-                    }
+                    streams.Begin(d);
+                    streams.Lex(b, false);
+                    streams.End();
                 }
                 if (pi < pq.Count) break;
             }
@@ -673,25 +1022,76 @@ internal sealed class FwSpec
         return h;
     }
 
-    /// <summary>Every C name starting or ending with the piece is wanted (a piece equal to a name counts).</summary>
-    private void Ranges(int piece, int run)
+    /// <summary>Rule 3 for a new piece: a C name is wanted when it starts with a start piece and ends with an end
+    /// piece (one piece equal to the name counts when it is both). A new start piece checks the names it begins, a
+    /// new end piece the names it ends; a wildcard (-1) checks every name.</summary>
+    private void Directional(int item, int run)
     {
-        var p = Names.Get(piece).ToArray();
+        if (item < 0)
+        {
+            foreach (int n in _sortedFwd)
+                if (!Names.Has(n, WantFlag[run]) && StartOk(Names.Get(n), run) && EndOk(Names.Get(n), run)) Want(n, run);
+            return;
+        }
+        var p = Names.Get(item >> 1).ToArray();
         if (p.Length == 0) return;
-        int lo = 0, hi = _sortedFwd.Length;
-        while (lo < hi)
+        if ((item & 1) == 0)
         {
-            int mid = (lo + hi) >> 1;
-            if (Names.Get(_sortedFwd[mid]).SequenceCompareTo(p) < 0) lo = mid + 1; else hi = mid;
+            int lo = 0, hi = _sortedFwd.Length;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (Names.Get(_sortedFwd[mid]).SequenceCompareTo(p) < 0) lo = mid + 1; else hi = mid;
+            }
+            for (int i = lo; i < _sortedFwd.Length; i++)
+            {
+                int n = _sortedFwd[i];
+                var s = Names.Get(n);
+                if (!s.StartsWith(p)) break;
+                if (!Names.Has(n, WantFlag[run]) && EndOk(s, run)) Want(n, run);
+            }
         }
-        for (int i = lo; i < _sortedFwd.Length && Names.Get(_sortedFwd[i]).StartsWith(p); i++) Want(_sortedFwd[i], run);
-        lo = 0; hi = _sortedRev.Length;
-        while (lo < hi)
+        else
         {
-            int mid = (lo + hi) >> 1;
-            if (NameTable.CompareReversed(Names.Get(_sortedRev[mid]), p) < 0) lo = mid + 1; else hi = mid;
+            int lo = 0, hi = _sortedRev.Length;
+            while (lo < hi)
+            {
+                int mid = (lo + hi) >> 1;
+                if (NameTable.CompareReversed(Names.Get(_sortedRev[mid]), p) < 0) lo = mid + 1; else hi = mid;
+            }
+            for (int i = lo; i < _sortedRev.Length; i++)
+            {
+                int n = _sortedRev[i];
+                var s = Names.Get(n);
+                if (!s.EndsWith(p)) break;
+                if (!Names.Has(n, WantFlag[run]) && StartOk(s, run)) Want(n, run);
+            }
         }
-        for (int i = lo; i < _sortedRev.Length && Names.Get(_sortedRev[i]).EndsWith(p); i++) Want(_sortedRev[i], run);
+    }
+
+    private bool StartOk(ReadOnlySpan<byte> n, int run)
+    {
+        var lens = _startLen[run];
+        for (int j = 1; j <= n.Length && j < lens.Length; j++)
+        {
+            if (!lens[j]) continue;
+            int id = Names.Find(n[..j]);
+            if (id >= 0 && Names.Has(id, StartFlag[run])) return true;
+        }
+        return false;
+    }
+
+    private bool EndOk(ReadOnlySpan<byte> n, int run)
+    {
+        if (_anyEnd[run] || (_digitEnd[run] && n.Length > 0 && (uint)(n[^1] - '0') < 10)) return true;
+        var lens = _endLen[run];
+        for (int j = 1; j <= n.Length && j < lens.Length; j++)
+        {
+            if (!lens[j]) continue;
+            int id = Names.Find(n[^j..]);
+            if (id >= 0 && Names.Has(id, EndFlag[run])) return true;
+        }
+        return false;
     }
 
     // ---------------- results ----------------

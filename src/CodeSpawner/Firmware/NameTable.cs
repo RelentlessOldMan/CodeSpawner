@@ -16,9 +16,13 @@ internal sealed class NameTable
     public const ushort CName = 1;
     /// <summary>Rule 1: some definition pastes a parameter or forwards to a paste macro.</summary>
     public const ushort Paster = 2;
-    public const ushort PieceMin = 4, PieceMax = 8;
+    /// <summary>Rule 2 sides, per run: a start piece can begin a pasted name, an end piece can end one.</summary>
+    public const ushort StartMin = 4, StartMax = 8, EndMin = 2048, EndMax = 4096;
     public const ushort WantMin = 16, WantMax = 32;
-    public const ushort S5Min = 64, S5Max = 128;
+    /// <summary>Edge expansion done, per run: last edges as start pieces (S), first edges as end pieces (E).</summary>
+    public const ushort ExpSMin = 64, ExpSMax = 128, ExpEMin = 8192, ExpEMax = 16384;
+    /// <summary>A paste macro under max (its definitions in maybe-kept headers count too).</summary>
+    public const ushort PasterMax = 32768;
     /// <summary>Seeded (rule 3): named by kept text, -D, a reserved name or a comment-open define.</summary>
     public const ushort Seed = 256;
 

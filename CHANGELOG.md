@@ -11,6 +11,40 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-10-22
+
+The firmware corpus's bytes and truth change: a define is now wanted only when its name both starts and ends with a
+piece. Non-firmware corpora are unchanged.
+
+### Changed
+- Firmware truth follows CodeCarver's directional rule (TESTING.md header-carve rules 2 and 3):
+  - a piece starts a pasted name, ends one, or both;
+  - a carved define is wanted when its name starts with a start piece **and** ends with an end piece.
+
+  Under the old rule, a name that only starts or only ends with a piece was wanted.
+- Sides come from:
+  - `##` chain position;
+  - the parameter slot a paste-call argument reaches, through forwarders;
+  - definition edges (a start piece's last tokens, an end piece's first tokens), walked past parameters, `##`,
+    empty expansions and into calls.
+
+  A call open across a directive or at end of file, a multi-token argument, a higher-order call and a computed call
+  give both sides.
+- Identifier-like pp-numbers (`2`, `2u`) are pieces. `__LINE__`/`__COUNTER__` end any name ending in a digit; an
+  undefined `__name` ends any name. `%:`/`%:%:` digraphs are `#`/`##`. `-D` values are define bodies.
+- Cases respelled for the rule:
+  - the cat-suffix target is `KSB_S{f}XZ`, and the old end-only `KSC_` name is now the must-drop decoy `ZSC_S{f}XZ`;
+  - cat-prefix gains the start-only decoy `ZA{f}X_REGZ`;
+  - the branch-split targets are `KMBP{t}X_KMBA{t}X`/`…KMBB{t}X`;
+  - the end-only join names `KJS_…`/`KKS_…` are gone;
+  - comment, string and EOF open calls end with `1Y`.
+
+### Added
+- Seven firmware kinds (25 in all): numeric-object, call-arg, nested-call-edge, number-suffix, empty-edge, call-edge
+  and digraph.
+- `interior-letter` (`KHWP(Z, Z)` → `KHWB_Z_rZ_VAL`, with the decoy `ZIL0Z`) and `define-arg-value`
+  (`-DKDE_N=4`, used as `CAT(KDE0X_, KDE_N)`).
+
 ## [1.4.2] - 2026-10-22
 
 The firmware corpus's bytes and truth change: the `outside-not-included` case is now open. Non-firmware corpora are

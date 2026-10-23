@@ -24,6 +24,17 @@ internal static class FwLexer
     private static bool IsDigit(byte b) => (uint)(b - '0') < 10;
     private static bool IsSpace(byte b) => b == ' ' || b == '\t' || b == '\f' || b == '\v' || b == '\r';
 
+    /// <summary>The offset just past a directive's leading <c>#</c> (or the digraph <c>%:</c>), leading blanks skipped;
+    /// -1 if the line is no directive.</summary>
+    public static int DirectiveStart(ReadOnlySpan<byte> s)
+    {
+        int i = 0;
+        while (i < s.Length && IsSpace(s[i])) i++;
+        if (i < s.Length && s[i] == '#') return i + 1;
+        if (i + 1 < s.Length && s[i] == '%' && s[i + 1] == ':') return i + 2;
+        return -1;
+    }
+
     /// <summary>
     /// Lexes one spliced logical line. <paramref name="shadow"/> false (min): comments are skipped and a string or
     /// char literal is one Other token, with <paramref name="inBlock"/> carried across lines. <paramref name="shadow"/>
@@ -85,6 +96,8 @@ internal static class FwLexer
                 case (byte)')': sink.Token(Tok.RParen, s.Slice(i, 1)); i++; break;
                 case (byte)',': sink.Token(Tok.Comma, s.Slice(i, 1)); i++; break;
                 case (byte)'#' when i + 1 < n && s[i + 1] == '#': sink.Token(Tok.HashHash, s.Slice(i, 2)); i += 2; break;
+                case (byte)'%' when i + 3 < n && s[i + 1] == ':' && s[i + 2] == '%' && s[i + 3] == ':':
+                    sink.Token(Tok.HashHash, s.Slice(i, 4)); i += 4; break;   // the digraph `%:%:` is `##`
                 default: sink.Token(Tok.Other, s.Slice(i, 1)); i++; break;
             }
         }
@@ -279,10 +292,8 @@ internal ref struct LineWalker
     private static LineKind Classify(ReadOnlySpan<byte> s, bool inBlock)
     {
         if (inBlock) return LineKind.Text;
-        int i = 0;
-        while (i < s.Length && (s[i] == ' ' || s[i] == '\t' || s[i] == '\f' || s[i] == '\v' || s[i] == '\r')) i++;
-        if (i >= s.Length || s[i] != '#') return LineKind.Text;
-        i++;
+        int i = FwLexer.DirectiveStart(s);
+        if (i < 0) return LineKind.Text;
         while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
         int st = i;
         while (i < s.Length && FwLexer.IsIdChar(s[i])) i++;
@@ -320,7 +331,8 @@ internal sealed class DefineParse : ITokenSink
     public bool Parse(ReadOnlySpan<byte> s)
     {
         Params.Clear(); Body.Clear(); _tokUsed = 0; IsFunc = false; Variadic = false; VariadicName = null; EndsInComment = false;
-        int i = s.IndexOf((byte)'#') + 1;
+        int i = FwLexer.DirectiveStart(s);
+        if (i < 0) return false;
         while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
         i += 6; // "define"
         while (i < s.Length && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\f' || s[i] == '\v')) i++;

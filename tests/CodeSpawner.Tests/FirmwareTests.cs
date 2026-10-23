@@ -279,9 +279,9 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         using var tmp = new TempDir();
         var t = Mini(tmp,
             """
-            #define KA_1 1
-            #define KB_1 1
-            #define KC_1 1
+            #define KA_X1 1
+            #define KA_X2 1
+            #define ZB_X1Z 1
             #define YCM_1Y 1
             #define YST_1Y 1
             #define YEO_1Y 1
@@ -294,20 +294,20 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             """
             int a = CAT(KA_,
             #ifdef ALT
-            	KB_);
+            	X1);
             #else
-            	KC_);
+            	X2);
             #endif
-            /* CAT(YCM_, 1) */
-            const char *s = "CAT(YST_, 1)";
-            int e = CAT(YEO_, 1
+            /* CAT(YCM_, 1Y) */
+            const char *s = "CAT(YST_, 1Y)";
+            int e = CAT(YEO_, 1Y
 
             """);
         Assert.Empty(t.AlphabetErrors);
         var keep = File.ReadAllLines(Path.Combine(tmp.Path, "lists", "main.mustKeepDefines.txt"));
         var open = File.ReadAllLines(Path.Combine(tmp.Path, "lists", "main.openDefines.txt"));
-        Assert.Contains("KB_1", keep);
-        Assert.Contains("KC_1", keep);
+        Assert.Contains("KA_X1", keep);
+        Assert.Contains("KA_X2", keep);
         Assert.Equal(["YCM_1Y", "YEO_1Y", "YST_1Y"], open);
         Assert.DoesNotContain("KFAKE", keep);
     }
@@ -317,7 +317,53 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     {
         // ZUSED_1Z is spelled must-drop but is reached: gen would refuse to ship this as truth
         using var tmp = new TempDir();
-        var t = Mini(tmp, "#define ZUSED_1Z 1\n", "int a = CAT(ZUSED_, 1);\n");
+        var t = Mini(tmp, "#define ZUSED_1Z 1\n", "int a = CAT(ZUSED_, 1Z);\n");
         Assert.Contains(t.AlphabetErrors, e => e.Contains("ZUSED_1Z"));
+    }
+
+    private static string[] Lists(TempDir tmp, string which) => File.ReadAllLines(Path.Combine(tmp.Path, "lists", $"main.{which}Defines.txt"));
+
+    [Fact]
+    public void Rules_ANameNeedsAStartPieceAndAnEndPiece()
+    {
+        // ZS_ only starts a name and E1Z only ends one: a name with just one of them is dropped
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define ZS_E1 1\n#define ZS_QZ 1\n#define KT_E1Z 1\n#define ZQ_E1Z 1\n#define ZE1Z 1\n",
+            "int a = CAT(ZS_, E1) + CAT(KT_, E1Z);\n");
+        Assert.Empty(t.AlphabetErrors);
+        Assert.Equal(["KT_E1Z", "ZS_E1"], Lists(tmp, "mustKeep").Where(n => !n.StartsWith("CAT", StringComparison.Ordinal)).ToArray());
+    }
+
+    [Fact]
+    public void Rules_InteriorParamsAndDigraphs()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define KHP(b, n) KHB_##b##_r##n##_VAL\n#define KHB_Z_rZ_VAL 1\n#define ZIZ 1\n#define KDGQ_5 1\n",
+            "%:define KDG(n) KDGQ_%:%:n\nint a = KHP(Z, Z) + KDG(5) + CAT(KDGQ_, 5);\n");
+        Assert.Empty(t.AlphabetErrors);
+        var keep = Lists(tmp, "mustKeep");
+        Assert.Contains("KHB_Z_rZ_VAL", keep);
+        Assert.Contains("KDGQ_5", keep);
+    }
+
+    [Theory]
+    [InlineData("__LINE__")]
+    [InlineData("__COUNTER__")]
+    public void Rules_LineAndCounterEndAnyNameEndingInADigit(string wild)
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define ZW_31 1\n#define ZW_QZ 1\n", $"int a = CAT(ZW_, {wild});\n");
+        Assert.Empty(t.AlphabetErrors);
+        Assert.Contains("ZW_31", Lists(tmp, "mustKeep"));
+    }
+
+    [Fact]
+    public void Rules_AnUndefinedReservedNameEndsAnyName()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define ZV_Q 1\n#define ZNOSTART_QZ 1\n", "int a = CAT(ZV_, __SIZEOF_INT__);\n");
+        Assert.Empty(t.AlphabetErrors);
+        Assert.Contains("ZV_Q", Lists(tmp, "mustKeep"));
     }
 }
