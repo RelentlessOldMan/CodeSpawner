@@ -36,7 +36,7 @@ internal static class FirmwareEmitter
     /// under the dense floor.</summary>
     public const long BoundaryBig = FwSpec.MaxParseBytes + 1, BoundaryTable = FwSpec.MaxParseBytes, BoundarySmall = FwLexer.DenseMinBytes - 1;
     private const long BigSrcBytes = 21_000_000, DenseBytes = 1_100_000;
-    private const int Kinds = 26, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
+    private const int Kinds = 32, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
 
     private static readonly string[] KindNames =
     [
@@ -44,6 +44,7 @@ internal static class FirmwareEmitter
         "computed-call", "wanted-body", "beside-paste", "object-expansion", "if0-call", "comment-seed", "cat3-split",
         "redefinition", "kept-header-body", "comment-call-open", "string-call-open", "numeric-object", "call-arg",
         "nested-call-edge", "number-suffix", "empty-edge", "call-edge", "digraph", "higher-order-forwarder",
+        "use-pairs", "uncalled-wildcard", "expanded-arg", "empty-expansion", "empty-arg", "higher-order-pairs",
     ];
 
     // Kinds whose big-header text is define lines only, so a dense header can host them.
@@ -318,6 +319,12 @@ internal static class FirmwareEmitter
             case 23: sb.Append($"#define KCE{f}H(x) x\n#define KCE{f}X KCE{f}H(KCF{f}X)\n#define KCF{f}X_4 {v}\n"); break;
             case 24: sb.Append($"#define KDG{f}Q_5 {v}\n"); break;
             case 25: sb.Append($"#define KHF{f}F(a) KAPPLY(CAT, a, _6)\n#define ZHG{f}X_6 {v}\n#define ZHG{f}X_REGZ 1\n"); break;
+            case 26: sb.Append($"#define KUP{f}M(a, b) a##_S{f}_##b\n#define ZUP{f}A_S{f}_B {v}\n#define KUQ{f}C_S{f}_DZ 1\n#define ZUP{f}A_S{f}_DZ 1\n"); break;
+            case 27: sb.Append($"#define KWG{f}G(a) ZWH{f}_##a##_OFF\n#define KWG{f}H(p) KWG{f}G(p)\n#define ZWH{f}_Q_OFF {v}\n#define ZWH{f}_Q_OFZ 1\n"); break;
+            case 28: sb.Append($"#define KXU{f}N 3\n#define KXF{f}F(a) CAT(KXV{f}_, a)\n#define KXV{f}_3 {v}\n#define KXV{f}_KXU{f}N 1\n"); break;
+            case 29: sb.Append($"#define KEN{f}N\n#define KEO{f}X_ {v}\n"); break;
+            case 30: sb.Append($"#define KEM{f}X_ {v}\n"); break;
+            case 31: sb.Append($"#define ZHQ{f}X_5 {v}\n#define KHR{f}X_QZ 1\n#define ZHQ{f}X_QZ 1\n"); break;
         }
     }
 
@@ -365,6 +372,11 @@ internal static class FirmwareEmitter
             23 => $"CAT(KCE{f}X, _4)",
             24 => $"KDG{f}G(5)",
             25 => $"KHF{f}F(ZHG{f}X)",
+            26 => $"KUP{f}M(ZUP{f}A, B) + KUP{f}M(KUQ{f}C, DZ)",
+            28 => $"KXF{f}F(KXU{f}N)",
+            29 => $"CAT(KEO{f}X_, KEN{f}N)",
+            30 => $"CAT(KEM{f}X_, )",
+            31 => $"KAPPLY(CAT, ZHQ{f}X_, 5) + KAPPLY(CAT, KHR{f}X_, QZ)",
             _ => null,
         };
         switch (p.Kind(f))
@@ -373,6 +385,7 @@ internal static class FirmwareEmitter
             case 16: scope.Append($"/* CAT(YC{f}Q_, 1Y) */\n"); break;
             case 17: scope.Append($"const char *ys{f} = \"CAT(YS{f}Q_, 1Y)\";\n"); break;
             case 24: scope.Append($"%:define KDG{f}G(n) KDG{f}Q_%:%:n\n"); break;
+            case 27: scope.Append($"#if 0\nvoid *kwg{f} = (void *)KWG{f}H;\n#endif\n"); break;
         }
         if (e is not null) fn.Append($"int ff{f}(void)\n{{\n\treturn {e};\n}}\n");
     }
@@ -851,7 +864,13 @@ internal static class FirmwareEmitter
         22 => $"KEB{f}X_3",
         23 => $"KCF{f}X_4",
         24 => $"KDG{f}Q_5",
-        _ => $"ZHG{f}X_6",
+        25 => $"ZHG{f}X_6",
+        26 => $"ZUP{f}A_S{f}_B",
+        27 => $"ZWH{f}_Q_OFF",
+        28 => $"KXV{f}_3",
+        29 => $"KEO{f}X_",
+        30 => $"KEM{f}X_",
+        _ => $"ZHQ{f}X_5",
     };
 
     // A name beside the target that has only one side of it, so it is dropped: a start piece with no end, or the reverse.
@@ -860,6 +879,9 @@ internal static class FirmwareEmitter
         1 => $"ZA{f}X_REGZ",
         2 => $"ZSC_S{f}XZ",
         25 => $"ZHG{f}X_REGZ",
+        26 => $"ZUP{f}A_S{f}_DZ",
+        27 => $"ZWH{f}_Q_OFZ",
+        31 => $"ZHQ{f}X_QZ",
         _ => null,
     };
 }

@@ -139,7 +139,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             Assert.True(Spelled(cols[0]) == got, $"{cols[0]} ({cols[1]}): spelled {Spelled(cols[0])}, classed {got}");
             kinds.Add(cols[1].Split(' ')[0]);
         }
-        Assert.True(kinds.Count >= 40, string.Join(", ", kinds));   // 18 family kinds, the traps, the hostile files
+        Assert.True(kinds.Count >= 46, string.Join(", ", kinds));   // 32 family kinds, the traps, the hostile files
         // a #define inside a comment is no define
         Assert.DoesNotContain("KCMT0X", keep.Concat(drop).Concat(open));
         // every class is populated; the union build of one build is the same lists
@@ -377,5 +377,91 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Empty(t.AlphabetErrors);
         Assert.Contains("ZHG_6", Lists(tmp, "mustKeep"));
         Assert.Contains("ZHG_REGZ", File.ReadAllLines(Path.Combine(tmp.Path, "lists", "main.mustDropDefines.txt")));
+    }
+
+    // ---------- rule 3: each use builds its own names ----------
+
+    private static string[] Keep(TempDir tmp) => Lists(tmp, "mustKeep").Where(n => !n.StartsWith("CAT", StringComparison.Ordinal)).ToArray();
+
+    // the alphabet errors, less the unused CAT and CAT_ every mini defines
+    private static string[] Bad(FwTruth t) => t.AlphabetErrors.Where(e => !e.StartsWith("CAT", StringComparison.Ordinal)).ToArray();
+
+    [Fact]
+    public void Uses_PiecesOfDifferentUsesNeverPair()
+    {
+        // two uses of one chain build their own names; the crossed name is dropped
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define SUF2(a, b) a##SFX##b\n#define ZASFXB 1\n#define CSFXDZ 1\n#define ZASFXDZ 1\n",
+            "int a = SUF2(ZA, B) + SUF2(C, DZ);\n");
+        Assert.Empty(Bad(t));
+        Assert.Contains("CSFXDZ", Keep(tmp));
+        Assert.Contains("ZASFXB", Keep(tmp));
+        Assert.Contains("ZASFXDZ", Lists(tmp, "mustDrop"));
+    }
+
+    [Fact]
+    public void Uses_AnUncalledPasteMacroNamedInCodeIsAWildcardUse()
+    {
+        // H is named, never called: its slot is any text, so KHW_<anything>_OFF is built, never overlapping
+        using var tmp = new TempDir();
+        Mini(tmp, "#define G(a) KHW_##a##_OFF\n#define H(p) G(p)\n#define KHW_Q_OFF 1\n#define KHW__OFF 1\n#define KHW_OFF 1\n#define KHW_Q 1\n",
+            "void *p = (void *)H;\n");
+        var keep = Keep(tmp);
+        Assert.Contains("KHW_Q_OFF", keep);
+        Assert.Contains("KHW__OFF", keep);
+        Assert.DoesNotContain("KHW_OFF", keep);
+        Assert.DoesNotContain("KHW_Q", keep);
+    }
+
+    [Fact]
+    public void Uses_AnUncalledPasteMacroCalledInDroppedTextGetsNoWildcardUse()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define G(a) ZHW_##a##_OFFZ\n#define ZHW_Q_OFFZ 1\n#define ZDEADZ G(Q)\n", "void *p = (void *)G;\n");
+        Assert.Empty(Bad(t));
+    }
+
+    [Fact]
+    public void Uses_AnExpandedArgumentGivesItsSpellingAndItsExpansion()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define FWD(a) CAT(KV_, a)\n#define U 3\n#define KV_U 1\n#define KV_3 1\n#define NOTHING\n#define KN_NOTHING 1\n#define KN_ 1\n" +
+            "#define KE_ 1\n#define KWP_ CAT(KWP_, 5)\n#define KWB CAT(KWP_, 5)\n#define KWP_5 1\n#define KWP_5_X 1\n#define ZWB_XZ 1\n",
+            "int a = FWD(U) + CAT(KN_, NOTHING) + CAT(KE_, ) + CAT(KWB, _X);\n");
+        Assert.Empty(Bad(t));
+        var keep = Keep(tmp);
+        foreach (var n in new[] { "KV_U", "KV_3", "KN_NOTHING", "KN_", "KE_", "KWP_5", "KWP_5_X" }) Assert.Contains(n, keep);
+    }
+
+    [Fact]
+    public void Uses_HigherOrderExactAndComputedCalleePool()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define KAP(m, a, b) m(a, b)\n#define KHX_1 1\n#define ZHX_2Z 1\n#define ZHX_1Z 1\n" +
+            "#define KCP_9 1\n#define KCP_Q9 1\n#define ZCP_Z 1\n#define ZCP_9Z 1\n",
+            "int a = KAP(CAT, KHX_, 1) + CAT(CA, T)(KCP_, 9);\n");
+        Assert.Empty(Bad(t));
+        var keep = Keep(tmp);
+        Assert.Contains("KHX_1", keep);
+        Assert.Contains("KCP_9", keep);
+        Assert.Contains("KCP_Q9", keep);   // the pool: a start piece and an end piece, anything between
+    }
+
+    [Fact]
+    public void Uses_AProductPastTheCapIsTheUsesPool()
+    {
+        // 70 x 70 names from one chain is past 4096: the use's first slot starts names, its last slot ends them
+        using var tmp = new TempDir();
+        string first = string.Join(" ", Enumerable.Range(0, 70).Select(i => $"KP{i}"));
+        var t = Mini(tmp,
+            $"#define LEFT {first}\n#define RIGHT {first.Replace("KP", "Q")}\n#define P3(a, b) a##_##b\n#define DO(a, b) P3(a, b)\n" +
+            "#define KP0_Q0 1\n#define KP3_XQ9 1\n#define ZP3_XZ 1\n",
+            "int a = DO(LEFT, RIGHT);\n");
+        Assert.Empty(Bad(t));
+        var keep = Keep(tmp);
+        Assert.Contains("KP0_Q0", keep);
+        Assert.Contains("KP3_XQ9", keep);
     }
 }

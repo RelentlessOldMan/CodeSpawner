@@ -11,6 +11,32 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-10-23
+
+The firmware corpus's bytes and truth change: pieces now pair per use (rule 3'), and six kinds are added, so every
+family after kind 25 moves. Non-firmware corpora are unchanged. No existing kind changed class; every case name
+still carries its class in its spelling.
+
+### Changed
+- Firmware truth, rule 3' (agreed with CodeCarver): each paste-macro use builds the cross product of the slots of
+  every `##` chain it reaches, and pieces of different uses never pair. An argument gives its spelling and, where
+  it is expanded, its expansion. An empty argument or one whose expansion can be empty gives nothing.
+  `__LINE__`/`__COUNTER__` are one or more digits, and an undefined `__name` is any text. A paste macro named in
+  code but never called (over the whole tree, dropped text included) gets one all-wildcard use. A computed callee, a
+  call open across a conditional directive, or a chain over 4,096 names falls back to the use's own start × end
+  pool. This replaces the tree-wide start and end pieces of 1.4.3/1.4.4. See docs/firmware-design.md, rules 3 and 4.
+
+### Added
+- Firmware kinds 26–31:
+  - `use-pairs`: two uses of one paste macro keep their own names, and the crossed name `ZUP{f}A_S{f}_DZ` is dropped;
+  - `uncalled-wildcard`: a paste forwarder named only in `#if 0` text keeps `ZWH{f}_Q_OFF` through a wildcard use,
+    and the near miss `ZWH{f}_Q_OFZ` is dropped;
+  - `expanded-arg`: `KXF{f}F(KXU{f}N)` keeps both the spelling `KXV{f}_KXU{f}N` and the expansion `KXV{f}_3`;
+  - `empty-expansion` and `empty-arg`: an argument that expands to nothing, or is empty, leaves the other piece
+    whole (`KEO{f}X_`, `KEM{f}X_`);
+  - `higher-order-pairs`: two `KAPPLY(CAT, …)` uses keep `ZHQ{f}X_5` and `KHR{f}X_QZ`, and the crossed `ZHQ{f}X_QZ`
+    is dropped.
+
 ## [1.4.4] - 2026-10-22
 
 The firmware corpus's bytes and truth change (one kind added). Non-firmware corpora are unchanged.

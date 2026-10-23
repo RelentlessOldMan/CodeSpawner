@@ -1,81 +1,54 @@
 namespace CodeSpawner.Firmware;
 
 /// <summary>
-/// Rule 2's call stream (docs/firmware-design.md, "Pieces"): follows <c>##</c> chains and paste-macro calls through a
-/// token stream that spans lines and conditional directives, and reports the pieces they give with their sides. One
-/// tracker is one stream for one run; a define body is its own stream with the define's parameters excluded.
+/// Rule 3's call stream (docs/firmware-design.md, "Uses"): follows <c>##</c> chains and calls through a token stream
+/// that spans lines and conditional directives, and reports each paste use with its arguments, each literal chain,
+/// and which names are called and named. One tracker is one stream for one run; a define body is its own stream,
+/// where a call or chain holding one of the define's parameters is a template (built when the define is used).
 /// </summary>
 internal sealed class Tracker : ITokenSink
 {
-    public const int S = 1, E = 2, Both = 3;   // sides: a piece starts (S) or ends (E) a pasted name
-
-    // One token of the stream as a ## operand or an argument token: a piece id, a parameter, or anything else.
+    // One token of the stream as a ## operand: a name id, a parameter, or anything else.
     private const int OpParam = -2, OpOther = -1;
 
     private sealed class Frame
     {
-        public int Callee = -1;                   // the paste macro called (-1: none)
-        public bool Paster, Marked, Computed, Crossed;
+        public int Callee = -1;                   // the name called (-1: computed, or a parameter)
+        public int Open;                          // its ( in the buffer
+        public bool Marked, Computed, Crossed, Template;
         public int Depth;                         // parentheses open inside the current argument
-        public int Arg;                           // the current argument's index
-        public readonly IntList ArgTokens = new();   // per argument: its token count
-        public readonly IntList ArgFirst = new();    // per argument: its first token (a piece id, OpParam or OpOther)
-        public readonly IntList Pieces = new();      // every piece id among the arguments ...
-        public readonly IntList PieceArg = new();    // ... and the argument it is in
-
-        public Frame()
-        {
-            ArgTokens.Add(0);
-            ArgFirst.Add(OpOther);
-        }
-
-        public void Tok(int op)
-        {
-            if (ArgTokens.A[Arg]++ == 0) ArgFirst.A[Arg] = op;
-            if (op >= 0) { Pieces.Add(op); PieceArg.Add(Arg); }
-        }
-
-        public void NextArg()
-        {
-            Arg++;
-            ArgTokens.Add(0);
-            ArgFirst.Add(OpOther);
-        }
-
-        public Frame Clone()
-        {
-            var f = new Frame { Callee = Callee, Paster = Paster, Marked = Marked, Computed = Computed, Crossed = Crossed, Depth = Depth, Arg = Arg };
-            f.ArgTokens.Count = f.ArgFirst.Count = 0;
-            for (int i = 0; i < ArgTokens.Count; i++) { f.ArgTokens.Add(ArgTokens[i]); f.ArgFirst.Add(ArgFirst[i]); }
-            for (int i = 0; i < Pieces.Count; i++) { f.Pieces.Add(Pieces[i]); f.PieceArg.Add(PieceArg[i]); }
-            return f;
-        }
+        public Frame Clone() => (Frame)MemberwiseClone();
     }
 
     private sealed class State
     {
         public readonly List<Frame> Frames = new();
-        public bool LastClosedPaster;
+        public int BufLen;
+        public bool LastClosedUse;
     }
 
     private readonly FwSpec _a;
     private readonly int _run;
-    private readonly bool _commitAtEof;
+    private readonly bool _commitAtEof, _marks;
     private DefineParse? _params;
     private List<Frame> _frames = new();
     private readonly List<State> _conds = new();
-    private int _pending = OpOther;           // an identifier not yet known to be called (a piece id or OpParam)
-    private bool _hasPending, _lastClosedPaster;
-    private readonly IntList _chain = new();  // the ## chain being read: its operands
+    private readonly List<XTok> _buf = new();     // the tokens since the outermost open call
+    private int _pending = OpOther;               // an identifier not yet known to be called (a name id or OpParam)
+    private bool _hasPending, _lastClosedUse;
+    private readonly IntList _chain = new();      // the ## chain being read: its operands
     private bool _afterHash;
-    private int _last = OpOther;              // the previous token as a ## operand
+    private int _last = OpOther;                  // the previous token as a ## operand
     private bool _hasLast;
 
+    /// <param name="commitAtEof">Calls open at the end are used, their missing arguments wildcards (the shadow
+    /// lexing, where comments and strings are tokens).</param>
     public Tracker(FwSpec a, int run, bool commitAtEof)
     {
         _a = a;
         _run = run;
         _commitAtEof = commitAtEof;
+        _marks = !commitAtEof;   // comments and strings never call or name
     }
 
     /// <summary>Starts a new stream; <paramref name="defineParams"/> is the define whose body this is, if any.</summary>
@@ -84,7 +57,8 @@ internal sealed class Tracker : ITokenSink
         _params = defineParams;
         _frames.Clear();
         _conds.Clear();
-        _hasPending = _lastClosedPaster = _afterHash = _hasLast = false;
+        _buf.Clear();
+        _hasPending = _lastClosedUse = _afterHash = _hasLast = false;
         _chain.Count = 0;
     }
 
@@ -97,6 +71,21 @@ internal sealed class Tracker : ITokenSink
         return OpOther;
     }
 
+    private void Buf(XTok t)
+    {
+        if (_frames.Count > 0) _buf.Add(t);
+    }
+
+    private static XTok AsTok(Tok kind, int op) => kind switch
+    {
+        Tok.Ident => op == OpParam ? new XTok(XTok.Param) : new XTok(XTok.Ident, op),
+        Tok.Number => op >= 0 ? new XTok(XTok.Num, op) : new XTok(XTok.Other),
+        Tok.LParen => new XTok(XTok.LParen),
+        Tok.RParen => new XTok(XTok.RParen),
+        Tok.Comma => new XTok(XTok.Comma),
+        _ => new XTok(XTok.Other),
+    };
+
     public void Token(Tok kind, ReadOnlySpan<byte> text)
     {
         if (kind == Tok.HashHash)
@@ -107,8 +96,8 @@ internal sealed class Tracker : ITokenSink
                 _afterHash = true;
             }
             FinalizePending();
-            Top?.Tok(OpOther);
-            _lastClosedPaster = false;
+            Buf(new XTok(XTok.Other));
+            _lastClosedUse = false;
             return;
         }
         int op = Operand(kind, text);
@@ -120,9 +109,10 @@ internal sealed class Tracker : ITokenSink
         if (kind == Tok.Ident)
         {
             FinalizePending();
+            Buf(AsTok(kind, op));
             _pending = op;
             _hasPending = true;
-            _lastClosedPaster = false;
+            _lastClosedUse = false;
             return;
         }
         switch (kind)
@@ -132,96 +122,98 @@ internal sealed class Tracker : ITokenSink
                 {
                     int callee = _pending;
                     _hasPending = false;
-                    Top?.Tok(callee);
-                    Top?.Tok(OpOther);
-                    bool paster = callee >= 0 && _a.IsPaster(callee, _run);
-                    _frames.Add(new Frame { Callee = paster ? callee : -1, Paster = paster });
+                    if (callee >= 0 && _marks) _a.Called(callee);
+                    _buf.Add(new XTok(XTok.LParen));
+                    _frames.Add(new Frame { Callee = callee >= 0 ? callee : -1, Open = _buf.Count - 1, Template = callee == OpParam });
                 }
-                else if (_lastClosedPaster)
+                else if (_lastClosedUse)
                 {
-                    Top?.Tok(OpOther);
-                    _frames.Add(new Frame { Computed = true });
+                    _buf.Add(new XTok(XTok.LParen));
+                    _frames.Add(new Frame { Computed = true, Open = _buf.Count - 1 });
                 }
-                else if (Top is { } t) { t.Depth++; t.Tok(OpOther); }
-                _lastClosedPaster = false;
+                else if (Top is { } t) { t.Depth++; _buf.Add(new XTok(XTok.LParen)); }
+                _lastClosedUse = false;
                 break;
             case Tok.RParen:
                 FinalizePending();
-                if (_frames.Count == 0) { _lastClosedPaster = false; break; }
+                _lastClosedUse = false;
+                if (_frames.Count == 0) break;
                 var top = _frames[^1];
-                if (top.Depth > 0) { top.Depth--; top.Tok(OpOther); _lastClosedPaster = false; break; }
-                Close(eof: false);
-                _lastClosedPaster = top.Paster || top.Computed;
-                break;
-            case Tok.Comma:
-                FinalizePending();
-                if (Top is { } c) { if (c.Depth == 0) c.NextArg(); else c.Tok(OpOther); }
-                _lastClosedPaster = false;
+                _buf.Add(new XTok(XTok.RParen));
+                if (top.Depth > 0) { top.Depth--; break; }
+                _lastClosedUse = Close(_buf.Count - 1, eof: false);
                 break;
             default:
                 FinalizePending();
-                Top?.Tok(op);
-                _lastClosedPaster = false;
+                Buf(AsTok(kind, op));
+                _lastClosedUse = false;
                 break;
         }
     }
 
-    // An identifier that was not called: an argument token, and a paste macro named without a call marks the call.
+    // An identifier that was not called: inside a call it is passed (a paste macro passed marks the call), outside
+    // one it is named.
     private void FinalizePending()
     {
         if (!_hasPending) return;
         _hasPending = false;
-        if (Top is not { } t) return;
-        t.Tok(_pending);
-        if (_pending >= 0 && _a.IsPaster(_pending, _run)) t.Marked = true;
+        if (_pending < 0) return;
+        if (Top is { } t)
+        {
+            if (_marks) _a.Called(_pending);
+            if (_a.IsPaster(_pending, _run)) t.Marked = true;
+        }
+        else if (_marks) _a.Named(_pending, _run);
     }
 
-    // A chain's operands: one starts a name when every operand before it is a parameter, ends one when every one after
-    // it is. A literal operand is a piece with those sides (never expanded); a parameter is not a piece.
+    // A chain with no parameter builds its literal name; one with a parameter is a template.
     private void FlushChain()
     {
         int n = _chain.Count;
         _chain.Count = 0;
         if (n < 2) return;
         var ops = _chain.A;
-        int firstNonParam = 0;
-        while (firstNonParam < n && ops[firstNonParam] == OpParam) firstNonParam++;
-        int lastNonParam = n - 1;
-        while (lastNonParam >= 0 && ops[lastNonParam] == OpParam) lastNonParam--;
-        for (int i = 0; i < n; i++)
-        {
-            if (ops[i] < 0) continue;
-            int sides = (i <= firstNonParam ? S : 0) | (i >= lastNonParam ? E : 0);
-            if (sides != 0) _a.Piece(ops[i], _run, sides, 0);
-        }
+        for (int i = 0; i < n; i++) if (ops[i] < 0) return;
+        _a.LiteralChain(ops, n, _run);
     }
 
-    private void Close(bool eof)
+    /// <summary>Closes the top call, its ) at <paramref name="close"/> (or the buffer's end): a paste use, a
+    /// higher-order use, or a computed or crossed one with its own pool. True if it was a use.</summary>
+    private bool Close(int close, bool eof)
     {
         var f = _frames[^1];
         _frames.RemoveAt(_frames.Count - 1);
-        bool all = f.Marked || f.Computed || (f.Paster && (f.Crossed || eof));
-        if (f.Paster || all)
+        bool use = f.Computed || (f.Callee >= 0 && (f.Marked || _a.IsPaster(f.Callee, _run)));
+        if (use && !f.Template)
         {
-            for (int i = 0; i < f.Pieces.Count; i++)
-            {
-                int arg = f.PieceArg[i];
-                if (!all && f.ArgTokens[arg] == 1)
-                {
-                    int slot = _a.SlotOf(f.Callee, arg, _run);
-                    int sides = slot & Both, dirs = sides | ((slot & FwSpec.Interior) != 0 ? Both : 0);
-                    _a.Piece(f.Pieces[i], _run, sides, dirs);
-                }
-                else _a.Piece(f.Pieces[i], _run, Both, Both);
-            }
+            var inner = _buf.GetRange(f.Open + 1, close - f.Open - 1);
+            bool template = false;
+            foreach (var t in inner) if (t.K == XTok.Param) { template = true; break; }
+            if (!template) _a.Use(_run, f.Callee, Split(inner), pool: f.Computed || f.Crossed, eof);
         }
-        if (Top is { } parent)
-            for (int i = 0; i < f.Pieces.Count; i++) parent.Tok(f.Pieces[i]);
+        if (_frames.Count == 0) _buf.RemoveRange(Floor, _buf.Count - Floor);
+        return use;
+    }
+
+    private int Floor => _conds.Count > 0 ? Math.Min(_conds[^1].BufLen, _buf.Count) : 0;
+
+    private static List<XTok>[] Split(List<XTok> inner)
+    {
+        var args = new List<List<XTok>> { new() };
+        int depth = 0;
+        foreach (var t in inner)
+        {
+            if (t.K == XTok.LParen) depth++;
+            else if (t.K == XTok.RParen) depth--;
+            else if (t.K == XTok.Comma && depth == 0) { args.Add(new()); continue; }
+            args[^1].Add(t);
+        }
+        return args.ToArray();
     }
 
     /// <summary>A conditional directive: <c>#if</c>-family opens, <c>#elif</c>/<c>#else</c> restarts from the
-    /// state at the <c>#if</c>, <c>#endif</c> continues from the last branch. A call open across one gives both
-    /// sides to all its arguments.</summary>
+    /// state at the <c>#if</c>, <c>#endif</c> continues from the last branch. A call open across one is used with
+    /// its own pool.</summary>
     public void Directive(LineKind kind)
     {
         FinalizePending();
@@ -244,7 +236,7 @@ internal sealed class Tracker : ITokenSink
 
     private State Snapshot()
     {
-        var s = new State { LastClosedPaster = _lastClosedPaster };
+        var s = new State { LastClosedUse = _lastClosedUse, BufLen = _buf.Count };
         foreach (var f in _frames) s.Frames.Add(f.Clone());
         return s;
     }
@@ -253,18 +245,26 @@ internal sealed class Tracker : ITokenSink
     {
         _frames = new List<Frame>(s.Frames.Count);
         foreach (var f in s.Frames) _frames.Add(f.Clone());
-        _lastClosedPaster = s.LastClosedPaster;
+        if (_buf.Count > s.BufLen) _buf.RemoveRange(s.BufLen, _buf.Count - s.BufLen);
+        _lastClosedUse = s.LastClosedUse;
     }
 
-    /// <summary>End of the stream: open calls are dropped, or (commit) closed top-down with both sides.</summary>
+    /// <summary>End of the stream: open calls are dropped, or (commit) closed top-down. An object-like body's last
+    /// identifier is called (an alias).</summary>
     public void End()
     {
+        if (_hasPending && _frames.Count == 0 && _params is { IsFunc: false })
+        {
+            _hasPending = false;
+            if (_pending >= 0 && _marks) _a.Called(_pending);
+        }
         FinalizePending();
         FlushChain();
         if (_commitAtEof)
-            while (_frames.Count > 0) Close(eof: true);
+            while (_frames.Count > 0) Close(_buf.Count, eof: true);
         _frames.Clear();
         _conds.Clear();
+        _buf.Clear();
         _params = null;
     }
 }

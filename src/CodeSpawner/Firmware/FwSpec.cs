@@ -32,7 +32,7 @@ internal sealed class FwTruth
 /// wrote and fails on any disagreement with the names it meant, and verify runs it again. Single-threaded; one
 /// file in memory at a time; names are bytes in a <see cref="NameTable"/>.
 /// </summary>
-internal sealed class FwSpec
+internal sealed partial class FwSpec
 {
     public const long MaxParseBytes = 20_000_000;
     public const string FwDir = "fw", DbPath = "fw-build/compile_commands.json";
@@ -66,14 +66,12 @@ internal sealed class FwSpec
     private long _cBytes;
     private int[] _cHead = Array.Empty<int>();            // name -> first C def (-1)
 
-    // all defs: edge pieces (rule 2), forward edges and direct pasters (rule 1), each with the runs it counts for
+    // all defs: forward edges and direct pasters (rule 1), each with the runs it counts for
     // (bit 0 min, bit 1 max: a maybe-kept header's defines count under max only)
-    private readonly IntList _xName = new(), _xOff = new(), _xMask = new(), _xItems = new();   // items: nS, S..., nE, E...
-    private int[] _xHead = Array.Empty<int>(), _xNext = Array.Empty<int>();
     private readonly IntList _edgeFrom = new(), _edgeTo = new(), _edgeMask = new();
     private readonly List<(int Name, int Mask)> _directPasters = new();
     private readonly HashSet<int> _definedUnder = new();   // names starting `__` that something defines
-    // the defines outside the carved files (kept fw files, ext, -D, maybe-kept): their text, for rule 2's sides
+    // the defines outside the carved files (kept fw files, ext, -D, maybe-kept): their text, for rule 3's uses
     private readonly List<(int Name, byte[] Text, int Mask)> _ncDefs = new();
     private readonly Dictionary<int, List<int>> _ncByName = new();
     private List<int> _maybe = new();
@@ -85,12 +83,7 @@ internal sealed class FwSpec
     private readonly List<int> _wholeFromOutside = new();
 
     private int[] _sortedFwd = Array.Empty<int>(), _sortedRev = Array.Empty<int>();
-    private readonly IntList[] _pieceQueue = { new(), new() };   // id << 1 | (1: an end piece), or a wildcard
     private readonly IntList[] _wantQueue = { new(), new() };
-    private static readonly ushort[] StartFlag = { NameTable.StartMin, NameTable.StartMax };
-    private static readonly ushort[] EndFlag = { NameTable.EndMin, NameTable.EndMax };
-    private static readonly ushort[] ExpSFlag = { NameTable.ExpSMin, NameTable.ExpSMax };
-    private static readonly ushort[] ExpEFlag = { NameTable.ExpEMin, NameTable.ExpEMax };
     private static readonly ushort[] PasterFlag = { NameTable.Paster, NameTable.PasterMax };
     private static readonly ushort[] WantFlag = { NameTable.WantMin, NameTable.WantMax };
     private readonly Dictionary<int, SafeFileHandle> _handles = new();
@@ -134,9 +127,14 @@ internal sealed class FwSpec
         Pass1();
         PasterFixpoint(0);
         PasterFixpoint(1);
+        ComputeEmpty(0);
+        ComputeEmpty(1);
         SortNames();
         Seeds();
         Pass2();
+        _calledFinal = true;   // every call site is seen: a paste macro only named gets its wildcard use
+        WildUses(0);
+        WildUses(1);
         for (int run = 0; run < 2; run++) Fixpoint(run);
         Results(t, listDir, checkAlphabet);
         return t;
@@ -371,14 +369,6 @@ internal sealed class FwSpec
             _cdNext[k] = _cHead[n];
             _cHead[n] = k;
         }
-        _xHead = Enumerable.Repeat(-1, Names.Count).ToArray();
-        _xNext = new int[_xName.Count];
-        for (int k = _xName.Count - 1; k >= 0; k--)
-        {
-            int n = _xName[k];
-            _xNext[k] = _xHead[n];
-            _xHead[n] = k;
-        }
     }
 
     /// <summary>The defines of one file, counting for the runs in <paramref name="mask"/>.</summary>
@@ -430,8 +420,9 @@ internal sealed class FwSpec
         else if (alias) Edge(name, Names.GetOrAdd(d.Text(body.Count - 1)), mask);
         var s = Names.Get(name);
         if (s.Length >= 2 && s[0] == '_' && s[1] == '_') _definedUnder.Add(name);
-        EdgeList(d, name, mask);
-        if (keepText && (d.IsFunc || alias))
+        ScanCalls(d);
+        EmptyCandidate(d, name, mask);
+        if (keepText)
         {
             if (!_ncByName.TryGetValue(name, out var l)) _ncByName[name] = l = new();
             l.Add(_ncDefs.Count);
@@ -444,66 +435,6 @@ internal sealed class FwSpec
         _edgeFrom.Add(from);
         _edgeTo.Add(to);
         _edgeMask.Add(mask);
-    }
-
-    private readonly IntList _edgeS = new(), _edgeE = new();
-
-    /// <summary>Rule 2's edge pieces of one body: walking in from the end gives the last edges (S), from the start the
-    /// first edges (E). An identifier is one (a parameter is not) and the walk goes on past it; a call gives its name
-    /// and every identifier and number among its arguments, and the walk goes on; <c>##</c> is skipped; a number
-    /// ends the walk (a piece if it is identifier characters); anything else ends it.</summary>
-    private void EdgeList(DefineParse d, int name, int mask)
-    {
-        var b = d.Body;
-        _edgeS.Count = _edgeE.Count = 0;
-        for (int k = b.Count - 1; k >= 0;)
-        {
-            var kind = b[k].Kind;
-            if (kind == Tok.HashHash) { k--; continue; }
-            if (kind == Tok.Ident) { EdgeToken(d, k, _edgeS); k--; continue; }
-            if (kind == Tok.Number) { EdgeToken(d, k, _edgeS); break; }
-            if (kind != Tok.RParen) break;
-            int open = k, depth = 0;
-            for (; open >= 0; open--)
-            {
-                if (b[open].Kind == Tok.RParen) depth++;
-                else if (b[open].Kind == Tok.LParen && --depth == 0) break;
-            }
-            if (open <= 0 || b[open - 1].Kind != Tok.Ident) break;
-            for (int j = open - 1; j < k; j++) EdgeToken(d, j, _edgeS);
-            k = open - 2;
-        }
-        for (int k = 0; k < b.Count;)
-        {
-            var kind = b[k].Kind;
-            if (kind == Tok.HashHash) { k++; continue; }
-            if (kind == Tok.Number) { EdgeToken(d, k, _edgeE); break; }
-            if (kind != Tok.Ident) break;
-            if (k + 1 >= b.Count || b[k + 1].Kind != Tok.LParen) { EdgeToken(d, k, _edgeE); k++; continue; }
-            int close = k + 1, depth = 0;
-            for (; close < b.Count; close++)
-            {
-                if (b[close].Kind == Tok.LParen) depth++;
-                else if (b[close].Kind == Tok.RParen && --depth == 0) break;
-            }
-            for (int j = k; j < close && j < b.Count; j++) EdgeToken(d, j, _edgeE);
-            k = close + 1;
-        }
-        if (_edgeS.Count == 0 && _edgeE.Count == 0) return;
-        _xName.Add(name);
-        _xMask.Add(mask);
-        _xOff.Add(_xItems.Count);
-        _xItems.Add(_edgeS.Count);
-        for (int i = 0; i < _edgeS.Count; i++) _xItems.Add(_edgeS[i]);
-        _xItems.Add(_edgeE.Count);
-        for (int i = 0; i < _edgeE.Count; i++) _xItems.Add(_edgeE[i]);
-    }
-
-    private void EdgeToken(DefineParse d, int k, IntList to)
-    {
-        var kind = d.Body[k].Kind;
-        var t = d.Text(k);
-        if ((kind == Tok.Ident && !d.IsParam(t)) || (kind == Tok.Number && IsIdNumber(t))) to.Add(Names.GetOrAdd(t));
     }
 
     /// <summary>A pp-number made only of identifier characters (<c>1</c>, <c>0x1F</c>, <c>2u</c>; not <c>1.5</c>).</summary>
@@ -534,215 +465,6 @@ internal sealed class FwSpec
     }
 
     public bool IsPaster(int id, int run) => Names.Has(id, PasterFlag[run]);
-
-    // ---------------- rule 2: a paste macro's argument sides ----------------
-
-    /// <summary>A slot's sides beyond Start/End: the argument sits inside a chain, so only its expansion joins.</summary>
-    public const int Interior = 4;
-
-    /// <summary>A paste macro's sides per argument position; past the end, <see cref="Rest"/>.</summary>
-    private sealed class Sig
-    {
-        public int[] Pos = Array.Empty<int>();
-        public int Rest;
-    }
-
-    /// <summary>One definition of a paste macro: its parameters' own sides and the slots they are passed on to.</summary>
-    private sealed class DefSig
-    {
-        public int Owner, AliasOf = -1, NParams;
-        public bool Variadic;
-        public int[] Const = Array.Empty<int>();
-        public readonly List<(int Param, int Q, int K, bool FromK)> Refs = new();
-    }
-
-    private readonly Dictionary<int, Sig>?[] _sigs = new Dictionary<int, Sig>?[2];
-
-    /// <summary>The sides (Start, End, <see cref="Interior"/>) argument <paramref name="arg"/> of a call to
-    /// <paramref name="paster"/> takes under <paramref name="run"/>.</summary>
-    public int SlotOf(int paster, int arg, int run)
-    {
-        var sigs = _sigs[run] ??= Sigs(run);
-        if (!sigs.TryGetValue(paster, out var s)) return Tracker.Both;
-        return arg < s.Pos.Length ? s.Pos[arg] : s.Rest;
-    }
-
-    private Dictionary<int, Sig> Sigs(int run)
-    {
-        var defs = new List<DefSig>();
-        var d = new DefineParse();
-        var buf = new byte[4096];
-        int bit = 1 << run;
-        for (int id = 0; id < Names.Count; id++)
-        {
-            if (!IsPaster(id, run)) continue;
-            if (id < _cHead.Length)
-                for (int k = _cHead[id]; k >= 0; k = _cdNext[k])
-                {
-                    int len = _cdLenTerm[k] >> 2;
-                    int cf = CFile(k, out long off);
-                    if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
-                    RandomAccess.Read(Handle(cf), buf.AsSpan(0, len), off);
-                    var w = new LineWalker(buf.AsSpan(0, len), 0);
-                    if (w.Next() && d.Parse(w.Spliced)) defs.Add(Analyze(d, id, run));
-                }
-            if (_ncByName.TryGetValue(id, out var l))
-                foreach (int k in l)
-                    if ((_ncDefs[k].Mask & bit) != 0 && d.Parse(_ncDefs[k].Text)) defs.Add(Analyze(d, id, run));
-        }
-        var sigs = new Dictionary<int, Sig>();
-        foreach (var ds in defs) if (!sigs.ContainsKey(ds.Owner)) sigs[ds.Owner] = new Sig();
-        var vals = new List<int>();
-        for (bool changed = true; changed;)
-        {
-            changed = false;
-            foreach (var ds in defs)
-            {
-                var s = sigs[ds.Owner];
-                if (ds.AliasOf >= 0)
-                {
-                    if (sigs.TryGetValue(ds.AliasOf, out var q)) changed |= Union(s, q.Pos.ToArray(), q.Rest);
-                    else changed |= Union(s, Array.Empty<int>(), Tracker.Both);
-                    continue;
-                }
-                if (ds.NParams == 0 && !ds.Variadic) continue;
-                vals.Clear();
-                for (int i = 0; i < ds.NParams; i++) vals.Add(ds.Const[i]);
-                foreach (var (p, q, k, fromK) in ds.Refs) vals[p] |= SlotRange(sigs, q, k, fromK);
-                int fixedN = ds.Variadic ? ds.NParams - 1 : ds.NParams;
-                changed |= Union(s, vals.Take(fixedN).ToArray(), ds.Variadic ? vals[ds.NParams - 1] : Tracker.Both);
-            }
-        }
-        return sigs;
-    }
-
-    private static int SlotRange(Dictionary<int, Sig> sigs, int q, int k, bool fromK)
-    {
-        if (!sigs.TryGetValue(q, out var s)) return Tracker.Both;
-        if (!fromK) return k < s.Pos.Length ? s.Pos[k] : s.Rest;
-        int v = s.Rest;
-        for (int i = k; i < s.Pos.Length; i++) v |= s.Pos[i];
-        return v;
-    }
-
-    private static bool Union(Sig s, int[] pos, int rest)
-    {
-        if (pos.Length > s.Pos.Length)
-        {
-            var np = new int[pos.Length];
-            for (int i = 0; i < np.Length; i++) np[i] = i < s.Pos.Length ? s.Pos[i] : s.Rest;
-            s.Pos = np;
-        }
-        bool changed = false;
-        for (int i = 0; i < s.Pos.Length; i++)
-        {
-            int v = s.Pos[i] | (i < pos.Length ? pos[i] : rest);
-            if (v != s.Pos[i]) { s.Pos[i] = v; changed = true; }
-        }
-        if ((s.Rest | rest) != s.Rest) { s.Rest |= rest; changed = true; }
-        return changed;
-    }
-
-    private static int ParamIndex(DefineParse d, int k)
-    {
-        if (d.Body[k].Kind != Tok.Ident) return -1;
-        var t = d.Text(k);
-        for (int i = 0; i < d.Params.Count; i++) if (t.SequenceEqual(d.Params[i])) return i;
-        return -1;
-    }
-
-    /// <summary>A parameter's sides from its <c>##</c> chains (one at neither end is interior, unless variadic: both),
-    /// and the slots of the paste macros it is passed to whole; passed as part of a longer argument, or to a computed
-    /// or parameter-named call, it gets both.</summary>
-    private DefSig Analyze(DefineParse d, int owner, int run)
-    {
-        var ds = new DefSig { Owner = owner, NParams = d.Params.Count, Variadic = d.Variadic, Const = new int[d.Params.Count] };
-        var b = d.Body;
-        if (!d.IsFunc)
-        {
-            if (b.Count > 0 && b[^1].Kind == Tok.Ident)
-            {
-                int q = Names.Find(d.Text(b.Count - 1));
-                if (q >= 0 && IsPaster(q, run)) ds.AliasOf = q;
-            }
-            return ds;
-        }
-        int va = d.Variadic ? d.Params.Count - 1 : -1;
-        var bare = new List<int>();   // paste macros named without a call: a non-paster call's arguments may reach them
-        for (int k = 0; k < b.Count; k++)
-        {
-            if (b[k].Kind != Tok.Ident || (k + 1 < b.Count && b[k + 1].Kind == Tok.LParen) || ParamIndex(d, k) >= 0) continue;
-            int q = Names.Find(d.Text(k));
-            if (q >= 0 && IsPaster(q, run) && !bare.Contains(q)) bare.Add(q);
-        }
-        var ops = new List<int>();
-        for (int k = 0; k < b.Count;)
-        {
-            if (k + 2 >= b.Count || b[k + 1].Kind != Tok.HashHash) { k++; continue; }
-            ops.Clear();
-            int j = k;
-            ops.Add(j);
-            while (j + 2 < b.Count && b[j + 1].Kind == Tok.HashHash) { j += 2; ops.Add(j); }
-            k = j + 1;
-            if (ops.Count == 2 && b[ops[0]].Kind == Tok.Comma && va >= 0 && ParamIndex(d, ops[1]) == va) continue;   // , ## __VA_ARGS__
-            int n = ops.Count, fnp = 0, lnp = n - 1;
-            while (fnp < n && ParamIndex(d, ops[fnp]) >= 0) fnp++;
-            while (lnp >= 0 && ParamIndex(d, ops[lnp]) >= 0) lnp--;
-            for (int i = 0; i < n; i++)
-            {
-                int p = ParamIndex(d, ops[i]);
-                if (p < 0) continue;
-                int sides = (i <= fnp ? Tracker.S : 0) | (i >= lnp ? Tracker.E : 0);
-                ds.Const[p] |= sides != 0 ? sides : p == va ? Tracker.Both : Interior;
-            }
-        }
-        for (int k = 1; k < b.Count; k++)
-        {
-            if (b[k].Kind != Tok.LParen) continue;
-            bool unknown = b[k - 1].Kind == Tok.RParen;   // computed
-            int q = -1;
-            if (!unknown)
-            {
-                if (b[k - 1].Kind != Tok.Ident) continue;
-                if (ParamIndex(d, k - 1) >= 0) unknown = true;
-                else
-                {
-                    q = Names.Find(d.Text(k - 1));
-                    if (q < 0 || !IsPaster(q, run))
-                    {
-                        if (bare.Count == 0) continue;
-                        q = -1;   // a higher-order call: its arguments take the union of the named paste macros' slots
-                    }
-                }
-            }
-            int depth = 0, argStart = k + 1, arg = 0;
-            for (int j = k + 1; ; j++)
-            {
-                var kind = j < b.Count ? b[j].Kind : Tok.RParen;
-                if (j < b.Count && kind == Tok.LParen) { depth++; continue; }
-                if (j < b.Count && kind == Tok.RParen && depth > 0) { depth--; continue; }
-                if (depth > 0 || (kind != Tok.Comma && kind != Tok.RParen)) continue;
-                if (unknown || j - argStart != 1)
-                {
-                    for (int t = argStart; t < j; t++)
-                    {
-                        int p = ParamIndex(d, t);
-                        if (p >= 0) ds.Const[p] |= Tracker.Both;
-                    }
-                }
-                else
-                {
-                    int p = ParamIndex(d, argStart);
-                    if (p >= 0 && q >= 0) ds.Refs.Add((p, q, arg, p == va));
-                    else if (p >= 0) foreach (int r in bare) ds.Refs.Add((p, r, 0, true));
-                }
-                if (kind == Tok.RParen) break;
-                argStart = j + 1;
-                arg++;
-            }
-        }
-        return ds;
-    }
 
     private void SortNames()
     {
@@ -901,80 +623,6 @@ internal sealed class FwSpec
         main.Lex(w.Spliced, w.StartsInComment);
     }
 
-    // ---------------- pieces, expansion, wanted ----------------
-
-    private readonly Stack<(int Id, int Dir)> _expand = new();
-    private readonly bool[] _digitEnd = new bool[2], _anyEnd = new bool[2];
-    private readonly bool[][] _startLen = { new bool[64], new bool[64] }, _endLen = { new bool[64], new bool[64] };
-
-    /// <summary>A piece with <paramref name="sides"/> (<see cref="Tracker.S"/>, <see cref="Tracker.E"/>) under
-    /// <paramref name="run"/>; its definitions' edges join in <paramref name="dirs"/>: the last edges (Start) as start
-    /// pieces, the first edges (End) as end pieces, transitively.</summary>
-    public void Piece(int id, int run, int sides, int dirs)
-    {
-        AddPiece(id, run, sides);
-        int bit = 1 << run;
-        if ((dirs & Tracker.S) != 0) _expand.Push((id, Tracker.S));
-        if ((dirs & Tracker.E) != 0) _expand.Push((id, Tracker.E));
-        while (_expand.Count > 0)
-        {
-            var (x, dir) = _expand.Pop();
-            if (!Names.Set(x, dir == Tracker.S ? ExpSFlag[run] : ExpEFlag[run]) || x >= _xHead.Length) continue;
-            for (int k = _xHead[x]; k >= 0; k = _xNext[k])
-            {
-                if ((_xMask[k] & bit) == 0) continue;
-                int o = _xOff[k], nS = _xItems[o];
-                int from = dir == Tracker.S ? o + 1 : o + 2 + nS, n = dir == Tracker.S ? nS : _xItems[o + 1 + nS];
-                for (int i = from; i < from + n; i++)
-                {
-                    AddPiece(_xItems[i], run, dir);
-                    _expand.Push((_xItems[i], dir));
-                }
-            }
-        }
-    }
-
-    private void AddPiece(int id, int run, int sides)
-    {
-        int len = Names.Get(id).Length;
-        if ((sides & Tracker.S) != 0 && Names.Set(id, StartFlag[run]))
-        {
-            MarkLen(ref _startLen[run], len);
-            _pieceQueue[run].Add(id << 1);
-        }
-        if ((sides & Tracker.E) != 0 && Names.Set(id, EndFlag[run]))
-        {
-            MarkLen(ref _endLen[run], len);
-            _pieceQueue[run].Add(id << 1 | 1);
-            Wildcard(id, run);
-        }
-    }
-
-    private static void MarkLen(ref bool[] lens, int len)
-    {
-        if (len >= lens.Length) Array.Resize(ref lens, Math.Max(len + 1, lens.Length * 2));
-        lens[len] = true;
-    }
-
-    /// <summary>An end piece that stands for many: pasting <c>__LINE__</c> or <c>__COUNTER__</c> ends a name in any
-    /// digits, and an undefined <c>__x</c> (a compiler-predefined name) in anything.</summary>
-    private void Wildcard(int id, int run)
-    {
-        var s = Names.Get(id);
-        if (s.Length < 2 || s[0] != '_' || s[1] != '_') return;
-        if (s.SequenceEqual("__LINE__"u8) || s.SequenceEqual("__COUNTER__"u8))
-        {
-            if (_digitEnd[run]) return;
-            _digitEnd[run] = true;
-        }
-        else
-        {
-            if (_anyEnd[run] || _definedUnder.Contains(id)) return;
-            _anyEnd[run] = true;
-        }
-        _pieceQueue[run].Add(-1);   // every name again
-    }
-
     private void Want(int id, int run)
     {
         if (id >= 0 && Names.Has(id, NameTable.CName) && Names.Set(id, WantFlag[run])) _wantQueue[run].Add(id);
@@ -986,35 +634,29 @@ internal sealed class FwSpec
         for (int i = 0; i < Names.Count; i++) if (Names.Has(i, seeds)) Want(i, run);
         var streams = new Streams(this, 1 << run);
         var d = new DefineParse();
-        var pq = _pieceQueue[run];
         var wq = _wantQueue[run];
-        int pi = 0, wi = 0;
+        int wi = 0;
         var buf = new byte[4096];
-        while (pi < pq.Count || wi < wq.Count)
+        while (wi < wq.Count)
         {
-            while (pi < pq.Count) Directional(pq[pi++], run);
-            while (wi < wq.Count)
+            int name = wq[wi++];
+            for (int k = _cHead[name]; k >= 0; k = _cdNext[k])
             {
-                int name = wq[wi++];
-                for (int k = _cHead[name]; k >= 0; k = _cdNext[k])
+                int len = _cdLenTerm[k] >> 2;
+                int cf = CFile(k, out long off);
+                if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
+                RandomAccess.Read(Handle(cf), buf.AsSpan(0, len), off);
+                var w = new LineWalker(buf.AsSpan(0, len), 0);
+                if (!w.Next() || !d.Parse(w.Spliced)) continue;
+                var b = w.Spliced[d.BodyStart..];
+                FwLexer.RawScan(b, s =>
                 {
-                    int len = _cdLenTerm[k] >> 2;
-                    int cf = CFile(k, out long off);
-                    if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
-                    RandomAccess.Read(Handle(cf), buf.AsSpan(0, len), off);
-                    var w = new LineWalker(buf.AsSpan(0, len), 0);
-                    if (!w.Next() || !d.Parse(w.Spliced)) continue;
-                    var b = w.Spliced[d.BodyStart..];
-                    FwLexer.RawScan(b, s =>
-                    {
-                        if (d.IsParam(s)) return;
-                        Want(Names.Find(s), run);
-                    });
-                    streams.Begin(d);
-                    streams.Lex(b, false);
-                    streams.End();
-                }
-                if (pi < pq.Count) break;
+                    if (d.IsParam(s)) return;
+                    Want(Names.Find(s), run);
+                });
+                streams.Begin(d);
+                streams.Lex(b, false);
+                streams.End();
             }
         }
     }
@@ -1034,78 +676,6 @@ internal sealed class FwSpec
         if (!_handles.TryGetValue(f, out var h))
             _handles[f] = h = File.OpenHandle(_files[f], FileMode.Open, FileAccess.Read, FileShare.Read);
         return h;
-    }
-
-    /// <summary>Rule 3 for a new piece: a C name is wanted when it starts with a start piece and ends with an end
-    /// piece (one piece equal to the name counts when it is both). A new start piece checks the names it begins, a
-    /// new end piece the names it ends; a wildcard (-1) checks every name.</summary>
-    private void Directional(int item, int run)
-    {
-        if (item < 0)
-        {
-            foreach (int n in _sortedFwd)
-                if (!Names.Has(n, WantFlag[run]) && StartOk(Names.Get(n), run) && EndOk(Names.Get(n), run)) Want(n, run);
-            return;
-        }
-        var p = Names.Get(item >> 1).ToArray();
-        if (p.Length == 0) return;
-        if ((item & 1) == 0)
-        {
-            int lo = 0, hi = _sortedFwd.Length;
-            while (lo < hi)
-            {
-                int mid = (lo + hi) >> 1;
-                if (Names.Get(_sortedFwd[mid]).SequenceCompareTo(p) < 0) lo = mid + 1; else hi = mid;
-            }
-            for (int i = lo; i < _sortedFwd.Length; i++)
-            {
-                int n = _sortedFwd[i];
-                var s = Names.Get(n);
-                if (!s.StartsWith(p)) break;
-                if (!Names.Has(n, WantFlag[run]) && EndOk(s, run)) Want(n, run);
-            }
-        }
-        else
-        {
-            int lo = 0, hi = _sortedRev.Length;
-            while (lo < hi)
-            {
-                int mid = (lo + hi) >> 1;
-                if (NameTable.CompareReversed(Names.Get(_sortedRev[mid]), p) < 0) lo = mid + 1; else hi = mid;
-            }
-            for (int i = lo; i < _sortedRev.Length; i++)
-            {
-                int n = _sortedRev[i];
-                var s = Names.Get(n);
-                if (!s.EndsWith(p)) break;
-                if (!Names.Has(n, WantFlag[run]) && StartOk(s, run)) Want(n, run);
-            }
-        }
-    }
-
-    private bool StartOk(ReadOnlySpan<byte> n, int run)
-    {
-        var lens = _startLen[run];
-        for (int j = 1; j <= n.Length && j < lens.Length; j++)
-        {
-            if (!lens[j]) continue;
-            int id = Names.Find(n[..j]);
-            if (id >= 0 && Names.Has(id, StartFlag[run])) return true;
-        }
-        return false;
-    }
-
-    private bool EndOk(ReadOnlySpan<byte> n, int run)
-    {
-        if (_anyEnd[run] || (_digitEnd[run] && n.Length > 0 && (uint)(n[^1] - '0') < 10)) return true;
-        var lens = _endLen[run];
-        for (int j = 1; j <= n.Length && j < lens.Length; j++)
-        {
-            if (!lens[j]) continue;
-            int id = Names.Find(n[^j..]);
-            if (id >= 0 && Names.Has(id, EndFlag[run])) return true;
-        }
-        return false;
     }
 
     // ---------------- results ----------------
