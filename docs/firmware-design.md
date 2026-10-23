@@ -201,14 +201,14 @@ All counts scale with `--scale` (an explicit knob is used as given). `_meta.gen`
 
 ## Sizes
 
-Measured on the 1.4.0 release exe (`--preset firmware`), on an otherwise idle machine. Verify recomputes the truth
+Measured on the 1.4.3 release exe (`--preset firmware`), on an otherwise idle machine. Verify recomputes the truth
 on a single thread, and gen computes it once too.
 
 | Scale | Size | Units | mustKeep / mustDrop / open | Gen | Verify | Verify peak memory |
 |---|---|---|---|---|---|---|
-| 0.01 | 0.16 GB | 285 | 17,019 / 1,197,207 / 1,118 | 7.9 s | 7.3 s | ~340 MB |
-| 0.1 | 1.06 GB | 2,850 | 158,273 / 10,392,962 / 11,118 | 77 s | 70 s | ~2.5 GB |
-| 1 | ~10 GB (estimated) | 28,500 | about 10x the 0.1 counts | | | ~25 GB (estimated) |
+| 0.01 | 0.16 GB | 285 | 18,578 / 1,197,772 / 809 | 21 s | 28 s | ~320 MB |
+| 0.1 | 1.06 GB | 2,850 | 174,296 / 10,398,136 / 8,009 | 164 s | 140 s | ~1.4 GB |
+| 1 | ~10 GB (estimated) | 28,500 | about 10x the 0.1 counts | | ~25 min (estimated) | ~14 GB (estimated) |
 
 Memory grows with the number of distinct names (mostly must-drop paste macros and filler). At 1x it needs a
-machine with that much memory free, or a leaner name table first. 1x has not been generated.
+machine with that much memory free. 1x has not been generated.
