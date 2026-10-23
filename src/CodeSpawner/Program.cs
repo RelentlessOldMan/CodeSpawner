@@ -326,6 +326,7 @@ public static class Program
               --preset pathological-symbols  token-paste (expected-miss)/long idents/deep nesting
               --preset dup-content   byte-identical groups (content-hash dedup / posting collapse)
               --preset firmware      a bare tree + the firmware corpus (big paste-macro headers, carve truth)
+              --preset firmware-work the work-shaped carve at --scale + a small correctness part
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly; full table: docs/knobs.md):
               --out <dir>            output directory (required; cleared if it exists)
@@ -400,11 +401,20 @@ public static class Program
               --fw-big-headers <n>       headers past maxParseBytes, full of paste macros (default 400)
               --fw-big-mb <m>            size of each big header, 20..2000 (default 24; regs_0.h is maxParseBytes+1)
               --fw-files <n>             files under fw/src: units + kept headers (default 38000)
-              --fw-families <n>          must-keep families across 18 paste kinds (default 1000000)
+              --fw-families <n>          must-keep families across 32 paste kinds (default 1000000)
               --fw-pasters <n>           paste macros in the big headers, most never called (default 6000000)
               --fw-dense-headers <n>     dense headers (1 MB..maxParseBytes, mostly defines; default 200)
               --fw-chain-max <n>         longest forwarder chain (default 40)
               --fw-db-paths <absolute|relative>   how fw-build/compile_commands.json names paths (default absolute)
+              --fw-work                  add the work-shaped carve (fw/work/wreg_N.h; counts default to the 1x shape)
+              --fw-work-defines <n>      register defines in the work headers (default 18900000)
+              --fw-work-pasters <n>      work paste macros (default 5000)
+              --fw-work-forwarders <n>   work forwarders, chains down to a paster (default 15000)
+              --fw-work-depth <n>        levels of the use tree, one a pass (default 6; not scaled)
+              --fw-work-growth <n>       pieces after pass 2 over pass 1 (default 9; not scaled)
+              --fw-work-keep-pct <p>     percent of work defines kept (default 4)
+              --fw-work-decoy-pct <p>    percent that are cross decoys: global pools keep them, rule 3' drops (default 16)
+              --fw-work-half-pct <p>     percent that are half decoys, one piece only (default 20)
 
             Flags take --flag, --flag=false or --flag false; values take --knob v or --knob=v.
             '<command> --help' prints this help.

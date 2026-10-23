@@ -16,6 +16,8 @@ internal sealed class FirmwareResult
     public long Families { get; set; }
     public long Traps { get; set; }
     public long Cases { get; set; }
+    /// <summary>The work-shaped carve, when <c>--fw-work</c> is on.</summary>
+    public FwWork? Work { get; set; }
 }
 
 /// <summary>
@@ -57,6 +59,7 @@ internal static class FirmwareEmitter
         public int Big, Files, Units, Dx, ChainMax;
         public long Families, Pasters;
         public long BigBytes;
+        public FwWork? Work;
         public readonly List<int> UnitFile = new();   // unit -> file index
         public string Fw(string rel) => Path.Combine(Root, FwSpec.FwDir, rel);
 
@@ -92,6 +95,7 @@ internal static class FirmwareEmitter
             ChainMax = o.FwChainMax,
             BigBytes = (long)o.FwBigMb << 20,
         };
+        p.Work = FwWork.Plan(o);
         for (int i = 0; i < p.Files; i++) if (!p.IsHeaderFile(i)) p.UnitFile.Add(i);
         p.Units = p.UnitFile.Count;
 
@@ -101,6 +105,7 @@ internal static class FirmwareEmitter
             if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
         }
         foreach (var d in new[] { "include", "big", "dense", "src/traps", "misc" }) Directory.CreateDirectory(p.Fw(d));
+        if (p.Work is not null) Directory.CreateDirectory(p.Fw(FwWork.Dir));
         for (int d = 0; d <= p.DirOf(p.Files - 1); d++) Directory.CreateDirectory(p.Fw($"src/m{d}"));
         Directory.CreateDirectory(Path.Combine(root, ExtDir, "include"));
         Directory.CreateDirectory(Path.Combine(root, ExtDir, "app"));
@@ -110,6 +115,7 @@ internal static class FirmwareEmitter
         var r = new FirmwareResult { Truth = null! };
         WritePaste(p);
         Parallel.For(0, p.Big, par, h => WriteBig(p, h));
+        if (p.Work is { } wk) Parallel.For(0, wk.Headers, par, h => WriteWork(p, wk, h));
         for (int x = 0; x < p.Dx; x++) WriteDx(p, x);
         WriteDenseFixtures(p);
         Parallel.For(0, p.Files, par, i =>
@@ -132,7 +138,7 @@ internal static class FirmwareEmitter
         if (truth.AlphabetErrors.Count > 0)
             throw new InvalidOperationException("firmware: names whose class disagrees with their spelling (a generator bug):\n  "
                 + string.Join("\n  ", truth.AlphabetErrors));
-        return new FirmwareResult { Truth = truth, Units = r.Units, Families = r.Families, Traps = r.Traps, Cases = r.Cases }
+        return new FirmwareResult { Truth = truth, Units = r.Units, Families = r.Families, Traps = r.Traps, Cases = r.Cases, Work = p.Work }
             .WithHostile(r.Hostile);
     }
 
@@ -542,6 +548,14 @@ internal static class FirmwareEmitter
             throw new InvalidOperationException($"firmware: regs_0.h content passes {BoundaryBig:N0} bytes; lower --fw-families or --fw-pasters, or raise --fw-big-headers");
     }
 
+    // A work header (docs/firmware-design.md "Work shape"); FwWork lays it out.
+    private static void WriteWork(Plan p, FwWork wk, int h)
+    {
+        var rng = Rng.For(p.O.Seed, Category.Firmware, (1L << 40) + h);
+        using var w = new FwWriter(p.Fw($"{FwWork.Dir}/{FwWork.HeaderFile(h)}"));
+        wk.Write(h, w.L, i => Filler(w, $"ZWF{h}", i, ref rng), () => w.Bytes);
+    }
+
     // ---------------- dense headers ----------------
 
     private static void WriteDx(Plan p, int x)
@@ -646,6 +660,7 @@ internal static class FirmwareEmitter
         w.L("#include <fw_os.h>");
         int hdr = p.HeaderOfDir(p.DirOf(file));
         if (hdr >= 0) w.L($"#include \"k{hdr}.h\"");
+        if (p.Work is { } wk) foreach (int h in wk.HeadersOfUnit(u, p.Units)) w.L($"#include \"{FwWork.HeaderFile(h)}\"");
         var scope = new StringBuilder();
         var fn = new StringBuilder();
         fn.Append($"int fu{u}(void)\n{{\n\treturn {u % 7};\n}}\n");
@@ -655,6 +670,7 @@ internal static class FirmwareEmitter
             if (scope.Length + fn.Length > 1 << 16) { w.Text(scope.ToString()); w.Text(fn.ToString()); scope.Clear(); fn.Clear(); }
         }
         for (int t = 0; t < Traps; t++) if (p.TrapUnit(t) == u) TrapUseText(t, fn);
+        p.Work?.UnitText(u, p.Units, fn);
         if (u == 0) fn.Append("int fdv(void)\n{\n\treturn KDV_9 + KD_7 + KHWP(Z, Z) + CAT(KDE0X_, KDE_N);\n}\n");
         w.Text(scope.ToString());
         w.Text(fn.ToString());
@@ -753,7 +769,8 @@ internal static class FirmwareEmitter
     {
         bool rel = p.O.FwDbPaths == "relative";
         string P(string corpusRel) => rel ? corpusRel : Path.GetFullPath(Path.Combine(p.Root, corpusRel));
-        string[] inc = ["fw/include", "fw/big", "fw/dense", "ext/include"];
+        string[] inc = p.Work is null ? ["fw/include", "fw/big", "fw/dense", "ext/include"]
+            : ["fw/include", "fw/big", "fw/dense", $"fw/{FwWork.Dir}", "ext/include"];
         using var fs = File.Create(Path.Combine(p.Root, FwSpec.DbPath));
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartArray();
@@ -832,6 +849,7 @@ internal static class FirmwareEmitter
             Row(Target(p, f), kase, site);
             if (Decoy(p, f) is { } d) Row(d, kase + " decoy", site);
         }
+        if (p.Work is { } wk) foreach (var (name, kase, site) in wk.Cases()) Row(name, kase, site);
         File.WriteAllText(Path.Combine(p.Root, CasesPath), sb.ToString());
         return n;
     }

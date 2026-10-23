@@ -332,6 +332,16 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("fwBigMb", (long)o.FwBigMb));
         g.Add(GenKnob.Of("fwChainMax", (long)o.FwChainMax));
         g.Add(GenKnob.Of("fwDbPaths", o.FwDbPaths));
+        if (!o.FwWork) return;
+        g.Add(GenKnob.Of("fwWork", true));
+        g.Add(GenKnob.Of("fwWorkDefines", (long)o.Eff("fw-work-defines", o.FwWorkDefines)));
+        g.Add(GenKnob.Of("fwWorkPasters", (long)o.Eff("fw-work-pasters", o.FwWorkPasters, keepOne: true)));
+        g.Add(GenKnob.Of("fwWorkForwarders", (long)o.Eff("fw-work-forwarders", o.FwWorkForwarders)));
+        g.Add(GenKnob.Of("fwWorkDepth", (long)o.FwWorkDepth));
+        g.Add(GenKnob.Of("fwWorkGrowth", (long)o.FwWorkGrowth));
+        g.Add(GenKnob.Of("fwWorkKeepPct", (long)o.FwWorkKeepPct));
+        g.Add(GenKnob.Of("fwWorkDecoyPct", (long)o.FwWorkDecoyPct));
+        g.Add(GenKnob.Of("fwWorkHalfPct", (long)o.FwWorkHalfPct));
     }
 
     /// <summary>The include web's truth: its -I order, the template instances as symbols, and the closures.</summary>

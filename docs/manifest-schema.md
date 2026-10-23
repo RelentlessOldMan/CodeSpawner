@@ -404,6 +404,9 @@ root.
 carve the truth describes, so that it can be compiled. Sizes and generation times at each scale, the per-kind cases
 and the hostile-file list are in [firmware-design.md](firmware-design.md).
 
+With `--fw-work`, `firmware` also holds **`work`**, the work carve's construction counts (verify recounts them from the
+lists). Its fields are in [firmware-design.md](firmware-design.md#work-shape---fw-work---preset-firmware-work).
+
 ## Stable invariants consumers may rely on
 
 - `func_i` is defined in `src_i.c` and calls `func_{i-1}` (the linear chain). Keyed on the `src_<i>.c`

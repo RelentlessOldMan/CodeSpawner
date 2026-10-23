@@ -100,6 +100,15 @@ public static class ArgParser
                 case "fw-big-mb": o.FwBigMb = I(); break;
                 case "fw-chain-max": o.FwChainMax = I(); break;
                 case "fw-db-paths": o.FwDbPaths = Val().ToLowerInvariant(); break;
+                case "fw-work": o.FwWork = B(); break;
+                case "fw-work-defines": o.FwWorkDefines = I(); break;
+                case "fw-work-pasters": o.FwWorkPasters = I(); break;
+                case "fw-work-forwarders": o.FwWorkForwarders = I(); break;
+                case "fw-work-depth": o.FwWorkDepth = I(); break;
+                case "fw-work-growth": o.FwWorkGrowth = I(); break;
+                case "fw-work-keep-pct": o.FwWorkKeepPct = I(); break;
+                case "fw-work-decoy-pct": o.FwWorkDecoyPct = I(); break;
+                case "fw-work-half-pct": o.FwWorkHalfPct = I(); break;
                 // scan/shape-profile regeneration:
                 case "from-profile": o.FromProfile = Val(); break;
                 case "with-oracle": o.WithOracle = B(); break;
@@ -262,9 +271,20 @@ public static class ArgParser
             ("fw-families", o.FwFamilies, 0, 100_000_000), ("fw-pasters", o.FwPasters, 0, 1_000_000_000),
             ("fw-dense-headers", o.FwDenseHeaders, 0, 100_000), ("fw-big-mb", o.FwBigMb, 20, 2000),
             ("fw-chain-max", o.FwChainMax, 2, 10_000),
+            ("fw-work-defines", o.FwWorkDefines, 0, 1_000_000_000), ("fw-work-pasters", o.FwWorkPasters, 1, 100_000_000),
+            ("fw-work-forwarders", o.FwWorkForwarders, 0, 100_000_000), ("fw-work-depth", o.FwWorkDepth, 1, 64),
+            ("fw-work-growth", o.FwWorkGrowth, 2, 1000), ("fw-work-keep-pct", o.FwWorkKeepPct, 1, 100),
+            ("fw-work-decoy-pct", o.FwWorkDecoyPct, 0, 100), ("fw-work-half-pct", o.FwWorkHalfPct, 0, 100),
         })
             if (v < min || v > max) throw new ArgException($"--{k} must be in {min}..{max}, got {v}");
         if (o.FwDbPaths is not ("absolute" or "relative")) throw new ArgException($"--fw-db-paths must be absolute or relative, got '{o.FwDbPaths}'");
+        if (!o.FwWork)
+        {
+            var strayWork = given.Where(k => k.StartsWith("fw-work-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
+            if (strayWork is not null) throw new ArgException($"--{strayWork} shapes the work carve, which is off; add --fw-work");
+        }
+        else if (o.FwWorkKeepPct + o.FwWorkDecoyPct + o.FwWorkHalfPct > 100)
+            throw new ArgException("--fw-work-keep-pct + --fw-work-decoy-pct + --fw-work-half-pct must be at most 100");
     }
 
     /// <summary>The include-web knobs (docs/include-web-design.md). They shape the web only, so without --web-units

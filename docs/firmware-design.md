@@ -25,6 +25,7 @@ because the truth names their bytes.
     src/bigsrc_0.c           #   a .c past maxParseBytes (carved like a big header)
     src/table_big.c          #   exactly maxParseBytes: parsed, not big
     misc/                    #   hostile files (see below)
+    work/wreg_N.h            #   the work carve, with --fw-work (see "Work shape")
   ext/include/, ext/app/     # outside the root: an OS header every unit includes (it includes a Hidden one),
                              #   one nothing includes (maybe-kept), host.c
   fw-build/compile_commands.json   # one entry per unit, plus ext/app/host.c
@@ -32,10 +33,11 @@ because the truth names their bytes.
 ```
 
 Every compile db entry is `cc -std=c11 -I fw/include -I fw/big -I fw/dense -I ext/include -DKD_7 -DKDV_9=KDV_VAL -c
-<file>`. With `--fw-db-paths absolute` (the default) `directory` and every path are absolute. With `relative`,
-`directory` is `"."` and the paths are relative to the corpus root, so the db resolves against the directory it
-names, resolved from the corpus root. Every unit compiles cleanly with `-std=c11 -Wall -Werror`, with or without
-`-DFW_ALT`, and with `-DFW_SEL=7` or `-DFW_SEL=19`. 1.4.0 checked this with clang; gcc was not run.
+<file>`. With `--fw-work`, `-I fw/work` comes after `-I fw/dense`. With `--fw-db-paths absolute` (the default)
+`directory` and every path are absolute. With `relative`, `directory` is `"."` and the paths are relative to the
+corpus root, so the db resolves against the directory it names, resolved from the corpus root. Every unit compiles
+cleanly with `-std=c11 -Wall -Werror`, with or without `-DFW_ALT`, and with `-DFW_SEL=7` or `-DFW_SEL=19`. 1.4.0
+checked this with clang; gcc was not run.
 
 ## Names carry their class
 
@@ -183,6 +185,47 @@ files under `fw-truth/`:
 - **`treeSha256`** is a sha256 over every `fw/` file, in ordinal order of its `fw/`-relative path: the path, `\n`,
   the byte length, `\n`, then the bytes. Check it before carving, to catch a stale or damaged copy.
 
+## Work shape (`--fw-work`, `--preset firmware-work`)
+
+`--fw-work` adds a carve shaped like a work tree, for measuring how a carver's passes grow. It sits beside the
+correctness part, in `fw/work/wreg_N.h` (each one over `maxParseBytes`; on `-I fw/work`). `--preset firmware-work` is
+the work carve at `--scale` plus a small, fixed correctness part (1 big header, 400 files, 192 families, 20,000
+pasters, no dense headers), so nearly all of its size and time is the work carve.
+
+- **A tree of paste uses.** Each must-keep define is a `##` use: `WRP<n>(a, b)` pastes a start piece and an end
+  piece. Units call level 0. Each level-k define's body holds 8 level-k+1 uses at the first step (`--fw-work-growth`
+  9: the pieces seeded grow ×9 from pass 1 to pass 2), then the levels halve, down to `--fw-work-depth` levels. A
+  carve that seeds level by level needs `levels + 1` passes (the last one finds nothing new).
+- **Three use modes**, cycling 10:7:3 over each level: direct (`WRP<n>`), forwarded (`WFW<n>`, a forwarder to a
+  paster) and higher-order (`WAP<k>(WRP<n>, a, b)`). A macro can't expand inside its own expansion, so each level has
+  its own pasters, forwarders and applier `WAP<k>`. `--fw-work-pasters` and `--fw-work-forwarders` set the pools,
+  split across the levels.
+- **Cross-call decoys** (`--fw-work-decoy-pct`, default 16% of the work defines) are the start piece of one use
+  joined to the end piece of another. Global start and end pools keep them; rule 3' (per-use pairing) drops them.
+  Spelled `Z…Z`.
+- **Half decoys** (`--fw-work-half-pct`, 20%) have one real piece and a dead end: must-drop under either rule.
+- **Filler** (`ZWF…Z`) makes up the rest and pads each header past `maxParseBytes`.
+
+With the defaults, 4% of the work defines are kept, and 20% would be kept under global pools.
+
+`firmware.work` in the manifest gives the construction counts, which verify recounts from the lists:
+
+```json
+"work": { "dir": "fw/work", "headers": 3, "defines": 945000, "exactKept": 37785, "crossDecoys": 151200,
+          "halfDecoys": 189000, "filler": …, "keptUnderGlobalPools": 188985, "pasters": 250, "forwarders": 750,
+          "appliers": 6, "uses": { "direct": …, "forwarded": …, "higherOrder": … }, "levels": 6, "expectedPasses": 7,
+          "byLevel": [{ "level": 0, "uses": 2290, "startPieces": 2290, "endPieces": 2290, "piecesSoFar": 2290,
+                        "crossDecoysLiveSoFar": … }, …] }
+```
+
+- **`exactKept`** is the must-keep work defines (one per use). `pasters`, `forwarders` and `appliers` are the must-keep
+  macros. `filler` counts what was written, padding included.
+- **`keptUnderGlobalPools`** = `exactKept + crossDecoys`: what a carve that pools pieces tree-wide keeps.
+- **`byLevel`**: per level, the uses and the pieces they seed. `piecesSoFar` is the pieces seeded once that level is
+  reached. `crossDecoysLiveSoFar` is the cross decoys whose two pieces are both seeded by then (what global pools
+  keep after that pass).
+- The correctness part also seeds pieces, so at small scales pass 1→2 growth is a little under ×9.
+
 ## Verify
 
 `verify` recomputes the truth from the tree and FAILs on any difference: each count, each list's sha and count, the
@@ -209,6 +252,15 @@ All counts scale with `--scale` (an explicit knob is used as given). `_meta.gen`
 | `--fw-dense-headers` | 200 | Dense headers `dense/dx_N.h`, besides the fixtures. |
 | `--fw-chain-max` | 40 | The long forwarder chains' length (2–10,000; not scaled). |
 | `--fw-db-paths` | `absolute` | `absolute` or `relative`: how the compile db names paths (not scaled). |
+| `--fw-work` | off | The work carve (see "Work shape"). Every `--fw-work-*` knob is refused without it. |
+| `--fw-work-defines` | 18,900,000 | Work defines: kept uses, decoys and filler. |
+| `--fw-work-pasters` | 5,000 | Paste macros, split across the levels. |
+| `--fw-work-forwarders` | 15,000 | Forwarders, split across the levels. |
+| `--fw-work-depth` | 6 | Levels of the use tree (1–64; not scaled). |
+| `--fw-work-growth` | 9 | Pieces grow ×growth from pass 1 to pass 2 (2–1000; not scaled). |
+| `--fw-work-keep-pct` | 4 | Percent of the work defines that are kept uses (1–100; not scaled). |
+| `--fw-work-decoy-pct` | 16 | Percent that are cross-call decoys (not scaled; keep + decoy + half ≤ 100). |
+| `--fw-work-half-pct` | 20 | Percent that are half decoys (not scaled). |
 
 ## Sizes
 

@@ -67,6 +67,12 @@ public static class Presets
     // firmware: the firmware corpus (docs/firmware-design.md) beside a bare tree: big and dense headers, paste macros.
     private static readonly string[] Firmware = [.. Bare, "--firmware"];
 
+    // firmware-work: the work-shaped carve (docs/firmware-design.md "Work shape") at --scale, beside a small fixed
+    // correctness part (one big header, every kind a few times), so the size and the pass shape come from the work part.
+    private static readonly string[] FirmwareWork =
+        [.. Bare, "--firmware", "--fw-work", "--fw-families", "192", "--fw-pasters", "20000", "--fw-files", "400",
+         "--fw-big-headers", "1", "--fw-dense-headers", "0"];
+
     // Single source of truth: resolution (TryGet), the advertised name list (Names), and the error-message
     // hints all derive from this one ordered registry, so a preset can't be added in one place and forgotten
     // in another. Order here is the advertised order.
@@ -84,6 +90,7 @@ public static class Presets
         ("pathological-symbols", PathologicalSymbols),
         ("dup-content", DupContent),
         ("firmware", Firmware),
+        ("firmware-work", FirmwareWork),
     ];
 
     /// <summary>The advertised preset names, in registry order.</summary>

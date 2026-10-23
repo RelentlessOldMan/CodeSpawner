@@ -149,6 +149,25 @@ public sealed class GenOptions
     public int FwChainMax { get; set; } = 40;
     /// <summary>"absolute" or "relative": how fw-build/compile_commands.json writes its directory and paths.</summary>
     public string FwDbPaths { get; set; } = "absolute";
+    /// <summary>Adds the work-shaped carve (fw/work/wreg_N.h; docs/firmware-design.md "Work shape"). Its count knobs
+    /// default to the 1x work shape and scale.</summary>
+    public bool FwWork { get; set; } = false;
+    /// <summary>Register defines in the work headers (exact, decoys and filler). Scaled.</summary>
+    public int FwWorkDefines { get; set; } = 18_900_000;
+    /// <summary>Work paste macros WRP{j}. Scaled, never below 1.</summary>
+    public int FwWorkPasters { get; set; } = 5_000;
+    /// <summary>Work forwarders WFW{f}, each a chain down to a paster. Scaled.</summary>
+    public int FwWorkForwarders { get; set; } = 15_000;
+    /// <summary>Levels of the use tree (the pieces appear one level a pass).</summary>
+    public int FwWorkDepth { get; set; } = 6;
+    /// <summary>Pieces after pass 2 over pieces after pass 1.</summary>
+    public int FwWorkGrowth { get; set; } = 9;
+    /// <summary>Percent of the work defines that are exact (kept) names.</summary>
+    public int FwWorkKeepPct { get; set; } = 4;
+    /// <summary>Percent that are cross decoys (kept by global pools, dropped by rule 3').</summary>
+    public int FwWorkDecoyPct { get; set; } = 16;
+    /// <summary>Percent that are half decoys (one side only).</summary>
+    public int FwWorkHalfPct { get; set; } = 20;
 
     // --- scan/shape-profile regeneration (gen --from-profile). ---
 

@@ -11,6 +11,25 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.6] - 2026-10-23
+
+Adds the work-shaped firmware carve. Existing corpora, firmware ones included, are unchanged: the work carve is off
+unless asked for.
+
+### Added
+- `--preset firmware-work` (asked for by CodeCarver): a carve shaped like a work tree, for measuring how a carver's
+  passes grow. A tree of paste uses (pieces ×9 from pass 1 to pass 2, then halving) through direct, forwarded and
+  higher-order calls, plus cross-call decoys that global piece pools keep and rule 3' drops (~20% kept under global
+  pools against 4% exact). It sits in `fw/work/wreg_N.h`, beside a small fixed correctness part.
+- `--fw-work` and its knobs `--fw-work-defines`, `-pasters`, `-forwarders`, `-depth`, `-growth`, `-keep-pct`,
+  `-decoy-pct` and `-half-pct`.
+- Manifest `firmware.work`: the construction counts (exact kept, cross and half decoys, kept under global pools,
+  pasters, forwarders, appliers, uses by mode, levels, expected passes, and per level the pieces seeded and the cross
+  decoys live). Verify recounts them from the lists.
+
+### Fixed
+- `--help` said 18 firmware paste kinds; there are 32.
+
 ## [1.4.5] - 2026-10-23
 
 The firmware corpus's bytes and truth change: pieces now pair per use (rule 3'), and six kinds are added, so every

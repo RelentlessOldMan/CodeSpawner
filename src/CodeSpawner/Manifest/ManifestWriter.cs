@@ -271,6 +271,7 @@ public static class ManifestWriter
             w.WriteEndObject();
         }
         w.WriteEndArray();
+        if (r.Work is { } wk) WriteWork(w, wk);
         w.WriteStartObject("builds");
         foreach (var b in new[] { "main", "union" })
         {
@@ -291,6 +292,48 @@ public static class ManifestWriter
             w.WriteEndObject();
         }
         w.WriteEndObject();
+        w.WriteEndObject();
+    }
+
+    // The work carve's construction counts (docs/firmware-design.md "Work shape"); verify recounts the class ones
+    // from the truth lists.
+    private static void WriteWork(Utf8JsonWriter w, CodeSpawner.Firmware.FwWork k)
+    {
+        w.WriteStartObject("work");
+        w.WriteString("dir", CodeSpawner.Firmware.FwSpec.FwDir + "/" + CodeSpawner.Firmware.FwWork.Dir);
+        w.WriteNumber("headers", k.Headers);
+        w.WriteNumber("defines", k.Exact + k.CrossDecoys + k.HalfDecoys + k.FillerWritten);
+        w.WriteNumber("exactKept", k.Exact);
+        w.WriteNumber("crossDecoys", k.CrossDecoys);
+        w.WriteNumber("halfDecoys", k.HalfDecoys);
+        w.WriteNumber("filler", k.FillerWritten);
+        w.WriteNumber("keptUnderGlobalPools", k.Exact + k.CrossDecoys);
+        w.WriteNumber("pasters", k.Pasters);
+        w.WriteNumber("forwarders", k.Forwarders);
+        w.WriteNumber("appliers", k.Level.Length);
+        w.WriteStartObject("uses");
+        w.WriteNumber("direct", k.UsesDirect);
+        w.WriteNumber("forwarded", k.UsesForwarded);
+        w.WriteNumber("higherOrder", k.UsesHigherOrder);
+        w.WriteEndObject();
+        w.WriteNumber("levels", k.Level.Length);
+        w.WriteNumber("expectedPasses", k.Level.Length + 1);
+        w.WriteStartArray("byLevel");
+        long cum = 0, cross = 0;
+        for (int i = 0; i < k.Level.Length; i++)
+        {
+            cum += k.Level[i];
+            cross += k.CrossByLevel[i];
+            w.WriteStartObject();
+            w.WriteNumber("level", i);
+            w.WriteNumber("uses", k.Level[i]);
+            w.WriteNumber("startPieces", k.Level[i]);
+            w.WriteNumber("endPieces", k.Level[i]);
+            w.WriteNumber("piecesSoFar", cum);
+            w.WriteNumber("crossDecoysLiveSoFar", cross);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
         w.WriteEndObject();
     }
 

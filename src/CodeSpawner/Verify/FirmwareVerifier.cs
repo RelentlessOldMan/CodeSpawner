@@ -90,6 +90,30 @@ internal static class FirmwareVerifier
             }
         }
 
+        // the work carve: its class counts, recounted from the main build's lists by the names' spelling
+        if (Obj(fw, "work") is { ValueKind: JsonValueKind.Object } work)
+        {
+            var main = Obj(builds, "main");
+            string? keepRel = Str(Obj(main, "mustKeepDefines"), "path"), dropRel = Str(Obj(main, "mustDropDefines"), "path");
+            string? keepF = keepRel is null ? null : paths.Resolve(keepRel), dropF = dropRel is null ? null : paths.Resolve(dropRel);
+            if (keepF is null || dropF is null || !File.Exists(keepF) || !File.Exists(dropF))
+            { err.WriteLine("FAIL firmware work: the main build's truth lists are missing"); fail++; }
+            else
+            {
+                var kc = WorkCounts(keepF);
+                var dc = WorkCounts(dropF);
+                Eq("work.exactKept", Num(work, "exactKept"), kc.Exact.ToString());
+                Eq("work.pasters", Num(work, "pasters"), kc.Pasters.ToString());
+                Eq("work.forwarders", Num(work, "forwarders"), kc.Forwarders.ToString());
+                Eq("work.appliers", Num(work, "appliers"), kc.Appliers.ToString());
+                Eq("work.crossDecoys", Num(work, "crossDecoys"), dc.Cross.ToString());
+                Eq("work.halfDecoys", Num(work, "halfDecoys"), dc.Half.ToString());
+                Eq("work.filler", Num(work, "filler"), dc.Filler.ToString());
+                Eq("work: decoys and filler kept", "0", (kc.Cross + kc.Half + kc.Filler).ToString());
+                Eq("work: exact names dropped", "0", dc.Exact.ToString());
+            }
+        }
+
         if (referenceCarve is not null)
         {
             if (fail > 0) { err.WriteLine("FAIL firmware: no reference carve of a corpus that fails verify"); return fail + 1; }
@@ -99,6 +123,33 @@ internal static class FirmwareVerifier
         }
         return fail;
     }
+
+    private sealed record WorkCount(long Exact, long Cross, long Half, long Filler, long Pasters, long Forwarders, long Appliers);
+
+    private static WorkCount WorkCounts(string list)
+    {
+        long e = 0, c = 0, h = 0, f = 0, pa = 0, fo = 0, ap = 0;
+        using var r = new StreamReader(OpenList(list), Encoding.UTF8);
+        for (string? n; (n = r.ReadLine()) is not null;)
+        {
+            switch (FwWork.Classify(n))
+            {
+                case "exact": e++; break;
+                case "cross": c++; break;
+                case "half": h++; break;
+                case "filler": f++; break;
+                default:
+                    if (Numbered(n, "WRP")) pa++;
+                    else if (Numbered(n, "WFW")) fo++;
+                    else if (Numbered(n, "WAP")) ap++;
+                    break;
+            }
+        }
+        return new WorkCount(e, c, h, f, pa, fo, ap);
+    }
+
+    private static bool Numbered(string n, string stem) =>
+        n.Length > stem.Length && n.StartsWith(stem, StringComparison.Ordinal) && n.AsSpan(stem.Length).IndexOfAnyExceptInRange('0', '9') < 0;
 
     private static Stream OpenList(string path)
     {

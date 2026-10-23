@@ -157,6 +157,10 @@ and `_meta.gen` records the effective values. The full table, the layout and the
   `--fw-pasters` (6,000,000) and `--fw-dense-headers` (200).
 - **Not scaled:** `--fw-big-mb` (24, 20–2000), `--fw-chain-max` (40, 2–10,000) and `--fw-db-paths` (`absolute` or
   `relative`).
+- **The work carve** (`--fw-work`): `--fw-work-defines` (18,900,000), `--fw-work-pasters` (5,000) and
+  `--fw-work-forwarders` (15,000) scale; `--fw-work-depth` (6), `--fw-work-growth` (9), `--fw-work-keep-pct` (4),
+  `--fw-work-decoy-pct` (16) and `--fw-work-half-pct` (20) do not. Each `--fw-work-*` knob is refused without
+  `--fw-work`.
 
 ## Presets
 
@@ -174,6 +178,7 @@ and `_meta.gen` records the effective values. The full table, the layout and the
 | `--preset pathological-symbols` | `--pathological-symbols 50` (noise off) | Symbol-extractor cost + honest-miss (`expectedMiss`) correctness. |
 | `--preset dup-content` | `--dup-groups 200 --dup-copies 4` (noise off) | Content-hash dedup / posting-collapse (`dupGroups`). |
 | `--preset firmware` | `--firmware` (noise off) | The firmware corpus and its header-carve truth (~10 GB at 1x, estimated; `--scale 0.01` is 0.16 GB). |
+| `--preset firmware-work` | `--firmware --fw-work --fw-families 192 --fw-pasters 20000 --fw-files 400 --fw-big-headers 1 --fw-dense-headers 0` (noise off) | The work-shaped carve at `--scale` (cross-call decoys, pass growth) plus a small fixed correctness part. |
 
 Your own knobs after a `--preset` override it (e.g. `--preset death --giant-headers 4`).
 

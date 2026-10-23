@@ -90,6 +90,9 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     [InlineData("--firmware", "--fw-big-headers", "0")]
     [InlineData("--firmware", "--fw-chain-max", "1")]
     [InlineData("--firmware", "--fw-db-paths", "sideways")]
+    [InlineData("--firmware", "--fw-work-defines", "10")]                 // a work knob with the work carve off
+    [InlineData("--firmware", "--fw-work", "--fw-work-keep-pct", "50", "--fw-work-decoy-pct", "40")]   // past 100%
+    [InlineData("--firmware", "--fw-work", "--fw-work-growth", "1")]
     public void BadKnobs_AreRefused(params string[] args) =>
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(["--out", "x", .. args]));
 
@@ -100,6 +103,18 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.True(o.Firmware);
         Assert.Equal((400, 38_000, 1_000_000, 6_000_000, 200, 24, 40, "absolute"),
             (o.FwBigHeaders, o.FwFiles, o.FwFamilies, o.FwPasters, o.FwDenseHeaders, o.FwBigMb, o.FwChainMax, o.FwDbPaths));
+    }
+
+    [Fact]
+    public void Preset_FirmwareWork_IsASmallFixedCorrectnessPartPlusTheScaledWork()
+    {
+        var o = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "firmware-work"])]);
+        Assert.True(o.Firmware && o.FwWork);
+        Assert.Equal((1, 400, 192, 20_000, 0), (o.FwBigHeaders, o.FwFiles, o.FwFamilies, o.FwPasters, o.FwDenseHeaders));
+        Assert.Equal(1, o.Eff("fw-big-headers", o.FwBigHeaders, keepOne: true));
+        o.Scale = 0.1;
+        Assert.Equal((1_890_000, 500, 1_500), (o.Eff("fw-work-defines", o.FwWorkDefines), o.Eff("fw-work-pasters", o.FwWorkPasters),
+            o.Eff("fw-work-forwarders", o.FwWorkForwarders)));
     }
 
     [Fact]
@@ -271,6 +286,55 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             """[{"directory": ".", "arguments": ["cc", "-I", "fw", "-c", "fw/u.c"], "file": "fw/u.c"}]""");
         Directory.CreateDirectory(Path.Combine(root, "lists"));
         return FwSpec.Compute(root, Path.Combine(root, "lists"), checkAlphabet: true);
+    }
+
+    // ---------- the work carve ----------
+
+    [Fact]
+    public void Work_CountsAreRecountedByVerify_DecoysDrop_ExactAndMacrosKeep()
+    {
+        // the shared corpus has no work carve
+        Assert.False(Directory.Exists(Path.Combine(_c.Path, FwSpec.FwDir, FwWork.Dir)));
+        Assert.False(Manifest(_c.Path)["firmware"]!.AsObject().ContainsKey("work"));
+
+        using var tmp = new TempDir();
+        string c = Gen(tmp.Path, "w",
+            "--firmware", "--fw-big-headers", "1", "--fw-files", "40", "--fw-families", "64", "--fw-pasters", "200",
+            "--fw-dense-headers", "0", "--fw-work", "--fw-work-defines", "40000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180");
+        var (code, err) = Verify(c);
+        Assert.True(code == 0, err);
+
+        var w = Manifest(c)["firmware"]!["work"]!;
+        long L(string k) => w[k]!.GetValue<long>();
+        var levels = w["byLevel"]!.AsArray().Select(x => x!["uses"]!.GetValue<long>()).ToArray();
+        Assert.Equal(6, L("levels"));
+        Assert.Equal(7, L("expectedPasses"));
+        Assert.Equal(8 * levels[0], levels[1]);                      // pieces x9 from pass 1 to pass 2
+        Assert.Equal(levels.Sum(), L("exactKept"));
+        Assert.Equal(L("exactKept") + L("crossDecoys"), L("keptUnderGlobalPools"));
+        Assert.True(L("exactKept") + L("crossDecoys") + L("halfDecoys") + L("filler") >= L("defines"));   // + padding filler
+        Assert.Equal(L("exactKept"), w["uses"]!.AsObject().Sum(kv => kv.Value!.GetValue<long>()));
+        Assert.True(L("crossDecoys") > 0 && L("halfDecoys") > 0 && L("forwarders") > 0);
+
+        var keep = List(c, "main", "mustKeepDefines");
+        var drop = List(c, "main", "mustDropDefines");
+        Assert.Equal(L("pasters"), keep.Count(n => n.StartsWith("WRP", StringComparison.Ordinal)));
+        Assert.Equal(L("appliers"), keep.Count(n => n.StartsWith("WAP", StringComparison.Ordinal)));
+        Assert.Equal(L("crossDecoys"), drop.Count(n => FwWork.Classify(n) == "cross"));
+        foreach (var row in File.ReadAllLines(Path.Combine(c, FirmwareEmitter.CasesPath)).Where(r => r.Contains("\twork-")))
+        {
+            string n = row.Split('\t')[0];
+            Assert.True(row.Contains("work-exact") ? keep.Contains(n) : drop.Contains(n), row);
+        }
+
+        // a wrong work count fails verify
+        var m = Manifest(c);
+        m["firmware"]!["work"]!["crossDecoys"] = L("crossDecoys") + 1;
+        string mp = Path.Combine(tmp.Path, "m.json");
+        File.WriteAllText(mp, m.ToJsonString());
+        var (code2, err2) = Verify(c, mp);
+        Assert.True(code2 == 1, err2);
+        Assert.Contains("work.crossDecoys", err2);
     }
 
     [Fact]
