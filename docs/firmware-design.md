@@ -212,10 +212,10 @@ With the defaults, 4% of the work defines are kept, and 20% would be kept under 
 
 ```json
 "work": { "dir": "fw/work", "headers": 3, "defines": 945000, "exactKept": 37785, "crossDecoys": 151200,
-          "halfDecoys": 189000, "filler": …, "keptUnderGlobalPools": 188985, "pasters": 250, "forwarders": 750,
-          "appliers": 6, "uses": { "direct": …, "forwarded": …, "higherOrder": … }, "levels": 6, "expectedPasses": 7,
+          "halfDecoys": 189000, "filler": 567015, "keptUnderGlobalPools": 188985, "pasters": 250, "forwarders": 750,
+          "appliers": 6, "uses": { "direct": 18905, "forwarded": 13216, "higherOrder": 5664 }, "levels": 6, "expectedPasses": 7,
           "byLevel": [{ "level": 0, "uses": 2290, "startPieces": 2290, "endPieces": 2290, "piecesSoFar": 2290,
-                        "crossDecoysLiveSoFar": … }, …] }
+                        "crossDecoysLiveSoFar": 8980 }, …] }
 ```
 
 - **`exactKept`** is the must-keep work defines (one per use). `pasters`, `forwarders` and `appliers` are the must-keep
@@ -225,6 +225,14 @@ With the defaults, 4% of the work defines are kept, and 20% would be kept under 
   reached. `crossDecoysLiveSoFar` is the cross decoys whose two pieces are both seeded by then (what global pools
   keep after that pass).
 - The correctness part also seeds pieces, so at small scales pass 1→2 growth is a little under ×9.
+
+Measured on the 1.4.6 release exe (`--preset firmware-work`), on an otherwise idle machine:
+
+| Scale | Size | Work headers | Work defines | Exact kept / under global pools | Gen | Verify | Peak memory |
+|---|---|---|---|---|---|---|---|
+| 0.05 | 0.17 GB | 3 | 945,000 | 37,785 / 188,985 | 12 s | 11 s | ~300 MB |
+| 0.075 | 0.22 GB | 4 | 1,417,500 | 56,694 / 283,494 | 16 s | 14 s | ~420 MB |
+| 0.1 | 0.27 GB | 6 | 1,890,000 | 75,586 / 377,986 | 20 s | 18 s | ~460 MB |
 
 ## Verify
 
