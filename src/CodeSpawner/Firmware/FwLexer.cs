@@ -24,15 +24,32 @@ internal static class FwLexer
     private static bool IsDigit(byte b) => (uint)(b - '0') < 10;
     private static bool IsSpace(byte b) => b == ' ' || b == '\t' || b == '\f' || b == '\v' || b == '\r';
 
-    /// <summary>The offset just past a directive's leading <c>#</c> (or the digraph <c>%:</c>), leading blanks skipped;
-    /// -1 if the line is no directive.</summary>
+    /// <summary>The offset just past a directive's leading <c>#</c> (or the digraph <c>%:</c>) and the blanks after
+    /// it, leading blanks skipped; -1 if the line is no directive. A closed block comment counts as a blank.</summary>
     public static int DirectiveStart(ReadOnlySpan<byte> s)
     {
-        int i = 0;
-        while (i < s.Length && IsSpace(s[i])) i++;
-        if (i < s.Length && s[i] == '#') return i + 1;
-        if (i + 1 < s.Length && s[i] == '%' && s[i + 1] == ':') return i + 2;
+        int i = SkipGap(s, 0);
+        if (i < s.Length && s[i] == '#') return SkipGap(s, i + 1);
+        if (i + 1 < s.Length && s[i] == '%' && s[i + 1] == ':') return SkipGap(s, i + 2);
         return -1;
+    }
+
+    /// <summary>Past blanks and closed block comments from <paramref name="i"/>.</summary>
+    public static int SkipGap(ReadOnlySpan<byte> s, int i)
+    {
+        while (i < s.Length)
+        {
+            if (IsSpace(s[i])) { i++; continue; }
+            if (i + 1 < s.Length && s[i] == '/' && s[i + 1] == '*')
+            {
+                int e = s[(i + 2)..].IndexOf("*/"u8);
+                if (e < 0) return i;
+                i += 2 + e + 2;
+                continue;
+            }
+            break;
+        }
+        return i;
     }
 
     /// <summary>
@@ -215,7 +232,7 @@ internal static class FwLexer
 }
 
 /// <summary>Kind of a logical line.</summary>
-internal enum LineKind : byte { Text, Define, Cond, Else, EndIf, OtherDirective }
+internal enum LineKind : byte { Text, Define, Cond, Elif, Else, EndIf, OtherDirective }
 
 /// <summary>
 /// Walks a file's logical lines. A logical line is physical lines joined while one ends in <c>\</c> (before its
@@ -297,7 +314,8 @@ internal ref struct LineWalker
         var w = s[st..i];
         if (w.SequenceEqual("define"u8)) return LineKind.Define;
         if (w.SequenceEqual("if"u8) || w.SequenceEqual("ifdef"u8) || w.SequenceEqual("ifndef"u8)) return LineKind.Cond;
-        if (w.SequenceEqual("elif"u8) || w.SequenceEqual("else"u8)) return LineKind.Else;
+        if (w.SequenceEqual("elif"u8)) return LineKind.Elif;
+        if (w.SequenceEqual("else"u8)) return LineKind.Else;
         if (w.SequenceEqual("endif"u8)) return LineKind.EndIf;
         return LineKind.OtherDirective;
     }

@@ -5,11 +5,16 @@ namespace CodeSpawner.Firmware;
 /// that spans lines and conditional directives, and reports each paste use with its arguments, each literal chain,
 /// and which names are called and named. One tracker is one stream for one run; a define body is its own stream,
 /// where a call or chain holding one of the define's parameters is a template (built when the define is used).
+/// Conditional branches are followed as paths: each branch continues from the state at its <c>#if</c>, and after
+/// <c>#endif</c> every branch's end state goes on (the union of the branches).
 /// </summary>
 internal sealed class Tracker : ITokenSink
 {
     // One token of the stream as a ## operand: a name id, a parameter, or anything else.
     private const int OpParam = -2, OpOther = -1;
+
+    /// <summary>Paths past this many (a call open across many nested branches) are dropped, the first kept.</summary>
+    public const int MaxPaths = 16;
 
     private sealed class Frame
     {
@@ -17,25 +22,57 @@ internal sealed class Tracker : ITokenSink
         public int Open;                          // its ( in the buffer
         public bool Marked, Computed, Crossed, Template;
         public int Depth;                         // parentheses open inside the current argument
+        public int[]? Heads;                      // computed: the names the use before it can end in
         public Frame Clone() => (Frame)MemberwiseClone();
+
+        public bool Same(Frame o) => Callee == o.Callee && Open == o.Open && Marked == o.Marked && Computed == o.Computed &&
+                                     Crossed == o.Crossed && Template == o.Template && Depth == o.Depth && ReferenceEquals(Heads, o.Heads);
     }
 
-    private sealed class State
+    /// <summary>One path through the conditionals: its open calls, their tokens, and what the last token left.</summary>
+    private sealed class Path
     {
-        public readonly List<Frame> Frames = new();
-        public int BufLen;
+        public List<Frame> Frames = new();
+        public List<XTok> Buf = new();            // the tokens since the outermost open call
+        public int Pending = OpOther;             // an identifier not yet known to be called (a name id or OpParam)
+        public bool HasPending;
         public bool LastClosedUse;
+        public int[]? LastHeads;                  // the closed use's exact end names
+
+        public Path Clone()
+        {
+            var p = new Path { Buf = new List<XTok>(Buf), Pending = Pending, HasPending = HasPending, LastClosedUse = LastClosedUse, LastHeads = LastHeads };
+            foreach (var f in Frames) p.Frames.Add(f.Clone());
+            return p;
+        }
+
+        public bool Idle => Frames.Count == 0 && !HasPending && !LastClosedUse;
+
+        public bool Same(Path o)
+        {
+            if (Frames.Count != o.Frames.Count || Buf.Count != o.Buf.Count || HasPending != o.HasPending ||
+                (HasPending && Pending != o.Pending) || LastClosedUse != o.LastClosedUse || !ReferenceEquals(LastHeads, o.LastHeads)) return false;
+            for (int i = 0; i < Frames.Count; i++) if (!Frames[i].Same(o.Frames[i])) return false;
+            for (int i = 0; i < Buf.Count; i++)
+                if (Buf[i].K != o.Buf[i].K || Buf[i].Id != o.Buf[i].Id || Buf[i].Exp != o.Buf[i].Exp) return false;
+            return true;
+        }
+    }
+
+    private sealed class Cond
+    {
+        public List<Path> Start = new();          // the paths at the #if
+        public readonly List<Path> Parked = new();   // the earlier branches' end paths
+        public bool SawElse;
     }
 
     private readonly FwSpec _a;
     private readonly int _run;
-    private readonly bool _commitAtEof, _marks;
+    private readonly bool _commitAtEof, _marks, _named;
     private DefineParse? _params;
-    private List<Frame> _frames = new();
-    private readonly List<State> _conds = new();
-    private readonly List<XTok> _buf = new();     // the tokens since the outermost open call
-    private int _pending = OpOther;               // an identifier not yet known to be called (a name id or OpParam)
-    private bool _hasPending, _lastClosedUse;
+    private List<Path> _paths = new() { new Path() };
+    private Path _p = null!;
+    private readonly List<Cond> _conds = new();
     private readonly IntList _chain = new();      // the ## chain being read: its operands
     private bool _afterHash;
     private int _last = OpOther;                  // the previous token as a ## operand
@@ -43,26 +80,27 @@ internal sealed class Tracker : ITokenSink
 
     /// <param name="commitAtEof">Calls open at the end are used, their missing arguments wildcards (the shadow
     /// lexing, where comments and strings are tokens).</param>
-    public Tracker(FwSpec a, int run, bool commitAtEof)
+    /// <param name="named">A name outside any call is named (false: an <c>#if</c> condition, which only calls).</param>
+    public Tracker(FwSpec a, int run, bool commitAtEof, bool named = true)
     {
         _a = a;
         _run = run;
         _commitAtEof = commitAtEof;
         _marks = !commitAtEof;   // comments and strings never call or name
+        _named = named;
     }
 
     /// <summary>Starts a new stream; <paramref name="defineParams"/> is the define whose body this is, if any.</summary>
     public void Begin(DefineParse? defineParams)
     {
         _params = defineParams;
-        _frames.Clear();
+        _paths = new List<Path> { new Path() };
         _conds.Clear();
-        _buf.Clear();
-        _hasPending = _lastClosedUse = _afterHash = _hasLast = false;
+        _afterHash = _hasLast = false;
         _chain.Count = 0;
     }
 
-    private Frame? Top => _frames.Count > 0 ? _frames[^1] : null;
+    private Frame? Top => _p.Frames.Count > 0 ? _p.Frames[^1] : null;
 
     private int Operand(Tok kind, ReadOnlySpan<byte> text)
     {
@@ -73,7 +111,7 @@ internal sealed class Tracker : ITokenSink
 
     private void Buf(XTok t)
     {
-        if (_frames.Count > 0) _buf.Add(t);
+        if (_p.Frames.Count > 0) _p.Buf.Add(t);
     }
 
     private static XTok AsTok(Tok kind, int op) => kind switch
@@ -95,9 +133,13 @@ internal sealed class Tracker : ITokenSink
                 if (_chain.Count == 0) _chain.Add(_hasLast ? _last : OpOther);
                 _afterHash = true;
             }
-            FinalizePending();
-            Buf(new XTok(XTok.Other));
-            _lastClosedUse = false;
+            foreach (var p in _paths)
+            {
+                _p = p;
+                FinalizePending();
+                Buf(new XTok(XTok.Other));
+                p.LastClosedUse = false;
+            }
             return;
         }
         int op = Operand(kind, text);
@@ -105,65 +147,75 @@ internal sealed class Tracker : ITokenSink
         else FlushChain();
         _last = op;
         _hasLast = true;
+        foreach (var p in _paths)
+        {
+            _p = p;
+            Step(kind, op);
+        }
+    }
 
+    private void Step(Tok kind, int op)
+    {
+        var p = _p;
         if (kind == Tok.Ident)
         {
             FinalizePending();
             Buf(AsTok(kind, op));
-            _pending = op;
-            _hasPending = true;
-            _lastClosedUse = false;
+            p.Pending = op;
+            p.HasPending = true;
+            p.LastClosedUse = false;
             return;
         }
         switch (kind)
         {
             case Tok.LParen:
-                if (_hasPending)
+                if (p.HasPending)
                 {
-                    int callee = _pending;
-                    _hasPending = false;
+                    int callee = p.Pending;
+                    p.HasPending = false;
                     if (callee >= 0 && _marks) _a.Called(callee);
-                    _buf.Add(new XTok(XTok.LParen));
-                    _frames.Add(new Frame { Callee = callee >= 0 ? callee : -1, Open = _buf.Count - 1, Template = callee == OpParam });
+                    p.Buf.Add(new XTok(XTok.LParen));
+                    p.Frames.Add(new Frame { Callee = callee >= 0 ? callee : -1, Open = p.Buf.Count - 1, Template = callee == OpParam });
                 }
-                else if (_lastClosedUse)
+                else if (p.LastClosedUse)
                 {
-                    _buf.Add(new XTok(XTok.LParen));
-                    _frames.Add(new Frame { Computed = true, Open = _buf.Count - 1 });
+                    p.Buf.Add(new XTok(XTok.LParen));
+                    p.Frames.Add(new Frame { Computed = true, Open = p.Buf.Count - 1, Heads = p.LastHeads });
                 }
-                else if (Top is { } t) { t.Depth++; _buf.Add(new XTok(XTok.LParen)); }
-                _lastClosedUse = false;
+                else if (Top is { } t) { t.Depth++; p.Buf.Add(new XTok(XTok.LParen)); }
+                p.LastClosedUse = false;
                 break;
             case Tok.RParen:
                 FinalizePending();
-                _lastClosedUse = false;
-                if (_frames.Count == 0) break;
-                var top = _frames[^1];
-                _buf.Add(new XTok(XTok.RParen));
+                p.LastClosedUse = false;
+                if (p.Frames.Count == 0) break;
+                var top = p.Frames[^1];
+                p.Buf.Add(new XTok(XTok.RParen));
                 if (top.Depth > 0) { top.Depth--; break; }
-                _lastClosedUse = Close(_buf.Count - 1, eof: false);
+                p.LastClosedUse = Close(p.Buf.Count - 1, eof: false);
                 break;
             default:
                 FinalizePending();
                 Buf(AsTok(kind, op));
-                _lastClosedUse = false;
+                p.LastClosedUse = false;
                 break;
         }
     }
 
-    // An identifier that was not called: inside a call it is passed (a paste macro passed marks the call), outside
-    // one it is named.
+    // An identifier that was not called: inside a call it is passed (a paste macro passed marks the call and every
+    // call around it), outside one it is named.
     private void FinalizePending()
     {
-        if (!_hasPending) return;
-        _hasPending = false;
-        if (_pending < 0) return;
-        if (Top is { } t)
+        if (!_p.HasPending) return;
+        _p.HasPending = false;
+        int id = _p.Pending;
+        if (id < 0) return;
+        if (_p.Frames.Count > 0)
         {
-            if (_marks) _a.Called(_pending);
-            if (_a.IsPaster(_pending, _run)) t.Marked = true;
+            if (_marks) _a.Called(id);
+            if (_a.IsPaster(id, _run)) foreach (var f in _p.Frames) f.Marked = true;
         }
-        else if (_marks) _a.Named(_pending, _run);
+        else if (_marks && _named) _a.Named(id, _run);
     }
 
     // A chain with no parameter builds its literal name; one with a parameter is a template.
@@ -181,21 +233,21 @@ internal sealed class Tracker : ITokenSink
     /// higher-order use, or a computed or crossed one with its own pool. True if it was a use.</summary>
     private bool Close(int close, bool eof)
     {
-        var f = _frames[^1];
-        _frames.RemoveAt(_frames.Count - 1);
+        var p = _p;
+        var f = p.Frames[^1];
+        p.Frames.RemoveAt(p.Frames.Count - 1);
         bool use = f.Computed || (f.Callee >= 0 && (f.Marked || _a.IsPaster(f.Callee, _run)));
+        p.LastHeads = null;
         if (use && !f.Template)
         {
-            var inner = _buf.GetRange(f.Open + 1, close - f.Open - 1);
+            var inner = p.Buf.GetRange(f.Open + 1, close - f.Open - 1);
             bool template = false;
             foreach (var t in inner) if (t.K == XTok.Param) { template = true; break; }
-            if (!template) _a.Use(_run, f.Callee, Split(inner), pool: f.Computed || f.Crossed, eof);
+            if (!template) p.LastHeads = _a.Use(_run, f.Callee, Split(inner), pool: f.Computed || f.Crossed, eof, f.Heads);
         }
-        if (_frames.Count == 0) _buf.RemoveRange(Floor, _buf.Count - Floor);
+        if (p.Frames.Count == 0) p.Buf.Clear();
         return use;
     }
-
-    private int Floor => _conds.Count > 0 ? Math.Min(_conds[^1].BufLen, _buf.Count) : 0;
 
     private static List<XTok>[] Split(List<XTok> inner)
     {
@@ -211,60 +263,101 @@ internal sealed class Tracker : ITokenSink
         return args.ToArray();
     }
 
-    /// <summary>A conditional directive: <c>#if</c>-family opens, <c>#elif</c>/<c>#else</c> restarts from the
-    /// state at the <c>#if</c>, <c>#endif</c> continues from the last branch. A call open across one is used with
-    /// its own pool.</summary>
+    /// <summary>A conditional directive. <c>#if</c>-family opens; <c>#elif</c>/<c>#else</c> parks the branch's
+    /// paths and restarts from the state at the <c>#if</c>; <c>#endif</c> goes on with every branch's paths (and
+    /// the <c>#if</c>'s own when there was no <c>#else</c>). A call open across one is used with its own pool too.</summary>
     public void Directive(LineKind kind)
     {
-        FinalizePending();
         FlushChain();
         _afterHash = _hasLast = false;
-        foreach (var f in _frames) f.Crossed = true;
+        foreach (var p in _paths)
+        {
+            foreach (var f in p.Frames) f.Crossed = true;
+            // gcc and clang look for a macro's ( across a directive only while reading a call's arguments; max
+            // looks across one anywhere (names a carver may keep: open)
+            if (p.Frames.Count > 0 || _run == 1) continue;
+            _p = p;
+            FinalizePending();
+            p.LastClosedUse = false;
+        }
         switch (kind)
         {
             case LineKind.Cond:
-                _conds.Add(Snapshot());
+                _conds.Add(new Cond { Start = Clones(_paths) });
                 break;
+            case LineKind.Elif:
             case LineKind.Else:
-                if (_conds.Count > 0) Restore(_conds[^1]);
+                if (_conds.Count == 0) break;
+                var c = _conds[^1];
+                if (c.SawElse) break;   // a branch after #else is never taken
+                c.Parked.AddRange(_paths);
+                _paths = Clones(c.Start);
+                if (kind == LineKind.Else) c.SawElse = true;
                 break;
             case LineKind.EndIf:
-                if (_conds.Count > 0) _conds.RemoveAt(_conds.Count - 1);
+                if (_conds.Count == 0) break;
+                var e = _conds[^1];
+                _conds.RemoveAt(_conds.Count - 1);
+                var all = new List<Path>(e.Parked);
+                all.AddRange(_paths);
+                if (!e.SawElse) all.AddRange(e.Start);
+                _paths = Distinct(all);
                 break;
         }
     }
 
-    private State Snapshot()
+    private static List<Path> Clones(List<Path> ps)
     {
-        var s = new State { LastClosedUse = _lastClosedUse, BufLen = _buf.Count };
-        foreach (var f in _frames) s.Frames.Add(f.Clone());
-        return s;
+        var l = new List<Path>(ps.Count);
+        foreach (var p in ps) l.Add(p.Clone());
+        return l;
     }
 
-    private void Restore(State s)
+    private static List<Path> Distinct(List<Path> all)
     {
-        _frames = new List<Frame>(s.Frames.Count);
-        foreach (var f in s.Frames) _frames.Add(f.Clone());
-        if (_buf.Count > s.BufLen) _buf.RemoveRange(s.BufLen, _buf.Count - s.BufLen);
-        _lastClosedUse = s.LastClosedUse;
+        var l = new List<Path>();
+        bool idle = false;
+        foreach (var p in all)
+        {
+            if (p.Idle)
+            {
+                // idle paths differ in nothing that is still to come
+                if (idle) continue;
+                idle = true;
+                l.Add(p);
+                continue;
+            }
+            bool dup = false;
+            foreach (var q in l) if (q.Same(p)) { dup = true; break; }
+            if (!dup) l.Add(p);
+            if (l.Count == MaxPaths) break;
+        }
+        return l;
     }
 
-    /// <summary>End of the stream: open calls are dropped, or (commit) closed top-down. An object-like body's last
+    /// <summary>End of the stream: open calls are dropped, or (commit) closed top-down. A define body's last
     /// identifier is called (an alias).</summary>
     public void End()
     {
-        if (_hasPending && _frames.Count == 0 && _params is { IsFunc: false })
+        foreach (var p in _paths)
         {
-            _hasPending = false;
-            if (_pending >= 0 && _marks) _a.Called(_pending);
+            _p = p;
+            if (p.HasPending && p.Frames.Count == 0 && _params is not null)
+            {
+                p.HasPending = false;
+                if (p.Pending >= 0 && _marks) _a.Called(p.Pending);
+            }
+            FinalizePending();
         }
-        FinalizePending();
         FlushChain();
         if (_commitAtEof)
-            while (_frames.Count > 0) Close(_buf.Count, eof: true);
-        _frames.Clear();
+            foreach (var p in _paths)
+            {
+                _p = p;
+                while (p.Frames.Count > 0) Close(p.Buf.Count, eof: true);
+            }
+        _paths = new List<Path> { new Path() };
         _conds.Clear();
-        _buf.Clear();
         _params = null;
     }
 }

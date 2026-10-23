@@ -425,7 +425,8 @@ internal sealed partial class FwSpec
     {
         if (d.PastesParam()) _directPasters.Add((name, mask));
         var body = d.Body;
-        bool alias = !d.IsFunc && body.Count > 0 && body[^1].Kind == Tok.Ident;
+        // a body ending in a name (object-like, or function-like with no call: `PICK(x) CAT`) is an alias of it
+        bool alias = body.Count > 0 && body[^1].Kind == Tok.Ident && !(d.IsFunc && d.IsParam(d.Text(body.Count - 1)));
         // A function-like body with a call forwards to every identifier in it: a paste macro it names without a call
         // (`APPLY2(CAT, a)`) is reached through the call.
         if (d.IsFunc && body.Any(t => t.Kind == Tok.LParen))
@@ -522,13 +523,23 @@ internal sealed partial class FwSpec
     private sealed class Streams : ITokenSink
     {
         private readonly Tracker? _min0, _min1, _shadow;
+        private readonly CondSink? _cond;
 
         public Streams(FwSpec a, int runs)
         {
+            _cond = new CondSink(new Streams((runs & 1) != 0 ? new Tracker(a, 0, commitAtEof: false, named: false) : null,
+                                             (runs & 2) != 0 ? new Tracker(a, 1, commitAtEof: false, named: false) : null));
             if ((runs & 1) != 0) _min0 = new Tracker(a, 0, commitAtEof: false);
             if ((runs & 2) == 0) return;
             _min1 = new Tracker(a, 1, commitAtEof: false);
             _shadow = new Tracker(a, 1, commitAtEof: true);
+        }
+
+        // an #if condition's stream: min lexing, nothing named
+        private Streams(Tracker? min0, Tracker? min1)
+        {
+            _min0 = min0;
+            _min1 = min1;
         }
 
         public void Token(Tok kind, ReadOnlySpan<byte> text)
@@ -546,6 +557,49 @@ internal sealed partial class FwSpec
             bool ib = startsInComment;
             FwLexer.Lex(s, ref ib, false, this);
             if (_shadow is not null) FwLexer.Lex(s, ref ib, true, _shadow);
+        }
+
+        /// <summary>An <c>#if</c>/<c>#elif</c> line: its condition is a stream of its own, where a paste macro
+        /// called builds (<c>defined X</c> is no call).</summary>
+        public void Condition(ReadOnlySpan<byte> line)
+        {
+            if (_cond is null) return;
+            int i = FwLexer.DirectiveStart(line);
+            int st = i;
+            while (i < line.Length && FwLexer.IsIdChar(line[i])) i++;
+            var w = line[st..i];
+            if (!w.SequenceEqual("if"u8) && !w.SequenceEqual("elif"u8)) return;
+            var s = _cond.S;
+            s.Begin(null);
+            _cond.Reset();
+            bool ib = false;
+            FwLexer.Lex(line[i..], ref ib, false, _cond);
+            s.End();
+        }
+    }
+
+    /// <summary>Passes a condition's tokens on, without <c>defined X</c> and <c>defined ( X )</c>.</summary>
+    private sealed class CondSink : ITokenSink
+    {
+        public readonly Streams S;
+        private int _state;   // 1: after defined, 2: after defined (, 3: after defined ( X
+
+        public CondSink(Streams s) => S = s;
+
+        public void Reset() => _state = 0;
+
+        public void Token(Tok kind, ReadOnlySpan<byte> text)
+        {
+            switch (_state)
+            {
+                case 1 when kind == Tok.LParen: _state = 2; return;
+                case 1 when kind == Tok.Ident: _state = 0; return;
+                case 2 when kind == Tok.Ident: _state = 3; return;
+                case 3 when kind == Tok.RParen: _state = 0; return;
+            }
+            _state = 0;
+            if (kind == Tok.Ident && text.SequenceEqual("defined"u8)) { _state = 1; return; }
+            S.Token(kind, text);
         }
     }
 
@@ -630,6 +684,10 @@ internal sealed partial class FwSpec
         switch (w.Kind)
         {
             case LineKind.Cond:
+            case LineKind.Elif:
+                main.Directive(w.Kind);
+                main.Condition(w.Spliced);
+                return;
             case LineKind.Else:
             case LineKind.EndIf:
                 main.Directive(w.Kind);

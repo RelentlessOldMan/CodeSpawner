@@ -38,7 +38,7 @@ internal static class FirmwareEmitter
     /// under the dense floor.</summary>
     public const long BoundaryBig = FwSpec.MaxParseBytes + 1, BoundaryTable = FwSpec.MaxParseBytes, BoundarySmall = FwLexer.DenseMinBytes - 1;
     private const long BigSrcBytes = 21_000_000, DenseBytes = 1_100_000;
-    private const int Kinds = 32, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
+    private const int Kinds = 42, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
 
     private static readonly string[] KindNames =
     [
@@ -47,10 +47,12 @@ internal static class FirmwareEmitter
         "redefinition", "kept-header-body", "comment-call-open", "string-call-open", "numeric-object", "call-arg",
         "nested-call-edge", "number-suffix", "empty-edge", "call-edge", "digraph", "higher-order-forwarder",
         "use-pairs", "uncalled-wildcard", "expanded-arg", "empty-expansion", "empty-arg", "higher-order-pairs",
+        "comma-expansion", "split-arg", "body-alias", "open-body-call", "branch-paren-in-args", "branch-paren-top",
+        "if-condition", "nested-callee", "computed-head", "comment-hash",
     ];
 
     // Kinds whose big-header text is define lines only, so a dense header can host them.
-    private static bool PureDefines(int kind) => kind is 0 or 1 or 2 or 5 or 7 or 8 or 10 or 13 or >= 18;
+    private static bool PureDefines(int kind) => kind is 0 or 1 or 2 or 5 or 7 or 8 or 10 or 13 or (>= 18 and not 41);
 
     private sealed class Plan
     {
@@ -256,6 +258,15 @@ internal static class FirmwareEmitter
             #define PCAT(a, b) a##b
             #define KAPPLY(m, a, b) m(a, b)
             #define KHWP(blk, n) KHWB_##blk##_r##n##_VAL
+            #define KID(x) x
+            #define KFST(a, b) a
+            #define KGP_(p, n) p##_##n
+            #define KPORT(x) KGP_(x)
+            #define KCALL(m, ...) m(__VA_ARGS__)
+            int kcat(int, int);
+            int kfst(int, int);
+            #define kcat(a, b) a##b
+            #define kfst(a, b) a
             #define FW_ON 1
 
             """);
@@ -331,6 +342,16 @@ internal static class FirmwareEmitter
             case 29: sb.Append($"#define KEN{f}N\n#define KEO{f}X_ {v}\n"); break;
             case 30: sb.Append($"#define KEM{f}X_ {v}\n"); break;
             case 31: sb.Append($"#define ZHQ{f}X_5 {v}\n#define KHR{f}X_QZ 1\n#define ZHQ{f}X_QZ 1\n"); break;
+            case 32: sb.Append($"#define KPL{f}X KPA{f}X, 5\n#define KPA{f}X_5 {v}\n#define KCM{f}X KCN{f}X_, 3\n#define KCN{f}X_3 1\n"); break;
+            case 33: sb.Append($"#define ZSX{f}M(b) ZSX{f}_##b##_QZ\n#define ZSX{f}_KA {v} +\n#define KB{f}_QZ 1\n#define ZSX{f}_KA_QZ 1\n"); break;
+            case 34: sb.Append($"#define KPK{f}M(x) CAT\n#define KPK{f}X_1 {v}\n"); break;
+            case 35: sb.Append($"#define KOF{f}M(x) CAT(x,\n#define YOF{f}_RY {v}\n"); break;
+            case 36: sb.Append($"#define KBR{f}X_7 {v}\n#define KBR{f}X_8 1\n#define KBE{f}X_9 1\n#define KBE{f}X_ 1\n"); break;
+            case 37: sb.Append($"#define YBT{f}_KAY{f}Y {v}\n#define YBT{f}_KBY{f}Y 1\n#define YBF{f}_KCY{f}Y 1\n#define YBT{f}_ 1\n#define YBF{f}_ 1\n#define KAY{f}Y 1\n#define KBY{f}Y 1\n#define KCY{f}Y 1\n"); break;
+            case 38: sb.Append($"#define KIC{f}X_1 {v}\n"); break;
+            case 39: sb.Append($"#define KNC{f}X_7 {v}\n"); break;
+            case 40: sb.Append($"#define KGC{f}CAT(x) CAT\n#define KHD{f}X_7 {v}\n"); break;
+            case 41: sb.Append($"/* lead */ #define KHC{f}M(a, b) a##b\n# /* c */ define KHC{f}X_1 {v}\n"); break;
         }
     }
 
@@ -383,6 +404,17 @@ internal static class FirmwareEmitter
             29 => $"CAT(KEO{f}X_, KEN{f}N)",
             30 => $"CAT(KEM{f}X_, )",
             31 => $"KAPPLY(CAT, ZHQ{f}X_, 5) + KAPPLY(CAT, KHR{f}X_, QZ)",
+            32 => $"KPORT(KPL{f}X) + KCALL(CAT, KCM{f}X)",
+            33 => $"ZSX{f}M(KA KB{f})",
+            34 => $"KPK{f}M(0)(KPK{f}X_, 1)",
+            35 => $"KOF{f}M(YOF{f}_) RY)",
+            // gcc and clang look past a directive for a macro's ( inside a call's arguments (kept), not at top level (open)
+            36 => $"KID(CAT\n#ifdef FW_ALT\n\t\t(KBR{f}X_, 7)\n#else\n\t\t(KBR{f}X_, 8)\n#endif\n\t\t) + KID(\n#ifdef FW_ALT\n\t\tCAT\n#else\n\t\tKFST\n#endif\n\t\t(KBE{f}X_, 9))",
+            // kcat and kfst are functions too, so the uncalled text compiles
+            37 => $"kcat\n#ifdef FW_ALT\n\t\t(YBT{f}_, KAY{f}Y)\n#else\n\t\t(YBT{f}_, KBY{f}Y)\n#endif\n\t\t+\n#ifdef FW_ALT\n\t\tkcat\n#else\n\t\tkfst\n#endif\n\t\t(YBF{f}_, KCY{f}Y)",
+            39 => $"KAPPLY(KID(CAT), KNC{f}X_, 7)",
+            40 => $"CAT(KGC{f}, CAT)(0)(KHD{f}X_, 7)",
+            41 => $"KHC{f}M(KHC{f}X_, 1)",
             _ => null,
         };
         switch (p.Kind(f))
@@ -392,6 +424,7 @@ internal static class FirmwareEmitter
             case 17: scope.Append($"const char *ys{f} = \"CAT(YS{f}Q_, 1Y)\";\n"); break;
             case 24: scope.Append($"%:define KDG{f}G(n) KDG{f}Q_%:%:n\n"); break;
             case 27: scope.Append($"#if 0\nvoid *kwg{f} = (void *)KWG{f}H;\n#endif\n"); break;
+            case 38: scope.Append($"#if CAT(KIC{f}X_, 1)\nint kic{f};\n#endif\n"); break;
         }
         if (e is not null) fn.Append($"int ff{f}(void)\n{{\n\treturn {e};\n}}\n");
     }
@@ -484,6 +517,7 @@ internal static class FirmwareEmitter
         #define KL1N0X 1
         #define KUNT0X 1
         #define KCRL0X 1
+        #define KLCR0X 1
         #define YEXU0Y 1
         #define KOS0X_VAL 1
         #define KOSH0X_VAL 1
@@ -741,6 +775,10 @@ internal static class FirmwareEmitter
         Put("misc/latin1.c", [.. A("/* caf"), 0xE9, .. A(" */\nint fw_l1 = KL1N0X;\n")], "latin1");
         Put("misc/unterminated.h", A("int fw_ut = KUNT0X;\n/* this comment never ends\n"), "unterminated-comment");
         Put("misc/crlf.h", A("/* crlf */\r\nint fw_cr = KCRL0X;\r\n"), "crlf");
+        Put("misc/hash_comment.h", A("/* lead */ #define KHCA0X 1\n# /* c */ define KHCB0X 2\nint fw_hc = KHCA0X + KHCB0X;\n"),
+            "comment-around-hash");
+        Put("misc/splice_space.h", A("#define KSPS0X \\ \n\t3\nint fw_sps = KSPS0X;\n"), "backslash-space-splice");
+        Put("misc/lone_cr.h", A("/* lone cr */\rint fw_lcr = KLCR0X;\n"), "lone-cr");
         var blob = new byte[4096];
         A("blob ZBIN0Z").CopyTo(blob, 100);   // NUL bytes from offset 0: binary, never read
         Put("misc/blob.bin", blob, "nul-early");
@@ -888,7 +926,17 @@ internal static class FirmwareEmitter
         28 => $"KXV{f}_3",
         29 => $"KEO{f}X_",
         30 => $"KEM{f}X_",
-        _ => $"ZHQ{f}X_5",
+        31 => $"ZHQ{f}X_5",
+        32 => $"KPA{f}X_5",
+        33 => $"ZSX{f}_KA",
+        34 => $"KPK{f}X_1",
+        35 => $"YOF{f}_RY",
+        36 => $"KBR{f}X_7",
+        37 => $"YBT{f}_KAY{f}Y",
+        38 => $"KIC{f}X_1",
+        39 => $"KNC{f}X_7",
+        40 => $"KHD{f}X_7",
+        _ => $"KHC{f}X_1",
     };
 
     // A name beside the target that has only one side of it, so it is dropped: a start piece with no end, or the reverse.
@@ -900,6 +948,7 @@ internal static class FirmwareEmitter
         26 => $"ZUP{f}A_S{f}_DZ",
         27 => $"ZWH{f}_Q_OFZ",
         31 => $"ZHQ{f}X_QZ",
+        33 => $"ZSX{f}_KA_QZ",
         _ => null,
     };
 }

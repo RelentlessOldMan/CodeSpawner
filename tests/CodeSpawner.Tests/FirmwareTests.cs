@@ -154,7 +154,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             Assert.True(Spelled(cols[0]) == got, $"{cols[0]} ({cols[1]}): spelled {Spelled(cols[0])}, classed {got}");
             kinds.Add(cols[1].Split(' ')[0]);
         }
-        Assert.True(kinds.Count >= 46, string.Join(", ", kinds));   // 32 family kinds, the traps, the hostile files
+        Assert.True(kinds.Count >= 56, string.Join(", ", kinds));   // 42 family kinds, the traps, the hostile files
         // a #define inside a comment is no define
         Assert.DoesNotContain("KCMT0X", keep.Concat(drop).Concat(open));
         // every class is populated; the union build of one build is the same lists
@@ -513,6 +513,112 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Contains("KCP_Q9", keep);   // the pool: a start piece and an end piece, anything between
     }
 
+
+    // ---------- 1.4.8: shapes from review round 9 (each checked against gcc -E and clang -E) ----------
+
+    [Fact]
+    public void Uses_CommasFromAnObjectLikeExpansionResplitTheArguments_AnOpenBodyCallIsOpen()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define GPIO_PORT(p, n) p##_##n\n#define PORT(x) GPIO_PORT(x)\n#define PIN_LED KGPIOA, 5\n#define KGPIOA_5 1\n" +
+            "#define CALL(m, ...) m(__VA_ARGS__)\n#define ARGS KQA, 7\n#define KQA7 1\n#define OPENF(x) CAT(x,\n#define YOPB_RY 1\n",
+            "int a = PORT(PIN_LED);\nint b = CALL(CAT, ARGS);\nint c = OPENF(YOPB_) RY);\n");
+        Assert.Empty(Bad(t));
+        var keep = Keep(tmp);
+        Assert.Contains("KGPIOA_5", keep);
+        Assert.Contains("KQA7", keep);
+        Assert.Contains("YOPB_RY", Lists(tmp, "open"));
+    }
+
+    [Fact]
+    public void Uses_AMultiTokenInteriorArgumentSplitsTheChain()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define HX(b) KX_##b##_KY\n#define KX_KA 1\n#define KB_KY 1\n#define KX_KA_KY 1\n#define KX_KB_KY 1\n",
+            "int a = HX(KA KB);\n");
+        // the crossed names start with K, so the alphabet wants them kept
+        Assert.Empty(Bad(t).Where(e => !e.StartsWith("KX_K", StringComparison.Ordinal)));
+        Assert.Contains("KX_KA", Keep(tmp));
+        Assert.Contains("KB_KY", Keep(tmp));
+        Assert.Contains("KX_KA_KY", Lists(tmp, "mustDrop"));
+        Assert.Contains("KX_KB_KY", Lists(tmp, "mustDrop"));
+    }
+
+    [Fact]
+    public void Rules_AFunctionLikeBodyEndingInAPasteMacroIsAnAlias_CommentsAroundTheHashAreSpaces()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define PICK(x) CAT\n#define KAB_1 1\n/* lead */ #define PCAT(a, b) a##b\n# /*c*/ define QCAT(a, b) a##b\n#define KPC_1 1\n#define KQC_1 1\n",
+            "int a = PICK(0)(KAB_, 1) + PCAT(KPC_, 1) + QCAT(KQC_, 1);\n");
+        Assert.Empty(Bad(t));
+        foreach (var n in new[] { "KAB_1", "KPC_1", "KQC_1" }) Assert.Contains(n, Keep(tmp));
+    }
+
+    [Fact]
+    public void Uses_AParenAcrossADirectiveIsACallInArgumentsAndOpenAtTopLevel()
+    {
+        // gcc and clang look past a directive for a macro's ( only while reading a call's arguments
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define ID(x) x\n#define PLAIN(a, b) a\n#define KHW_7 1\n#define KHW_8 1\n#define KHW_9 1\n#define YHT_7Y 1\n#define YHT_8Y 1\n#define YHE_7Y 1\n",
+            """
+            int a = ID(CAT
+            #if A
+            (KHW_, 7)
+            #else
+            (KHW_, 8)
+            #endif
+            );
+            int b = ID(
+            #ifdef FW_ALT
+            CAT
+            #else
+            PLAIN
+            #endif
+            (KHW_, 9));
+            int c = CAT
+            #if A
+            (YHT_, 7Y)
+            #else
+            (YHT_, 8Y)
+            #endif
+            ;
+            int d =
+            #ifdef FW_ALT
+            CAT
+            #else
+            PLAIN
+            #endif
+            (YHE_, 7Y);
+
+            """);
+        Assert.Empty(Bad(t));
+        foreach (var n in new[] { "KHW_7", "KHW_8", "KHW_9" }) Assert.Contains(n, Keep(tmp));
+        Assert.Equal(["YHE_7Y", "YHT_7Y", "YHT_8Y"], Lists(tmp, "open"));
+    }
+
+    [Fact]
+    public void Uses_AnIfConditionANestedCalleeAndAComputedHeadChainAreExact()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp,
+            "#define XCAT(a, b) a##b\n#define KCFG_1 1\n#define ZCFG_2Z 1\n#define APPLY(m, a, b) m(a, b)\n#define KHN_7 1\n#define ZHN_8Z 1\n" +
+            "#define GETCAT(x) CAT\n#define KHD_7 1\n#define ZHD_8Z 1\n",
+            """
+            #if XCAT(KCFG_, 1)
+            int a = APPLY(ID(CAT), KHN_, 7);
+            #elif defined(XCAT) || defined CAT
+            int b;
+            #endif
+            #define ID(x) x
+            int c = APPLY(ID(CAT), KHN_, 7) + CAT(GET, CAT)(0)(KHD_, 7);
+
+            """);
+        Assert.Empty(Bad(t));
+        foreach (var n in new[] { "KCFG_1", "KHN_7", "KHD_7" }) Assert.Contains(n, Keep(tmp));
+    }
     [Fact]
     public void Uses_AProductPastTheCapIsTheUsesPool()
     {

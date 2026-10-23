@@ -11,6 +11,36 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.8] - 2026-10-23
+
+Firmware truth rules for the round-9 shapes, as ruled by CodeCarver and checked against gcc and clang `-E`. Firmware
+corpora change: 10 new family kinds (42 in all) and 3 new hostile files, so `fw/`, the lists and `cases.tsv` differ
+from 1.4.7.
+
+### Changed
+- An argument whose top-level commas come from an object-like name (or an alias chain to one) is re-split at those
+  commas: `PORT(PIN_LED)` with `PIN_LED = KGPIOA, 5` builds `KGPIOA_5`.
+- An interior argument of several tokens splits the chain: `HX(KA KB)` into `X_##b##_Y` builds `X_KA` and `KB_Y`,
+  and no longer `X_KA_Y`.
+- A call across `#if`/`#elif`/`#else`/`#endif` is built from each branch's tokens, exactly, as well as from its pool.
+  After `#endif` the tracker goes on from every branch. A macro's `(` after a directive is a call inside another
+  call's arguments. At top level only max calls it, so its names are open (gcc and clang don't call it).
+- A computed callee is built exactly as well as pooled: `CAT(GET, CAT)(0)(x, y)` through the names the head
+  expands to, and `APPLY(ID(CAT), x, y)` through the elements a parameter callee expands to.
+- A function-like define whose body ends in a paste macro (`#define PICK(x) CAT`) forwards to it, like an
+  object-like alias.
+- A body that leaves a call open (`OPENF(x) = CAT(x,`) takes the rest of the call from the text after it, under max,
+  so those names are open.
+- `#if`/`#elif` conditions are kept text: their paste calls are uses, and the names after `defined` are not.
+- A closed `/* */` comment before or after a directive's `#` is a space.
+
+### Added
+- Family kinds `comma-expansion`, `split-arg` (with a decoy), `body-alias`, `open-body-call`, `branch-paren-in-args`,
+  `branch-paren-top`, `if-condition`, `nested-callee`, `computed-head` and `comment-hash`. `fwpaste.h` gains `KID`,
+  `KFST`, `KGP_`, `KPORT`, `KCALL`, and `kcat`/`kfst`, which are also declared as functions, so uncalled text
+  compiles.
+- Hostile files `misc/hash_comment.h`, `misc/splice_space.h` (backslash, space, newline) and `misc/lone_cr.h`.
+
 ## [1.4.7] - 2026-10-23
 
 Review round 9 of the firmware corpus (1.4.0–1.4.6). Firmware corpora change in one file: `fw-truth/cases.tsv`

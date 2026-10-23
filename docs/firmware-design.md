@@ -24,7 +24,8 @@ because the truth names their bytes.
     src/traps/trap_T.h       #   trap text: kept, included under #if 0, never compiled
     src/bigsrc_0.c           #   a .c past maxParseBytes (carved like a big header)
     src/table_big.c          #   exactly maxParseBytes: parsed, not big
-    misc/                    #   hostile files (see below)
+    misc/                    #   hostile files: empty, BOMs, latin-1, CRLF, lone CR, NULs, an unterminated comment, a
+                             #   comment around a directive's `#`, a backslash-space splice, hidden
     work/wreg_N.h            #   the work carve, with --fw-work (see "Work shape")
   ext/include/, ext/app/     # outside the root: an OS header every unit includes (it includes a Hidden one),
                              #   one nothing includes (maybe-kept), host.c
@@ -37,7 +38,8 @@ Every compile db entry is `cc -std=c11 -I fw/include -I fw/big -I fw/dense -I ex
 `directory` and every path are absolute. With `relative`, `directory` is `"."` and the paths are relative to the
 corpus root, so the db resolves against the directory it names, resolved from the corpus root. Every unit compiles
 cleanly with `-std=c11 -Wall -Werror`, with or without `-DFW_ALT`, and with `-DFW_SEL=7` or `-DFW_SEL=19`. 1.4.0
-checked this with clang; gcc was not run.
+checked this with clang; 1.4.8 checked it again, with and without `-DFW_ALT`. The new kinds' shapes were checked with
+gcc and clang -E.
 
 ## Names carry their class
 
@@ -56,13 +58,15 @@ relative to `fw/`, or `../…` for a site outside the root (`../ext/…`; the `-
 
 - every trap;
 - the hostile and reserved cases;
-- three families of each of the 32 kinds: direct, cat-prefix, cat-suffix, multi-line-call, forwarder-chain, alias,
+- three families of each of the 42 kinds: direct, cat-prefix, cat-suffix, multi-line-call, forwarder-chain, alias,
   higher-order, computed-call, wanted-body, beside-paste, object-expansion, if0-call, comment-seed, cat3-split,
   redefinition, kept-header-body, comment-call-open, string-call-open, numeric-object, call-arg, nested-call-edge,
   number-suffix, empty-edge, call-edge, digraph, higher-order-forwarder,
-  use-pairs, uncalled-wildcard, expanded-arg, empty-expansion, empty-arg and higher-order-pairs;
-- a **decoy** beside each cat-prefix, cat-suffix, higher-order-forwarder, use-pairs, uncalled-wildcard and
-  higher-order-pairs target: a must-drop name that has only part of what the target's uses build (one use's start
+  use-pairs, uncalled-wildcard, expanded-arg, empty-expansion, empty-arg, higher-order-pairs, and (since 1.4.8)
+  comma-expansion, split-arg, body-alias, open-body-call, branch-paren-in-args, branch-paren-top (open: a
+  macro's `(` after a directive at top level), if-condition, nested-callee, computed-head and comment-hash;
+- a **decoy** beside each cat-prefix, cat-suffix, higher-order-forwarder, use-pairs, uncalled-wildcard,
+  higher-order-pairs and split-arg target: a must-drop name that has only part of what the target's uses build (one use's start
   with another use's end, or a near miss of a wildcard);
 - `interior-letter` (a one-letter argument between two pastes, as in `KHWP(Z, Z)`) and `define-arg-value` (a `-D`
   value used as a piece).
@@ -100,32 +104,45 @@ kept header. A carve that also drops unreached files does not match it. Run the 
    kept whole. The rest are the **carved** files.
 2. **Paste macros.** A name is a paste macro if any of its definitions pastes a parameter (`a##b`, not
    `, ##__VA_ARGS__`), or forwards to one. A function-like body forwards when it holds a call and names
-   one, called or not (`APPLY2(CAT, a)`); an object-like define forwards when its body's last token is one. This is computed to a fixpoint, so order does not matter.
+   one, called or not (`APPLY2(CAT, a)`); any define forwards when its body's last token is one and not a parameter
+   (`#define PICK(x) CAT`, since 1.4.8). This is computed to a fixpoint, so order does not matter.
 3. **Uses** (rule 3', since 1.4.5). Each paste-macro call in kept text is a **use**, and each use builds its own
    names; pieces of different uses never pair. A use is followed through forwarders and higher-order calls into
    every `##` chain it reaches, and each chain builds the cross product of its slots:
    - a literal token gives itself; an operand that is not an identifier or identifier-like pp-number (`2`, `2u`,
      `0x1F`) means the chain builds nothing;
    - an argument gives its spelling, plus its expansion where the macro expands it (nested paste results
-     included). A left slot takes the argument's last token, a right slot its first, an interior slot both (an
-     interior argument of several tokens: its first and last);
+     included). A left slot takes the argument's last token, a right slot its first, an interior slot both. An interior argument of
+     several tokens splits the chain (since 1.4.8): `HX(b) = X_##b##_Y` with `HX(KA KB)` builds `X_KA` and `KB_Y`,
+     never `X_KA_Y`;
+   - an argument whose top-level commas come from an object-like name (or an alias chain to one), as in
+     `PORT(PIN_LED)` with `PIN_LED = KGPIOA, 5`, is re-split at those commas (since 1.4.8);
    - an empty argument, or one whose expansion can be empty, gives nothing (the slot is skipped);
    - `__LINE__` and `__COUNTER__` are a run of digits (one or more), and an undefined `__name` is any text (zero
      or more chars), expanded or not. A chain with more than one such wildcard keeps only its outer text and one
      wildcard;
-   - a call's missing arguments at end of file (max only) are any text.
+   - a call's missing arguments at end of file (max only) are any text;
+   - a body that leaves a call open (`OPENF(x) = CAT(x,`) takes the rest of the call from the text after it (max
+     only, so its names are open). Its last argument runs on as any text, and its missing ones are any text.
 
    A chain with no parameter builds its literal name. A paste macro that is named in code but never called gets
    one use whose arguments are all any text. "Called" is over the whole tree, dropped text included; comments and
    strings (max) never call or name.
 
-   A use falls back to its own **pool** (any of its start pieces with any of its end pieces, never overlapping)
-   when its callee is computed, when the call is open across `#if`/`#elif`/`#else`/`#endif`, or for a chain whose
-   product passes 4,096 names (a wildcard counts 1).
+   A use also gets its own **pool** (any of its start pieces with any of its end pieces, never overlapping) when its
+   callee is computed or the call is open across `#if`/`#elif`/`#else`/`#endif`, and falls back to the pool alone
+   for a chain whose product passes 4,096 names (a wildcard counts 1). Since 1.4.8 those calls are also built
+   exactly: a computed callee (`CAT(GET, CAT)(0)(x, y)`, `APPLY(ID(CAT), x, y)`) through the names it can expand to,
+   and a call across a conditional through each branch's tokens.
    - `%:` and `%:%:` are `#` and `##`. The builds' `-D` values are define bodies.
 
-   An argument list runs to its matching `)` across lines and directives. At `#elif`/`#else` the call's state is
-   restored to what it was at the `#if`, so each branch closes the call on its own.
+   An argument list runs to its matching `)` across lines and directives. At `#elif`/`#else` the tracker goes back
+   to its state at the `#if`, so each branch closes the call on its own, and after `#endif` it goes on from every
+   branch (and from the `#if` itself when there is no `#else`). A macro's `(` after a directive is a call only inside
+   another call's arguments, as in gcc and clang. At top level max still calls it, so its names are open.
+
+   An `#if`/`#elif` condition is kept text too (since 1.4.8). Its paste calls are uses (`#if XCAT(CFG_, 1)` keeps
+   `CFG_1`), and the names after `defined` are not. A closed `/* */` comment before or after the `#` is a space.
 4. **Wanted** starts as every identifier of kept text outside the carved files and every non-define line of the
    carved files. It also includes:
    - the builds' `-D` names;
@@ -287,7 +304,7 @@ All counts scale with `--scale` (an explicit knob is used as given). `_meta.gen`
 | `--fw-big-headers` | 400 | Big headers `big/regs_N.h` (at least 1, at most 100,000). |
 | `--fw-big-mb` | 24 | Size of each big header in MB (20–2000). `regs_0.h` is always exactly `maxParseBytes + 1`. |
 | `--fw-files` | 38,000 | Files under `fw/src` (at least 4 are written): every fourth is a kept header, the rest units. |
-| `--fw-families` | 1,000,000 | Must-keep families, cycling through the 32 kinds. |
+| `--fw-families` | 1,000,000 | Must-keep families, cycling through the 42 kinds. |
 | `--fw-pasters` | 6,000,000 | Paste macros in the big headers, most never called. |
 | `--fw-dense-headers` | 200 | Dense headers `dense/dx_N.h`, besides the fixtures. |
 | `--fw-chain-max` | 40 | The long forwarder chains' length (2–10,000; not scaled). |
