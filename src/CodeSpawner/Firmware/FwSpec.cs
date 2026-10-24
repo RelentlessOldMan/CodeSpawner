@@ -61,7 +61,7 @@ internal sealed partial class FwSpec
     private bool[] _isK = Array.Empty<bool>(), _isC = Array.Empty<bool>(), _binary = Array.Empty<bool>();
 
     // C defs (struct of arrays)
-    private readonly IntList _cdName = new(), _cdLenTerm = new();   // name; line length << 2 | terminator bytes
+    private readonly IntList _cdName = new(), _cdLen = new(), _cdTerm = new();   // name; line length; its terminator bytes (every physical line)
     private long[] _cdOff = new long[1024];               // offset in all carved bytes (see CFile)
     private int[] _cdNext = Array.Empty<int>();
     private readonly List<long> _cBase = new();           // where each carved file starts in all carved bytes
@@ -128,10 +128,11 @@ internal sealed partial class FwSpec
         for (int f = 0; f < _fwCount; f++) if (_isC[f]) t.Carved.Add(_rel[f]);
 
         Pass1();
-        PasterFixpoint(0);
-        PasterFixpoint(1);
         ComputeEmpty(0);
         ComputeEmpty(1);
+        AliasEdges();
+        PasterFixpoint(0);
+        PasterFixpoint(1);
         SortNames();
         Seeds();
         Pass2();
@@ -408,10 +409,11 @@ internal sealed partial class FwSpec
                 _cdName.Add(name);
                 if (k == _cdOff.Length) Array.Resize(ref _cdOff, NameTable.NextCapacity(k));
                 _cdOff[k] = cbase + w.Start;      // no BOM shift: text == raw for C files
-                if (w.Length >= 1 << 29 || w.TermBytes > 3) throw new InvalidOperationException($"{_rel[f]}: a define line of {w.Length:N0} bytes");
-                _cdLenTerm.Add(w.Length << 2 | w.TermBytes);
+                if (w.Length >= 1 << 30) throw new InvalidOperationException($"{_rel[f]}: a define line of {w.Length:N0} bytes");
+                _cdLen.Add(w.Length);
+                _cdTerm.Add(w.TermBytes);
                 if (d.IsFunc && !d.PastesParam() && d.Body.Any(b => b.Kind == Tok.LParen)) Names.Set(name, FwdC);
-                if (d.EndsInComment) Names.Set(name, NameTable.Seed);   // a comment-open define is kept
+                if (d.EndsInComment || w.CommentJoin >= d.BodyStart) Names.Set(name, NameTable.Seed);   // a comment-open define is kept
             }
             else if (f < _fwCount)
             {
@@ -425,8 +427,11 @@ internal sealed partial class FwSpec
     {
         if (d.PastesParam()) _directPasters.Add((name, mask));
         var body = d.Body;
-        // a body ending in a name (object-like, or function-like with no call: `PICK(x) CAT`) is an alias of it
-        bool alias = body.Count > 0 && body[^1].Kind == Tok.Ident && !(d.IsFunc && d.IsParam(d.Text(body.Count - 1)));
+        // a body ending in a name (object-like, or function-like with no call: `PICK(x) CAT`, `PICK2(x) CAT x` with a
+        // parameter that may be empty) is an alias of it
+        int tail = body.Count;
+        while (tail > 0 && body[tail - 1].Kind == Tok.Ident && d.IsFunc && d.IsParam(d.Text(tail - 1))) tail--;
+        bool alias = tail > 0 && body[tail - 1].Kind == Tok.Ident;
         // A function-like body with a call forwards to every identifier in it: a paste macro it names without a call
         // (`APPLY2(CAT, a)`) is reached through the call.
         if (d.IsFunc && body.Any(t => t.Kind == Tok.LParen))
@@ -434,7 +439,15 @@ internal sealed partial class FwSpec
             for (int k = 0; k < body.Count; k++)
                 if (body[k].Kind == Tok.Ident && !d.IsParam(d.Text(k))) Edge(name, Names.GetOrAdd(d.Text(k)), mask);
         }
-        else if (alias) Edge(name, Names.GetOrAdd(d.Text(body.Count - 1)), mask);
+        else if (alias)
+        {
+            // the alias edge goes past the names at the end that may expand to nothing (AliasEdges, once emptiness is known)
+            _alName.Add(name);
+            _alMask.Add(mask);
+            _alOff.Add(_alItems.Count);
+            for (int k = tail - 1; k >= 0 && body[k].Kind == Tok.Ident; k--)
+                if (!d.IsFunc || !d.IsParam(d.Text(k))) _alItems.Add(Names.GetOrAdd(d.Text(k)));   // a parameter may be empty: walked past
+        }
         var s = Names.Get(name);
         if (s.Length >= 2 && s[0] == '_' && s[1] == '_') _definedUnder.Add(name);
         ScanCalls(d);
@@ -444,6 +457,24 @@ internal sealed partial class FwSpec
             if (!_ncByName.TryGetValue(name, out var l)) _ncByName[name] = l = new();
             l.Add(_ncDefs.Count);
             _ncDefs.Add((name, line.ToArray(), mask));
+        }
+    }
+
+    private readonly IntList _alName = new(), _alMask = new(), _alOff = new(), _alItems = new();   // alias bodies' trailing names, last first
+
+    /// <summary>An alias is an edge to its body's last name that need not expand to nothing (rule 2's "may be empty",
+    /// one definition for both runs: `#define F CAT EMPTYM` forwards to CAT).</summary>
+    private void AliasEdges()
+    {
+        for (int i = 0; i < _alName.Count; i++)
+        {
+            int end = i + 1 < _alName.Count ? _alOff[i + 1] : _alItems.Count;
+            for (int j = _alOff[i]; j < end; j++)
+            {
+                Edge(_alName[i], _alItems[j], _alMask[i]);
+                if (!MayBeEmpty(_alItems[j])) break;
+                if (j + 1 < end) Called(_alItems[j + 1]);   // only names that may be empty follow it: `CAT EMPTYM` calls CAT
+            }
         }
     }
 
@@ -650,6 +681,7 @@ internal sealed partial class FwSpec
         {
             if (w.Kind == LineKind.Define && d.Parse(w.Spliced))
             {
+                main.Directive(LineKind.Define);
                 body.Begin(d);
                 body.Lex(w.Spliced[d.BodyStart..], false);
                 body.End();
@@ -669,7 +701,7 @@ internal sealed partial class FwSpec
         var w = new LineWalker(text, st);
         while (w.Next())
         {
-            if (w.Kind == LineKind.Define && IsNamedDefine(w.Spliced)) continue;
+            if (w.Kind == LineKind.Define && IsNamedDefine(w.Spliced)) { main.Directive(LineKind.Define); continue; }
             SeedText(w.Raw);
             StreamLine(ref w, main);
         }
@@ -694,6 +726,7 @@ internal sealed partial class FwSpec
                 return;
             case LineKind.OtherDirective:
             case LineKind.Define:
+                main.Directive(w.Kind);   // a macro named before one is not called across it at top level
                 return;
         }
         main.Lex(w.Spliced, w.StartsInComment);
@@ -718,7 +751,7 @@ internal sealed partial class FwSpec
             int name = wq[wi++];
             for (int k = _cHead[name]; k >= 0; k = _cdNext[k])
             {
-                int len = _cdLenTerm[k] >> 2;
+                int len = _cdLen[k];
                 int cf = CFile(k, out long off);
                 if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
                 RandomAccess.Read(Handle(cf), buf.AsSpan(0, len), off);
@@ -766,9 +799,9 @@ internal sealed partial class FwSpec
             t.TotalDefineLines++;
             if (drop) t.DefinesDroppedMin++;
             if (!keep) t.DefinesDroppedMax++;
-            int lt = _cdLenTerm[k];
-            if (!keep) t.BytesAfterMin += lt >> 2;
-            if (drop) t.BytesAfterMax += (lt >> 2) - (lt & 3);
+            int len = _cdLen[k];
+            if (!keep) t.BytesAfterMin += len;
+            if (drop) t.BytesAfterMax += len - _cdTerm[k];
         }
         for (int f = 0; f < _fwCount; f++) if (_isC[f]) t.BytesBefore += new FileInfo(_files[f]).Length;
         t.BytesAfterMin = t.BytesBefore - t.BytesAfterMin;
@@ -791,6 +824,16 @@ internal sealed partial class FwSpec
                     t.AlphabetErrors.Add($"{Encoding.ASCII.GetString(s)}: {ClassName(cls)}, alphabet says {ClassName(want)}");
             }
         }
+        // every case row names a graded define (a row for a name the tree never defines, or defines only outside the
+        // carved files, would test nothing)
+        if (checkAlphabet && listDir is not null && File.Exists(Path.Combine(listDir, "cases.tsv")))
+            foreach (var line in File.ReadLines(Path.Combine(listDir, "cases.tsv")).Skip(1))
+            {
+                var name = line.Split('\t')[0];
+                int id = Names.Find(Encoding.ASCII.GetBytes(name));
+                if ((id < 0 || !Names.Has(id, NameTable.CName)) && t.AlphabetErrors.Count < 50)
+                    t.AlphabetErrors.Add($"{name}: a case row, but no carved file defines it");
+            }
         t.MustKeepCount = keepW.Count;
         t.MustDropCount = dropW.Count;
         t.OpenCount = openW.Count;

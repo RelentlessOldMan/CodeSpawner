@@ -38,7 +38,7 @@ internal static class FirmwareEmitter
     /// under the dense floor.</summary>
     public const long BoundaryBig = FwSpec.MaxParseBytes + 1, BoundaryTable = FwSpec.MaxParseBytes, BoundarySmall = FwLexer.DenseMinBytes - 1;
     private const long BigSrcBytes = 21_000_000, DenseBytes = 1_100_000;
-    private const int Kinds = 42, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
+    private const int Kinds = 44, Traps = 8, CasesPerKind = 3, FilesPerDir = 100;
 
     private static readonly string[] KindNames =
     [
@@ -48,7 +48,7 @@ internal static class FirmwareEmitter
         "nested-call-edge", "number-suffix", "empty-edge", "call-edge", "digraph", "higher-order-forwarder",
         "use-pairs", "uncalled-wildcard", "expanded-arg", "empty-expansion", "empty-arg", "higher-order-pairs",
         "comma-expansion", "split-arg", "body-alias", "open-body-call", "branch-paren-in-args", "branch-paren-top",
-        "if-condition", "nested-callee", "computed-head", "comment-hash",
+        "if-condition", "nested-callee", "computed-head", "comment-hash", "empty-tail-alias", "param-tail-alias",
     ];
 
     // Kinds whose big-header text is define lines only, so a dense header can host them.
@@ -351,7 +351,21 @@ internal static class FirmwareEmitter
             case 38: sb.Append($"#define KIC{f}X_1 {v}\n"); break;
             case 39: sb.Append($"#define KNC{f}X_7 {v}\n"); break;
             case 40: sb.Append($"#define KGC{f}CAT(x) CAT\n#define KHD{f}X_7 {v}\n"); break;
-            case 41: sb.Append($"/* lead */ #define KHC{f}M(a, b) a##b\n# /* c */ define KHC{f}X_1 {v}\n"); break;
+            case 41:
+                sb.Append($"/* lead */ #define KHC{f}M(a, b) a##b\n# /* c */ define KHC{f}X_1 {v}\n");
+                sb.Append($"/* lead */ #define ZHD{f}Z 1\n# /* c */ define ZHE{f}Z 2\n/* a comment over\n   two lines */ # define ZHF{f}Z 3\n");
+                break;
+            // a body ending in names that may expand to nothing calls the name before them; a non-empty one stops the walk
+            case 42:
+                sb.Append($"#define KET{f}E\n#define KET{f}M() CAT KET{f}E\n#define KET{f}X_1 {v}\n");
+                sb.Append($"#define KEW{f}N(a, b) , 3\n#define KEU{f}M() kcat KET{f}E KEW{f}N\n#define ZEU{f}X_2Z 1\n");
+                break;
+            // a body ending in a parameter: an empty argument, or one that opens with (, calls the name before it; a
+            // call after a use of it is computed, so its own pool builds KPV (a name it cannot start stays dropped)
+            case 43:
+                sb.Append($"#define KPT{f}M(x) CAT x\n#define KPT{f}X_1 {v}\n#define KPU{f}X_2 1\n");
+                sb.Append($"#define KPX{f}N(a, b) , 4\n#define KPW{f}M(x) kcat x\n#define KPV{f}X_3Z 1\n#define ZPV{f}Y_3Z 1\n");
+                break;
         }
     }
 
@@ -415,6 +429,10 @@ internal static class FirmwareEmitter
             39 => $"KAPPLY(KID(CAT), KNC{f}X_, 7)",
             40 => $"CAT(KGC{f}, CAT)(0)(KHD{f}X_, 7)",
             41 => $"KHC{f}M(KHC{f}X_, 1)",
+            // KID rescans: at top level `CAT EMPTY (` calls nothing (the DEFER idiom), though the truth keeps it either
+            // way; the decoys swallow their arguments into `, 3`: (void)kcat, 3
+            42 => $"KID(KET{f}M()(KET{f}X_, 1)) + ((void)KEU{f}M()(ZEU{f}X_, 2Z))",
+            43 => $"KPT{f}M()(KPT{f}X_, 1) + KPT{f}M((KPU{f}X_, 2)) + ((void)KPW{f}M(KPX{f}N)(KPV{f}X_, 3Z))",
             _ => null,
         };
         switch (p.Kind(f))
@@ -524,6 +542,8 @@ internal static class FirmwareEmitter
         #define KHWB_Z_rZ_VAL 1
         #define ZIL0Z 1
         #define KDE0X_4 1
+        #define KSRC0X KSRC0X, 1
+        #define KSRC0X_1 5
 
         """;
 
@@ -694,6 +714,7 @@ internal static class FirmwareEmitter
         w.L("#include <fw_os.h>");
         int hdr = p.HeaderOfDir(p.DirOf(file));
         if (hdr >= 0) w.L($"#include \"k{hdr}.h\"");
+        if (u == 0) w.L("#include \"fw_q3.h\"");
         if (p.Work is { } wk) foreach (int h in wk.HeadersOfUnit(u, p.Units)) w.L($"#include \"{FwWork.HeaderFile(h)}\"");
         var scope = new StringBuilder();
         var fn = new StringBuilder();
@@ -705,7 +726,7 @@ internal static class FirmwareEmitter
         }
         for (int t = 0; t < Traps; t++) if (p.TrapUnit(t) == u) TrapUseText(t, fn);
         p.Work?.UnitText(u, p.Units, fn);
-        if (u == 0) fn.Append("int fdv(void)\n{\n\treturn KDV_9 + KD_7 + KHWP(Z, Z) + CAT(KDE0X_, KDE_N);\n}\n");
+        if (u == 0) fn.Append("int fdv(void)\n{\n\treturn KDV_9 + KD_7 + KHWP(Z, Z) + CAT(KDE0X_, KDE_N) + KPORT(KSRC0X);\n}\n");
         w.Text(scope.ToString());
         w.Text(fn.ToString());
     }
@@ -779,6 +800,12 @@ internal static class FirmwareEmitter
             "comment-around-hash");
         Put("misc/splice_space.h", A("#define KSPS0X \\ \n\t3\nint fw_sps = KSPS0X;\n"), "backslash-space-splice");
         Put("misc/lone_cr.h", A("/* lone cr */\rint fw_lcr = KLCR0X;\n"), "lone-cr");
+        // compiled (unit 0 includes it): a ( in a comment and in a char literal that a paren count must not see,
+        // before many #if blocks (its self-referential comma macro KSRC0X is graded, so it lives in regs_0.h)
+        var q3 = new StringBuilder("#ifndef FW_Q3_H\n#define FW_Q3_H\n");
+        q3.Append("/* see the note (below */\nint fw_q3isp(int c);\nint fw_q3isp(int c) { if (c == '(') return 1; return 0; }\n");
+        for (int i = 0; i < 2000; i++) q3.Append($"#if FW_Q3C{i}\nint fw_q3a{i} = 0;\n#else\nint fw_q3b{i} = {i};\n#endif\n");
+        Put("include/fw_q3.h", A(q3.Append("#endif\n").ToString()), "comment-and-char-paren");
         var blob = new byte[4096];
         A("blob ZBIN0Z").CopyTo(blob, 100);   // NUL bytes from offset 0: binary, never read
         Put("misc/blob.bin", blob, "nul-early");
@@ -874,6 +901,7 @@ internal static class FirmwareEmitter
             ("KBS0X_5", "big-source", "src/bigsrc_0.c"),
             ("KHWB_Z_rZ_VAL", "interior-letter", p.UnitRel(0)), ("ZIL0Z", "interior-letter", "big/regs_0.h"),
             ("KDE0X_4", "define-arg-value", p.UnitRel(0)),
+            ("KSRC0X_1", "self-comma", p.UnitRel(0)),
         })
             Row(name, kase, site);
 
@@ -936,7 +964,9 @@ internal static class FirmwareEmitter
         38 => $"KIC{f}X_1",
         39 => $"KNC{f}X_7",
         40 => $"KHD{f}X_7",
-        _ => $"KHC{f}X_1",
+        41 => $"KHC{f}X_1",
+        42 => $"KET{f}X_1",
+        _ => $"KPT{f}X_1",
     };
 
     // A name beside the target that has only one side of it, so it is dropped: a start piece with no end, or the reverse.
@@ -949,6 +979,9 @@ internal static class FirmwareEmitter
         27 => $"ZWH{f}_Q_OFZ",
         31 => $"ZHQ{f}X_QZ",
         33 => $"ZSX{f}_KA_QZ",
+        41 => $"ZHD{f}Z",
+        42 => $"ZEU{f}X_2Z",
+        43 => $"ZPV{f}Y_3Z",
         _ => null,
     };
 }

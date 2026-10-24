@@ -13,8 +13,84 @@ internal sealed class Tracker : ITokenSink
     // One token of the stream as a ## operand: a name id, a parameter, or anything else.
     private const int OpParam = -2, OpOther = -1;
 
-    /// <summary>Paths past this many (a call open across many nested branches) are dropped, the first kept.</summary>
+    /// <summary>Paths past this many (a call open across many branches) are dropped, the first kept; under max a
+    /// dropped one's open calls are used as if the stream ended there, so what they could build is open.</summary>
     public const int MaxPaths = 16;
+
+    /// <summary>A path's tokens: a run shared with the paths it forked from, then its own. Forking is O(1), so a
+    /// call open across many branches costs no copy per <c>#if</c>.</summary>
+    private sealed class TokBuf
+    {
+        private sealed class Seg
+        {
+            public Seg? Up;
+            public XTok[] Toks = Array.Empty<XTok>();
+        }
+
+        private Seg? _up;
+        private int _base;                        // tokens in the shared run
+        private List<XTok> _own = new();
+        private ulong _hash;                      // of every token, in order
+
+        public int Count => _base + _own.Count;
+
+        public void Add(XTok t)
+        {
+            _own.Add(t);
+            _hash = (_hash ^ (uint)(t.Id << 5 | t.K << 1 | (t.Exp ? 1 : 0))) * 0x100000001B3UL;
+        }
+
+        public void Clear()
+        {
+            _up = null;
+            _base = 0;
+            _hash = 0;
+            _own = new List<XTok>();
+        }
+
+        public TokBuf Fork()
+        {
+            if (_own.Count > 0)
+            {
+                _up = new Seg { Up = _up, Toks = _own.ToArray() };
+                _base += _own.Count;
+                _own = new List<XTok>();
+            }
+            return new TokBuf { _up = _up, _base = _base, _hash = _hash };
+        }
+
+        public List<XTok> GetRange(int from, int n)
+        {
+            var r = new List<XTok>(n);
+            if (n == 0) return r;
+            var segs = new List<XTok[]>();
+            for (var s = _up; s is not null; s = s.Up) segs.Add(s.Toks);
+            int at = 0, end = from + n;
+            for (int i = segs.Count - 1; i >= 0 && at < end; i--)
+            {
+                var t = segs[i];
+                int lo = Math.Max(from - at, 0), hi = Math.Min(end - at, t.Length);
+                for (int k = lo; k < hi; k++) r.Add(t[k]);
+                at += t.Length;
+            }
+            for (int k = Math.Max(from - at, 0); k < _own.Count && at + k < end; k++) r.Add(_own[k]);
+            return r;
+        }
+
+        public bool SameAs(TokBuf o)
+        {
+            if (Count != o.Count || _hash != o._hash) return false;
+            if (ReferenceEquals(_up, o._up)) return Equal(_own, o._own);
+            return Equal(GetRange(0, Count), o.GetRange(0, o.Count));
+        }
+
+        private static bool Equal(List<XTok> a, List<XTok> b)
+        {
+            for (int i = 0; i < a.Count; i++)
+                if (a[i].K != b[i].K || a[i].Id != b[i].Id || a[i].Exp != b[i].Exp) return false;
+            return true;
+        }
+    }
 
     private sealed class Frame
     {
@@ -26,14 +102,14 @@ internal sealed class Tracker : ITokenSink
         public Frame Clone() => (Frame)MemberwiseClone();
 
         public bool Same(Frame o) => Callee == o.Callee && Open == o.Open && Marked == o.Marked && Computed == o.Computed &&
-                                     Crossed == o.Crossed && Template == o.Template && Depth == o.Depth && ReferenceEquals(Heads, o.Heads);
+                                     Crossed == o.Crossed && Template == o.Template && Depth == o.Depth && SameHeads(Heads, o.Heads);
     }
 
     /// <summary>One path through the conditionals: its open calls, their tokens, and what the last token left.</summary>
     private sealed class Path
     {
         public List<Frame> Frames = new();
-        public List<XTok> Buf = new();            // the tokens since the outermost open call
+        public TokBuf Buf = new();                // the tokens since the outermost open call
         public int Pending = OpOther;             // an identifier not yet known to be called (a name id or OpParam)
         public bool HasPending;
         public bool LastClosedUse;
@@ -41,7 +117,7 @@ internal sealed class Tracker : ITokenSink
 
         public Path Clone()
         {
-            var p = new Path { Buf = new List<XTok>(Buf), Pending = Pending, HasPending = HasPending, LastClosedUse = LastClosedUse, LastHeads = LastHeads };
+            var p = new Path { Buf = Buf.Fork(), Pending = Pending, HasPending = HasPending, LastClosedUse = LastClosedUse, LastHeads = LastHeads };
             foreach (var f in Frames) p.Frames.Add(f.Clone());
             return p;
         }
@@ -51,12 +127,19 @@ internal sealed class Tracker : ITokenSink
         public bool Same(Path o)
         {
             if (Frames.Count != o.Frames.Count || Buf.Count != o.Buf.Count || HasPending != o.HasPending ||
-                (HasPending && Pending != o.Pending) || LastClosedUse != o.LastClosedUse || !ReferenceEquals(LastHeads, o.LastHeads)) return false;
+                (HasPending && Pending != o.Pending) || LastClosedUse != o.LastClosedUse ||
+                (LastClosedUse && (!SameHeads(LastHeads, o.LastHeads)))) return false;
             for (int i = 0; i < Frames.Count; i++) if (!Frames[i].Same(o.Frames[i])) return false;
-            for (int i = 0; i < Buf.Count; i++)
-                if (Buf[i].K != o.Buf[i].K || Buf[i].Id != o.Buf[i].Id || Buf[i].Exp != o.Buf[i].Exp) return false;
-            return true;
+            return Buf.SameAs(o.Buf);
         }
+    }
+
+    private static bool SameHeads(int[]? a, int[]? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null || a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+        return true;
     }
 
     private sealed class Cond
@@ -77,6 +160,7 @@ internal sealed class Tracker : ITokenSink
     private bool _afterHash;
     private int _last = OpOther;                  // the previous token as a ## operand
     private bool _hasLast;
+    private readonly IntList _tail = new();       // the names at the stream's end, in order (a body's alias walk)
 
     /// <param name="commitAtEof">Calls open at the end are used, their missing arguments wildcards (the shadow
     /// lexing, where comments and strings are tokens).</param>
@@ -98,6 +182,7 @@ internal sealed class Tracker : ITokenSink
         _conds.Clear();
         _afterHash = _hasLast = false;
         _chain.Count = 0;
+        _tail.Count = 0;
     }
 
     private Frame? Top => _p.Frames.Count > 0 ? _p.Frames[^1] : null;
@@ -128,6 +213,7 @@ internal sealed class Tracker : ITokenSink
     {
         if (kind == Tok.HashHash)
         {
+        _tail.Count = 0;
             if (!_afterHash)
             {
                 if (_chain.Count == 0) _chain.Add(_hasLast ? _last : OpOther);
@@ -143,6 +229,7 @@ internal sealed class Tracker : ITokenSink
             return;
         }
         int op = Operand(kind, text);
+        if (kind == Tok.Ident && op != OpParam) _tail.Add(op); else _tail.Count = 0;
         if (_afterHash) { _chain.Add(op); _afterHash = false; }
         else FlushChain();
         _last = op;
@@ -159,6 +246,12 @@ internal sealed class Tracker : ITokenSink
         var p = _p;
         if (kind == Tok.Ident)
         {
+            // a name before a parameter may be called by the argument's text (`CAT x` with x = `(a, b)`)
+            if (op == OpParam && p.HasPending && p.Pending >= 0 && p.Frames.Count == 0)
+            {
+                p.HasPending = false;
+                if (_marks) _a.Called(p.Pending);
+            }
             FinalizePending();
             Buf(AsTok(kind, op));
             p.Pending = op;
@@ -269,6 +362,7 @@ internal sealed class Tracker : ITokenSink
     public void Directive(LineKind kind)
     {
         FlushChain();
+        _tail.Count = 0;
         _afterHash = _hasLast = false;
         foreach (var p in _paths)
         {
@@ -313,24 +407,23 @@ internal sealed class Tracker : ITokenSink
         return l;
     }
 
-    private static List<Path> Distinct(List<Path> all)
+    private List<Path> Distinct(List<Path> all)
     {
         var l = new List<Path>();
-        bool idle = false;
+        // idle paths differ in nothing that is still to come: one is kept, first
+        foreach (var p in all) if (p.Idle) { l.Add(p); break; }
         foreach (var p in all)
         {
-            if (p.Idle)
-            {
-                // idle paths differ in nothing that is still to come
-                if (idle) continue;
-                idle = true;
-                l.Add(p);
-                continue;
-            }
+            if (p.Idle) continue;
             bool dup = false;
             foreach (var q in l) if (q.Same(p)) { dup = true; break; }
-            if (!dup) l.Add(p);
-            if (l.Count == MaxPaths) break;
+            if (dup) continue;
+            if (l.Count < MaxPaths) { l.Add(p); continue; }
+            if (_run != 1) continue;
+            // past the cap: what the dropped path's open calls could build is open (max uses them, min never)
+            _p = p;
+            FinalizePending();
+            while (p.Frames.Count > 0) Close(p.Buf.Count, eof: true);
         }
         return l;
     }
@@ -346,6 +439,8 @@ internal sealed class Tracker : ITokenSink
             {
                 p.HasPending = false;
                 if (p.Pending >= 0 && _marks) _a.Called(p.Pending);
+                // and on past names that may expand to nothing (`CAT EMPTYM` calls CAT)
+                for (int i = _tail.Count - 2; i >= 0 && _marks && p.Pending >= 0 && _a.MayBeEmpty(_tail[i + 1]); i--) _a.Called(_tail[i]);
             }
             FinalizePending();
         }

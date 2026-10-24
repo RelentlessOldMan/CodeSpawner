@@ -250,6 +250,7 @@ internal ref struct LineWalker
     public int SplicedLength;
     public LineKind Kind;
     public bool StartsInComment;
+    public int CommentJoin;   // spliced offset where a block comment first ran on to the next line (-1: none)
 
     public LineWalker(ReadOnlySpan<byte> s, int start)
     {
@@ -260,6 +261,7 @@ internal ref struct LineWalker
         Start = Length = TermBytes = Lines = SplicedLength = 0;
         Kind = LineKind.Text;
         StartsInComment = false;
+        CommentJoin = -1;
     }
 
     public ReadOnlySpan<byte> Spliced => _buf.AsSpan(0, SplicedLength);
@@ -272,6 +274,28 @@ internal ref struct LineWalker
         TermBytes = 0;
         Lines = 0;
         SplicedLength = 0;
+        StartsInComment = InBlock;
+        CommentJoin = -1;
+        bool ib = InBlock;
+        while (true)
+        {
+            int seg = SplicedLength;
+            ReadSpliced();
+            FwLexer.Lex(_buf.AsSpan(seg, SplicedLength - seg), ref ib, false, NullSink.Instance);
+            // a block comment is one space (translation phase 3, before directives): the line goes on past it
+            if (!ib || _pos >= _s.Length) break;
+            if (CommentJoin < 0) CommentJoin = SplicedLength;
+            Append(" "u8);
+        }
+        Length = _pos - Start;
+        Kind = Classify(Spliced, StartsInComment);
+        InBlock = ib;
+        return true;
+    }
+
+    // Physical lines joined while one ends in \.
+    private void ReadSpliced()
+    {
         while (true)
         {
             int nl = _s[_pos..].IndexOf((byte)'\n');
@@ -286,14 +310,6 @@ internal ref struct LineWalker
             _pos = nl < 0 ? _s.Length : end + 1;
             if (!cont || _pos >= _s.Length) break;
         }
-        Length = _pos - Start;
-        StartsInComment = InBlock;
-        Kind = Classify(Spliced, InBlock);
-        // carry the block-comment state to the next line
-        bool ib = InBlock;
-        FwLexer.Lex(Spliced, ref ib, false, NullSink.Instance);
-        InBlock = ib;
-        return true;
     }
 
     private void Append(ReadOnlySpan<byte> part)
@@ -314,7 +330,7 @@ internal ref struct LineWalker
         var w = s[st..i];
         if (w.SequenceEqual("define"u8)) return LineKind.Define;
         if (w.SequenceEqual("if"u8) || w.SequenceEqual("ifdef"u8) || w.SequenceEqual("ifndef"u8)) return LineKind.Cond;
-        if (w.SequenceEqual("elif"u8)) return LineKind.Elif;
+        if (w.SequenceEqual("elif"u8) || w.SequenceEqual("elifdef"u8) || w.SequenceEqual("elifndef"u8)) return LineKind.Elif;
         if (w.SequenceEqual("else"u8)) return LineKind.Else;
         if (w.SequenceEqual("endif"u8)) return LineKind.EndIf;
         return LineKind.OtherDirective;
@@ -369,7 +385,7 @@ internal sealed class DefineParse : ITokenSink
             i++;
             while (i < s.Length)
             {
-                while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
+                i = FwLexer.SkipGap(s, i);   // a comment in the list is a space
                 if (i < s.Length && s[i] == ')') { i++; break; }
                 if (i + 2 < s.Length && s[i] == '.' && s[i + 1] == '.' && s[i + 2] == '.')
                 {
@@ -383,7 +399,7 @@ internal sealed class DefineParse : ITokenSink
                     int st = i;
                     while (i < s.Length && FwLexer.IsIdChar(s[i])) i++;
                     var p = s[st..i].ToArray();
-                    while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
+                    i = FwLexer.SkipGap(s, i);
                     if (i + 2 < s.Length && s[i] == '.' && s[i + 1] == '.' && s[i + 2] == '.')
                     {
                         Variadic = true;

@@ -11,6 +11,37 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.9] - 2026-10-23
+
+Review round 10 of the firmware truth engine (1.4.8), with CodeCarver's rulings, checked against gcc and clang
+`-E`. Firmware corpora change: 2 new family kinds (44 in all), a new hostile file and a new case, so `fw/`, the lists
+and `cases.tsv` differ from 1.4.8. With 44 kinds every unit hosts every kind, so more units use an open
+`open-body-call` name. A reference carve drops it, and compiling the carved tree fails on more units than in 1.4.8
+(`YOF*_RY`, open by design).
+
+### Changed
+- An alias walks in from its body's end past names that may expand to nothing and past parameters: `#define F CAT
+  EMPTYM` and `#define PICK2(x) CAT x` forward to `CAT` and call it. A name that need not be empty stops the walk.
+- A name before a parameter is called when the argument opens with `(`: `PICK2((KPK_, 2))` builds `KPK_2`.
+- A computed call keeps its own pool (CodeCarver's ruling). A use's exact end names, for a callee computed from it,
+  are only the names it can end with.
+- An argument that can come to one token or to several is built both ways. A function-like call that may give a
+  comma inside an argument is pooled under max only, so what it builds is open.
+- A call open across more than 16 paths through `#if` branches follows the first 16. Under max the others' open
+  calls are used as if the text ended there, so what only they build is open.
+- `#elifdef` and `#elifndef` are branches. A block comment over several lines is a space, around a directive's `#`
+  too. A define whose body has a comment running on to the next line is wanted, like one ending in an open comment.
+- Re-splitting at expanded commas is faster on a self-referential comma name, and stops inside itself.
+- Gen fails if a `cases.tsv` row names a define no carved file has.
+
+### Added
+- Family kinds `empty-tail-alias` and `param-tail-alias`, each with a decoy. `empty-tail-alias` wraps its call in
+  `KID(...)`: at top level `CAT EMPTY (` calls nothing in gcc or clang (the DEFER idiom), but the truth keeps the
+  name either way.
+- Hostile file `include/fw_q3.h` (compiled, included by unit 0): a `(` in a comment and in a char literal, then
+  2,000 `#if` blocks.
+- Case `self-comma`: `KPORT(KSRC0X)` with `KSRC0X = KSRC0X, 1` in `regs_0.h` keeps `KSRC0X_1`.
+
 ## [1.4.8] - 2026-10-23
 
 Firmware truth rules for the round-9 shapes, as ruled by CodeCarver and checked against gcc and clang `-E`. Firmware

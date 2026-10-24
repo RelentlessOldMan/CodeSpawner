@@ -154,7 +154,8 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             Assert.True(Spelled(cols[0]) == got, $"{cols[0]} ({cols[1]}): spelled {Spelled(cols[0])}, classed {got}");
             kinds.Add(cols[1].Split(' ')[0]);
         }
-        Assert.True(kinds.Count >= 56, string.Join(", ", kinds));   // 42 family kinds, the traps, the hostile files
+        Assert.True(kinds.Count >= 59, string.Join(", ", kinds));   // 44 family kinds, the traps, the hostile files
+        foreach (var k in new[] { "comment-hash", "empty-tail-alias", "param-tail-alias", "self-comma" }) Assert.Contains(k, kinds);
         // a #define inside a comment is no define
         Assert.DoesNotContain("KCMT0X", keep.Concat(drop).Concat(open));
         // every class is populated; the union build of one build is the same lists
@@ -538,7 +539,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         var t = Mini(tmp, "#define HX(b) KX_##b##_KY\n#define KX_KA 1\n#define KB_KY 1\n#define KX_KA_KY 1\n#define KX_KB_KY 1\n",
             "int a = HX(KA KB);\n");
         // the crossed names start with K, so the alphabet wants them kept
-        Assert.Empty(Bad(t).Where(e => !e.StartsWith("KX_K", StringComparison.Ordinal)));
+        Assert.DoesNotContain(Bad(t), e => !e.StartsWith("KX_K", StringComparison.Ordinal));
         Assert.Contains("KX_KA", Keep(tmp));
         Assert.Contains("KB_KY", Keep(tmp));
         Assert.Contains("KX_KA_KY", Lists(tmp, "mustDrop"));
@@ -819,6 +820,107 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         // a firmware knob the user typed with it off is still refused
         args = Presets.Expand(["--preset", "firmware-work", "--out", "x", "--firmware", "false", "--fw-files", "9"], out pt);
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(args, pt));
+    }
+
+    // ---------- round 10 rulings ----------
+
+    // kcat called once, so the minis' uncalled-wildcard use never builds the fillers
+    private const string Kcat = "#define kcat(a, b) a##b\n#define KQX_1 1\n";
+    private const string KcatUse = " + kcat(KQX_, 1)";
+
+    [Fact]
+    public void Alias_WalksPastATailThatMayBeEmpty_ANonEmptyNameStopsIt()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, Kcat + "#define KID(x) x\n#define KETE\n#define KETM() CAT KETE\n#define KETX_1 1\n" +
+            "#define KEWN(a, b) , 3\n#define KEUM() kcat KETE KEWN\n#define ZEUX_2Z 1\n",
+            "int a = KID(KETM()(KETX_, 1)) + ((void)KEUM()(ZEUX_, 2Z))" + KcatUse + ";\n");
+        Assert.Empty(Bad(t));
+        Assert.Contains("KETX_1", Keep(tmp));
+        Assert.Contains("ZEUX_2Z", Lists(tmp, "mustDrop"));
+    }
+
+    [Fact]
+    public void Alias_AParameterTailMayBeEmpty_AnArgumentOpeningWithParenCalls_AComputedCallPools()
+    {
+        // PICK2() leaves CAT before the (; PICK2((a, b)) gives CAT (a, b); PICK2(KPXN)(..) calls KPXN, but the
+        // computed call's own pool still builds KPVX_3Z, while ZPVY_ is no piece of it
+        using var tmp = new TempDir();
+        var t = Mini(tmp, Kcat + "#define PICK2(x) CAT x\n#define KPKX_1 1\n#define KPKX_2 1\n" +
+            "#define KPXN(a, b) , 4\n#define KPWM(x) kcat x\n#define KPVX_3Z 1\n#define ZPVY_3Z 1\n",
+            "int a = PICK2()(KPKX_, 1) + PICK2((KPKX_, 2)) + ((void)KPWM(KPXN)(KPVX_, 3Z))" + KcatUse + ";\n");
+        Assert.Empty(Bad(t));
+        Assert.Contains("KPKX_1", Keep(tmp));
+        Assert.Contains("KPKX_2", Keep(tmp));
+        Assert.Contains("KPVX_3Z", Keep(tmp));
+        Assert.Contains("ZPVY_3Z", Lists(tmp, "mustDrop"));
+    }
+
+    [Fact]
+    public void Resplit_ASelfReferentialCommaMacroEnds()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define KGP_(p, n) p##_##n\n#define KPORT(x) KGP_(x)\n#define KSRCX KSRCX, 1\n#define KSRCX_1 5\n",
+            "int a = KPORT(KSRCX);\n");
+        Assert.Empty(Bad(t));
+        Assert.Contains("KSRCX_1", Keep(tmp));
+    }
+
+    [Fact]
+    public void Branches_ElifdefIsABranch()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define KAX_1 1\n#define KBX_2 1\n#define KCX_3 1\n",
+            "int a = CAT(\n#ifdef FW_ALT\nKAX_, 1\n#elifdef FW_B\nKBX_, 2\n#elifndef FW_C\nKCX_, 3\n#endif\n);\n");
+        Assert.Empty(Bad(t));
+        foreach (var n in new[] { "KAX_1", "KBX_2", "KCX_3" }) Assert.Contains(n, Keep(tmp));
+    }
+
+    [Fact]
+    public void Branches_PastThePathCapAreOpen()
+    {
+        // 32 paths through one call: the first 16 are followed (the call crosses a directive, so it pools their
+        // pieces); the 16 dropped paths are the last #else's, and what only they could build (an E) is open
+        using var tmp = new TempDir();
+        var defs = new StringBuilder("#define J5(a, b, c, d, e, f) a##b##c##d##e##f\n");
+        var names = new List<string>();
+        for (int i = 0; i < 32; i++)
+        {
+            var n = "KCPX_" + string.Concat(Enumerable.Range(0, 4).Select(b => (i >> (4 - b) & 1) == 0 ? 'A' : 'B')) + ((i & 1) == 0 ? 'D' : 'E');
+            names.Add(n);
+            defs.Append($"#define {n} 1\n");
+        }
+        var unit = new StringBuilder("int a = J5(KCPX_\n");
+        for (int i = 0; i < 4; i++) unit.Append($"#ifdef FW_P{i}\n, B\n#else\n, A\n#endif\n");
+        unit.Append("#ifdef FW_P4\n, D\n#else\n, E\n#endif\n);\n");
+        var t = Mini(tmp, defs.ToString(), unit.ToString());
+        Assert.Equal(16, Tracker.MaxPaths);
+        foreach (var n in names) Assert.Contains(n, n.EndsWith('D') ? Keep(tmp) : Lists(tmp, "open"));
+        // the alphabet says keep for them all: only the open E names disagree
+        Assert.Equal(16, Bad(t).Count(e => e.Contains("E: open, alphabet says keep")));
+        Assert.Equal(16, Bad(t).Length);
+    }
+
+    [Fact]
+    public void Defines_ACommentRunOnFromTheBodyIsSeeded_ACommentBeforeTheHashIsStillADefine()
+    {
+        using var tmp = new TempDir();
+        var t = Mini(tmp, "#define KCOX 1 /* runs\n   on */ + 2\n/* a comment over\n   two lines */ # define ZHFZ 3\n# /* c */ define ZHEZ 2\n",
+            "int a = 0;\n");
+        Assert.Empty(Bad(t));
+        Assert.Contains("KCOX", Keep(tmp));
+        Assert.Contains("ZHFZ", Lists(tmp, "mustDrop"));
+        Assert.Contains("ZHEZ", Lists(tmp, "mustDrop"));
+    }
+
+    [Fact]
+    public void Gen_RefusesACaseRowNoCarvedFileDefines()
+    {
+        using var tmp = new TempDir();
+        Directory.CreateDirectory(Path.Combine(tmp.Path, "lists"));
+        File.WriteAllText(Path.Combine(tmp.Path, "lists", "cases.tsv"), "name\tcase\tsite\nKNOPEX\tdirect\tfw/u.c\nKAX\tdirect\tfw/u.c\n");
+        var t = Mini(tmp, "#define KAX 1\n", "int a = KAX;\n");
+        Assert.Equal(["KNOPEX: a case row, but no carved file defines it"], Bad(t));
     }
 
     [Fact]

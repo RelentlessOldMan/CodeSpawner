@@ -29,7 +29,7 @@ internal sealed partial class FwSpec
 {
     public const int ProductCap = 4096;
     private const long WorkMax = 20_000_000;
-    private const byte WildDigits = 1, WildAny = 2;
+    internal const byte WildDigits = 1, WildAny = 2;
 
     /// <summary>One name a slot or a chain can give: exact (<see cref="Pre"/> is the name), the empty string, or a
     /// pattern: <see cref="Pre"/>, a wildcard (one or more digits, or anything), <see cref="Suf"/>. Parts are name
@@ -44,12 +44,14 @@ internal sealed partial class FwSpec
     private sealed class Val
     {
         public readonly HashSet<El> First = new(), Last = new();
+        public readonly HashSet<El> Tail = new();   // the Last edges that can end it: every token after them can be empty
         public bool Empty;
 
         public void Union(Val o)
         {
             First.UnionWith(o.First);
             Last.UnionWith(o.Last);
+            Tail.UnionWith(o.Tail);
             Empty |= o.Empty;
         }
     }
@@ -67,7 +69,7 @@ internal sealed partial class FwSpec
         public int Close;
         public bool Computed;
         public readonly List<int> Callees = new();
-        public List<XTok>[] Args = Array.Empty<List<XTok>>();
+        public List<XTok>[][] Alts = Array.Empty<List<XTok>[]>();   // the arguments, one split per way they come out
         public readonly Val V = new();
         public bool Inst;
     }
@@ -88,6 +90,9 @@ internal sealed partial class FwSpec
     }
 
     private bool Emptyable(int id) => HasBit(id, _run == 0 ? BitEmptyMin : BitEmptyMax);
+
+    /// <summary>A name with an empty define in either run, or one whose body is only such names.</summary>
+    public bool MayBeEmpty(int id) => id >= 0 && id < _bits.Length && (_bits[id] & (BitEmptyMin | BitEmptyMax)) != 0;
 
     // ---------------- static facts from pass 1 ----------------
 
@@ -112,7 +117,7 @@ internal sealed partial class FwSpec
                     break;
                 case Tok.Ident:
                     if (d.IsParam(d.Text(k))) break;
-                    if (calls > 0 || (k + 1 < b.Count && b[k + 1].Kind == Tok.LParen) || k == b.Count - 1)
+                    if (calls > 0 || k == b.Count - 1 || (k + 1 < b.Count && (b[k + 1].Kind == Tok.LParen || (b[k + 1].Kind == Tok.Ident && d.IsParam(d.Text(k + 1))))))
                         SetBit(Names.GetOrAdd(d.Text(k)), BitCalled);
                     break;
             }
@@ -196,7 +201,7 @@ internal sealed partial class FwSpec
         if (id < _cHead.Length)
             for (int k = _cHead[id]; k >= 0; k = _cdNext[k])
             {
-                int len = _cdLenTerm[k] >> 2;
+                int len = _cdLen[k];
                 int cf = CFile(k, out long off);
                 if (_tplBuf.Length < len) _tplBuf = new byte[Math.Max(len, _tplBuf.Length * 2)];
                 RandomAccess.Read(Handle(cf), _tplBuf.AsSpan(0, len), off);
@@ -255,7 +260,7 @@ internal sealed partial class FwSpec
     private readonly HashSet<int> _poolS = new(), _poolE = new();
     private bool _poolOn, _poolAnyS, _poolAnyE, _poolDigitsE;
     private int _noPool;                       // > 0 while expanding a name: its body's uses are its own stream's
-    private List<XTok>[]? _eofArgs;            // a call left open at end of file: its missing arguments are wildcards
+    private List<XTok>[][]? _eofArgs;            // a call left open at end of file: its missing arguments are wildcards
     private readonly HashSet<El>[] _matched = { new(), new() };
 
     /// <summary>One use found in a stream: instantiated, and with <paramref name="pool"/> (a computed callee, a
@@ -268,7 +273,7 @@ internal sealed partial class FwSpec
         ResetPool();
         if (pool) PoolArgs(args);
         var v = new Val();
-        _eofArgs = eof ? args : null;
+        _eofArgs = eof ? new[] { args } : null;
         try
         {
             if (callee >= 0) v.Union(Instantiate(callee, args));
@@ -278,7 +283,7 @@ internal sealed partial class FwSpec
         }
         finally { _eofArgs = null; }
         FinishPool();
-        return Heads(v.Last);
+        return Heads(v.Tail);
     }
 
     private const int MaxHeads = 64;
@@ -366,7 +371,7 @@ internal sealed partial class FwSpec
 
     private List<XTok>[] Bind(Tpl t, List<XTok>[] args)
     {
-        bool pad = ReferenceEquals(args, _eofArgs);
+        bool pad = _eofArgs is not null && Array.IndexOf(_eofArgs, args) >= 0;
         var b = new List<XTok>[t.NParams];
         int fixedN = t.Variadic ? t.NParams - 1 : t.NParams;
         for (int i = 0; i < fixedN; i++) b[i] = i < args.Length ? args[i] : Missing(pad);
@@ -454,21 +459,24 @@ internal sealed partial class FwSpec
             bool chainCallee = chainStart[p] >= 0;
             bool computed = !chainCallee && b[p].K == XTok.RParen && open[p] >= 0 && sites[open[p]] is { Inst: true };
             if (!chainCallee && !computed && b[p].K != XTok.Ident && b[p].K != XTok.Param) continue;
+            // an open call of a name with no define builds nothing (and its tail is the rest of the body: skipping
+            // it keeps nested open calls linear)
+            if (openCall && !chainCallee && !computed && b[p].K == XTok.Ident && Templates(b[p].Id).Count == 0) continue;
             bool unknown = false;
             var inner = Subst(b, k + 1, openCall ? n : close[k], a, ref unknown);
             if (openCall) inner.Add(new XTok(XTok.Wild, WildAny));
-            var site = new Site { Close = openCall ? n - 1 : close[k], Computed = computed, Args = Split(Resplit(inner, 0) ?? inner) };
+            var site = new Site { Close = openCall ? n - 1 : close[k], Computed = computed, Alts = ArgAlts(inner) };
             sites[k] = site;
-            if (openCall) _eofArgs = site.Args;
+            if (openCall) _eofArgs = site.Alts;
             try
             {
                 if (computed)
                 {
                     // the call before it gave a name: that name called, and the call's own pool
                     if (unknown) continue;
-                    PoolArgs(site.Args);
+                    foreach (var al in site.Alts) PoolArgs(al);
                     site.Inst = true;
-                    var heads = Heads(sites[open[p]]!.V.Last);
+                    var heads = Heads(sites[open[p]]!.V.Tail);
                     if (heads is not null) foreach (int h in heads) Call(site, h);
                     continue;
                 }
@@ -478,7 +486,7 @@ internal sealed partial class FwSpec
                     foreach (var e in chainLast[chainStart[p]]!)
                     {
                         if (e.IsExact) Call(site, e.Pre);
-                        else if (!e.IsEps) { PoolArgs(site.Args); site.Inst = true; }
+                        else if (!e.IsEps) { foreach (var al in site.Alts) PoolArgs(al); site.Inst = true; }
                     }
                     continue;
                 }
@@ -494,13 +502,28 @@ internal sealed partial class FwSpec
                 else if (pv.Count > 0)
                 {
                     // a call given (`APPLY(ID(CAT), ...)`): the names it can end in, and the call's own pool
-                    PoolArgs(site.Args);
+                    foreach (var al in site.Alts) PoolArgs(al);
                     site.Inst = true;
                     foreach (var e in EdgeSet(pv, last: true, forceExp: true)) if (e.IsExact) Call(site, e.Pre);
                 }
             }
             finally { _eofArgs = savedEof; }
         }
+
+        // a name before a parameter whose argument opens with ( is called by it (`CAT x` with x = `(KPQ_, 2)`)
+        if (a is not null)
+            for (int k = 0; k + 1 < n; k++)
+            {
+                if (b[k].K != XTok.Ident || b[k + 1].K != XTok.Param || chainStart[k] >= 0) continue;
+                if (k + 2 < n && b[k + 2].K == XTok.Hash) continue;
+                var pv = a[b[k + 1].Id];
+                if (pv.Count == 0 || pv[0].K != XTok.LParen) continue;
+                int c = MatchClose(pv, 0);
+                if (c < 0) continue;
+                var inner = new List<XTok>(c);
+                for (int i = 1; i < c; i++) inner.Add(new XTok(pv[i].K, pv[i].Id, exp: true));
+                Call(new Site { Close = k + 1, Alts = ArgAlts(inner) }, b[k].Id);
+            }
 
         // the body's edges, walking in from each end
         bool all = true;
@@ -538,28 +561,35 @@ internal sealed partial class FwSpec
         x = n - 1;
         while (x >= 0)
         {
+            // what this token gives at the end: an edge, and while every token after it can be empty also a tail
+            bool reach = all;
+            var cur = new HashSet<El>();
+            bool stop = false;
             if (chainStart[x] >= 0)
             {
                 int st = chainStart[x];
                 var set = chainLast[st]!;
                 if (set.Count == 0) { all = false; break; }
-                foreach (var el in set) { v.Last.Add(el); if (el.IsExact) AddExp(v.Last, el.Pre, true); }
+                foreach (var el in set) { cur.Add(el); if (el.IsExact) AddExp(cur, el.Pre, true); }
                 all &= chainEps[st];
                 x = st - 1;
-                continue;
             }
-            var tk = b[x];
-            if (tk.K == XTok.RParen)
+            else if (b[x].K == XTok.RParen)
             {
                 int o = open[x];
                 if (o < 0 || sites[o] is not { Computed: false } s || (s.Callees.Count == 0 && !s.Inst)) { all = false; break; }
-                all &= SiteEdges(v.Last, s, true);
+                all &= SiteEdges(cur, s, true);
                 int p = o - 1;
                 x = chainStart[p] >= 0 ? chainStart[p] - 1 : p - 1;
-                continue;
             }
-            if (!Walk(v.Last, tk, a, true, ref all)) break;
-            x--;
+            else
+            {
+                stop = !Walk(cur, b[x], a, true, ref all);
+                if (!stop) x--;
+            }
+            v.Last.UnionWith(cur);
+            if (reach) v.Tail.UnionWith(cur);
+            if (stop) break;
         }
         if (x < 0 && all) v.Last.Add(El.Eps);
         return v;
@@ -568,9 +598,12 @@ internal sealed partial class FwSpec
     private void Call(Site site, int q)
     {
         site.Callees.Add(q);
-        if (!Instantiable(q, site.Args)) return;
-        site.V.Union(Instantiate(q, site.Args));
-        site.Inst = true;
+        foreach (var al in site.Alts)
+        {
+            if (!Instantiable(q, al)) continue;
+            site.V.Union(Instantiate(q, al));
+            site.Inst = true;
+        }
     }
 
     /// <summary>One token of a body's edge walk; false stops the walk.</summary>
@@ -612,7 +645,7 @@ internal sealed partial class FwSpec
             AddExp(to, q, last);
             empty |= Emptyable(q);
         }
-        foreach (var arg in s.Args)
+        foreach (var al in s.Alts) foreach (var arg in al)
             foreach (var t in arg)
             {
                 if (t.K == XTok.Ident) { AddId(to, t.Id); AddExp(to, t.Id, last); }
@@ -627,9 +660,110 @@ internal sealed partial class FwSpec
     /// pool takes the first and last slots. Unknown parameters: the literal operands, nothing built.</summary>
     private (HashSet<El> First, HashSet<El> Last) Chain(XTok[] b, List<int> ops, List<XTok>[]? a, out bool eps)
     {
+        // an argument of two tokens or more splits the chain: `X_##b##_Y` with `A B` is X_A and B_Y; one that can come
+        // to either (`KC KD` through a forwarder, KC maybe empty) is both, over every mix of the uncertain ones
+        int n = ops.Count;
+        var split = new bool[n];
+        var maybe = new List<int>();
+        if (a is not null)
+            for (int i = 0; i < n; i++)
+            {
+                if (b[ops[i]].K != XTok.Param) continue;
+                var p = Pieces(a[b[ops[i]].Id]);
+                if (p == 1) split[i] = true;
+                else if (p == 2) maybe.Add(i);
+            }
+        if (maybe.Count == 0) return Chain(b, ops, a, split, out eps);
+        if (maybe.Count > MaxSplitChoices)
+        {
+            // too many to mix: each split, and every edge of every operand starts and ends names
+            foreach (int i in maybe) split[i] = true;
+            foreach (int i in maybe)
+            {
+                var arg = a![b[ops[i]].Id];
+                var both = EdgeSet(arg, last: false, forceExp: false);
+                both.UnionWith(EdgeSet(arg, last: true, forceExp: false));
+                PoolStart(both);
+                PoolEnd(both);
+            }
+            return Chain(b, ops, a, split, out eps);
+        }
+        var first = new HashSet<El>();
+        var last = new HashSet<El>();
+        eps = false;
+        for (int m = 0; m < 1 << maybe.Count; m++)
+        {
+            for (int j = 0; j < maybe.Count; j++) split[maybe[j]] = (m >> j & 1) != 0;
+            var (f, l) = Chain(b, ops, a, split, out bool e);
+            first.UnionWith(f);
+            last.UnionWith(l);
+            eps |= e;
+        }
+        return (first, last);
+    }
+
+    private const int MaxSplitChoices = 4;
+
+    /// <summary>How many tokens an argument comes to: 0 at most one, 1 two or more, 2 either. A name that is a macro
+    /// (with its call) can come to any number.</summary>
+    private int Pieces(List<XTok> arg)
+    {
+        // a wildcard (a missing or unknown argument) is one piece of anything: the chain goes through it whole
+        foreach (var t in arg) if (t.K == XTok.Wild) return 0;
+        var (min, max) = Count(arg, exp: false, 0);
+        if (min >= 2) return 1;
+        return max >= 2 ? 2 : 0;
+    }
+
+    private const int Many = int.MaxValue / 4;
+    private readonly HashSet<int> _counting = new();
+
+    /// <summary>The fewest and most tokens a token run comes to (<see cref="Many"/> for any number): a name standing
+    /// for its expansion counts its object-like bodies; a call of a macro, ## and wildcards count as any.</summary>
+    private (int Min, int Max) Count(IReadOnlyList<XTok> toks, bool exp, int depth)
+    {
+        int min = 0, max = 0;
+        for (int i = 0; i < toks.Count; i++)
+        {
+            var t = toks[i];
+            if (t.K == XTok.Wild || t.K == XTok.Hash) return (min, Many);
+            if (t.K != XTok.Ident || !(exp || t.Exp)) { min++; max = Math.Min(Many, max + 1); continue; }
+            bool called = i + 1 < toks.Count && toks[i + 1].K == XTok.LParen;
+            int lo = int.MaxValue, hi = 0;
+            bool any = false;
+            if (_counting.Add(t.Id))   // a name inside its own expansion is itself
+            {
+                try
+                {
+                    foreach (var tp in Templates(t.Id))
+                    {
+                        if ((tp.Mask & (1 << _run)) == 0) continue;
+                        if (tp.IsFunc && !called) continue;
+                        any = true;
+                        if (tp.IsFunc || depth >= MaxResplitDepth) { lo = 0; hi = Many; break; }
+                        var (l, h) = Count(tp.Body, exp: true, depth + 1);
+                        lo = Math.Min(lo, l);
+                        hi = Math.Max(hi, h);
+                    }
+                }
+                finally { _counting.Remove(t.Id); }
+            }
+            if (!any) { min++; max = Math.Min(Many, max + 1); continue; }
+            if (called && hi == Many)
+            {
+                int c = MatchClose(toks, i + 1);
+                if (c > 0) i = c;
+            }
+            min += lo;
+            max = Math.Min(Many, max + hi);
+        }
+        return (min, max);
+    }
+
+    private (HashSet<El> First, HashSet<El> Last) Chain(XTok[] b, List<int> ops, List<XTok>[]? a, bool[] split, out bool eps)
+    {
         eps = false;
         int n = ops.Count;
-        // an argument of several tokens, none expanded, splits the chain: `X_##b##_Y` with `A B` is X_A and B_Y
         var segs = new List<List<List<El>>> { new() };
         HashSet<El>? front = null, back = null;   // a split end argument's own far token
         bool unbound = false;
@@ -641,7 +775,7 @@ internal sealed partial class FwSpec
             {
                 if (a is null) { unbound = true; segs[^1].Add(new List<El>()); continue; }
                 var arg = a[tk.Id];
-                if (SplitsChain(arg))
+                if (split[i])
                 {
                     var head = EdgeSet(arg, last: false, forceExp: false);
                     var tail = EdgeSet(arg, last: true, forceExp: false);
@@ -681,58 +815,183 @@ internal sealed partial class FwSpec
         return (front ?? first ?? new HashSet<El>(), back ?? last ?? new HashSet<El>());
     }
 
-    private static bool SplitsChain(List<XTok> arg)
+    /// <summary>A call's arguments, one split for each way its expanded names can come out: a name whose object-like
+    /// body (through other names) has a top-level comma splits the call there (`PORT(PIN_LED)` with <c>PIN_LED</c> =
+    /// <c>A, 5</c>), each of its definitions a way. A function-like call among them that may give a comma is pooled
+    /// under max (open: Carver pools those).</summary>
+    private List<XTok>[][] ArgAlts(List<XTok> inner)
     {
-        if (arg.Count < 2) return false;
-        foreach (var t in arg) if (t.Exp || t.K == XTok.Wild) return false;
-        return true;
+        bool saved = _fnComma;
+        _fnComma = false;
+        var alts = Resplit(inner, 0);
+        bool fnComma = _fnComma;
+        _fnComma = saved;
+        List<XTok>[][] r;
+        if (alts is null) r = new[] { Split(inner) };
+        else
+        {
+            r = new List<XTok>[alts.Count][];
+            for (int i = 0; i < r.Length; i++) r[i] = Split(alts[i]);
+        }
+        if (fnComma && _run == 1) foreach (var x in r) PoolPieces(x);
+        return r;
     }
 
-    /// <summary>A call's argument tokens with each expanded name whose one object-like body (through aliases) has a
-    /// top-level comma replaced by that body, so the call splits at its commas (`PORT(PIN_LED)` with
-    /// <c>PIN_LED</c> = <c>A, 5</c>); null when there is none.</summary>
-    private List<XTok>? Resplit(List<XTok> inner, int depth)
+    /// <summary>Arguments a comma may split anywhere in: every identifier and number, with both edges of its
+    /// expansion, starts and ends names.</summary>
+    private void PoolPieces(List<XTok>[] args)
     {
-        List<XTok>? r = null;
+        if (_noPool > 0) return;
+        var s = new HashSet<El>();
+        foreach (var arg in args)
+            foreach (var t in arg)
+            {
+                if (t.K == XTok.Wild) { s.Add(new El(-1, (byte)t.Id, -1)); continue; }
+                if (t.K != XTok.Ident && t.K != XTok.Num) continue;
+                AddId(s, t.Id);
+                if (t.K != XTok.Ident) continue;
+                AddExp(s, t.Id, true);
+                AddExp(s, t.Id, false);
+            }
+        PoolEnd(s);
+        s.RemoveWhere(x => x.Wild != 0 && x.Pre < 0 && x.Suf < 0 && x.Wild == WildDigits);   // digits end names only
+        PoolStart(s);
+    }
+
+    private bool _fnComma;
+    private readonly HashSet<int> _resplitting = new();   // names being re-split: not re-split inside themselves
+    private const int MaxResplitDepth = 16, MaxResplitAlts = 16;
+
+    /// <summary>The ways a token run comes out with each top-level expanded comma name replaced by its bodies; null
+    /// when there is none.</summary>
+    private List<List<XTok>>? Resplit(List<XTok> inner, int depth)
+    {
+        List<List<XTok>>? r = null;
+        int d = 0;
         for (int i = 0; i < inner.Count; i++)
         {
             var t = inner[i];
-            var body = t.K == XTok.Ident && t.Exp ? CommaBody(t.Id, depth) : null;
-            if (body is null) { r?.Add(t); continue; }
-            r ??= inner.GetRange(0, i);
-            r.AddRange(body);
+            if (t.K == XTok.LParen) d++;
+            else if (t.K == XTok.RParen) d--;
+            List<List<XTok>>? bodies = null;
+            // a nested call's arguments are split before its names expand: only the top level re-splits
+            if (d == 0 && t.K == XTok.Ident && t.Exp && !_resplitting.Contains(t.Id))
+            {
+                if (i + 1 < inner.Count && inner[i + 1].K == XTok.LParen && MayGiveComma(t.Id, inner, i + 1, depth)) _fnComma = true;
+                bodies = CommaBodies(t.Id, depth);
+            }
+            if (bodies is null) { if (r is not null) foreach (var p in r) p.Add(t); continue; }
+            r ??= new() { inner.GetRange(0, i) };
+            if (r.Count * bodies.Count > MaxResplitAlts)
+            {
+                // too many ways: the name left whole, its bodies pooled under max (open)
+                if (_run == 1) foreach (var bd in bodies) PoolPieces(new[] { bd });
+                foreach (var p in r) p.Add(t);
+                continue;
+            }
+            var next = new List<List<XTok>>(r.Count * bodies.Count);
+            foreach (var p in r)
+                foreach (var bd in bodies)
+                {
+                    var q = new List<XTok>(p.Count + bd.Count);
+                    q.AddRange(p);
+                    q.AddRange(bd);
+                    next.Add(q);
+                    _work += q.Count;
+                }
+            if (_work > WorkMax) throw new InvalidOperationException("firmware truth: one paste use expands past the work limit");
+            r = next;
         }
         return r;
     }
 
-    private const int MaxResplitDepth = 16;
-
-    private List<XTok>? CommaBody(int id, int depth)
+    /// <summary>The bodies a name's object-like definitions come to, each re-split, if any has a top-level comma;
+    /// a definition without one (or function-like) gives the name itself. Null when none has a comma.</summary>
+    private List<List<XTok>>? CommaBodies(int id, int depth)
     {
         if (depth >= MaxResplitDepth) return null;
-        Tpl? one = null;
-        foreach (var t in Templates(id))
+        List<List<XTok>>? r = null;
+        bool plain = false;
+        _resplitting.Add(id);
+        try
         {
-            if ((t.Mask & (1 << _run)) == 0) continue;
-            if (one is not null) return null;   // several definitions: no one splitting
-            one = t;
+            foreach (var tp in Templates(id))
+            {
+                if ((tp.Mask & (1 << _run)) == 0) continue;
+                var l = tp.IsFunc ? null : Folded(tp.Body);
+                if (l is null) { plain = true; continue; }
+                foreach (var x in Resplit(l, depth + 1) ?? new() { l })
+                    if (TopComma(x)) (r ??= new()).Add(x);
+                    else plain = true;
+            }
         }
-        if (one is null || one.IsFunc) return null;
-        var b = one.Body;
-        if (b.Length == 1 && b[0].K == XTok.Ident) return CommaBody(b[0].Id, depth + 1);
-        int d = 0;
-        bool comma = false;
-        foreach (var x in b)
+        finally { _resplitting.Remove(id); }
+        if (r is not null && plain) r.Add(new List<XTok> { new(XTok.Ident, id, exp: true) });
+        return r;
+    }
+
+    /// <summary>An object-like body as expanded tokens, its literal <c>##</c> chains pasted (`KG ## D, 8` is
+    /// <c>KGD, 8</c>); null when one pastes something other than names and numbers.</summary>
+    private List<XTok>? Folded(XTok[] b)
+    {
+        var l = new List<XTok>(b.Length);
+        for (int k = 0; k < b.Length; k++)
         {
+            var x = b[k];
             if (x.K == XTok.Hash) return null;
+            if (k + 1 >= b.Length || b[k + 1].K != XTok.Hash) { l.Add(new XTok(x.K, x.Id, exp: true)); continue; }
+            var name = new List<byte>();
+            byte kind = x.K;
+            while (true)
+            {
+                if (b[k].K != XTok.Ident && b[k].K != XTok.Num) return null;
+                AppendName(name, b[k].Id);
+                if (k + 2 < b.Length && b[k + 1].K == XTok.Hash) k += 2;
+                else break;
+            }
+            l.Add(new XTok(kind, Names.GetOrAdd(name.ToArray()), exp: true));
+        }
+        return l;
+    }
+
+    private static bool TopComma(List<XTok> l)
+    {
+        int d = 0;
+        foreach (var x in l)
+        {
             if (x.K == XTok.LParen) d++;
             else if (x.K == XTok.RParen) d--;
-            else if (x.K == XTok.Comma && d == 0) comma = true;
+            else if (x.K == XTok.Comma && d == 0) return true;
         }
-        if (!comma) return null;
-        var l = new List<XTok>(b.Length);
-        foreach (var x in b) l.Add(new XTok(x.K, x.Id, exp: true));
-        return Resplit(l, depth + 1) ?? l;
+        return false;
+    }
+
+    /// <summary>A call of a function-like name that may give a top-level comma: a body with one, or a body passing
+    /// on an argument that holds a comma name or another call.</summary>
+    private bool MayGiveComma(int id, List<XTok> toks, int open, int depth)
+    {
+        int c = MatchClose(toks, open);
+        if (c < 0) return false;
+        bool argComma = false;
+        for (int i = open + 1; i < c && !argComma; i++)
+        {
+            var t = toks[i];
+            if (t.K != XTok.Ident || !t.Exp || _resplitting.Contains(t.Id) || Templates(t.Id).Count == 0) continue;
+            argComma = (i + 1 < c && toks[i + 1].K == XTok.LParen) || CommaBodies(t.Id, depth + 1) is not null;
+        }
+        foreach (var tp in Templates(id))
+        {
+            if ((tp.Mask & (1 << _run)) == 0 || !tp.IsFunc) continue;
+            int d = 0;
+            foreach (var x in tp.Body)
+            {
+                if (x.K == XTok.LParen) d++;
+                else if (x.K == XTok.RParen) d--;
+                else if (x.K == XTok.Comma && d == 0) return true;
+                else if (x.K == XTok.Param && argComma) return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>The cross product of <paramref name="slots"/>, each built; null (and the slots pooled) past the cap.</summary>
@@ -828,15 +1087,16 @@ internal sealed partial class FwSpec
                     AddExp(s, ct.Id, last);
                     var inner = new List<XTok>(c - o - 1);
                     for (int i = o + 1; i < c; i++) { var t = toks[i]; if (forceExp) t.Exp = true; inner.Add(t); }
-                    var args = Split(Resplit(inner, 0) ?? inner);
+                    var alts = ArgAlts(inner);
                     foreach (var t in inner)
                     {
                         if (t.K == XTok.Ident) { AddId(s, t.Id); AddExp(s, t.Id, last); }
                         else if (t.K == XTok.Num) AddId(s, t.Id);
                     }
                     bool empty = Emptyable(ct.Id);
-                    if (Instantiable(ct.Id, args))
+                    foreach (var args in alts)
                     {
+                        if (!Instantiable(ct.Id, args)) continue;
                         var cv = Instantiate(ct.Id, args);
                         s.UnionWith(last ? cv.Last : cv.First);
                         empty |= cv.Empty;
@@ -865,7 +1125,7 @@ internal sealed partial class FwSpec
         return s;
     }
 
-    private static int MatchClose(List<XTok> t, int open)
+    private static int MatchClose(IReadOnlyList<XTok> t, int open)
     {
         int depth = 0;
         for (int i = open; i < t.Count; i++)
