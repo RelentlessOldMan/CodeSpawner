@@ -26,7 +26,15 @@ internal static class FirmwareVerifier
     {
         if (fw.ValueKind != JsonValueKind.Object) { err.WriteLine("FAIL firmware: not an object"); return 1; }
         FwTruth t;
-        try { t = FwSpec.Compute(corpus, null, checkAlphabet: true); }
+        // phase 2: firmware.roots turns on the function truth
+        List<string>? roots = null;
+        if (fw.TryGetProperty("roots", out var rootsEl))
+        {
+            if (rootsEl.ValueKind != JsonValueKind.Array || rootsEl.EnumerateArray().Any(x => x.ValueKind != JsonValueKind.String))
+            { err.WriteLine("FAIL firmware roots: not an array of names"); return 1; }
+            roots = rootsEl.EnumerateArray().Select(x => x.GetString()!).ToList();
+        }
+        try { t = FwSpec.Compute(corpus, null, checkAlphabet: true, roots); }
         catch (FwDbException ex) { err.WriteLine($"FAIL firmware compileDb: {ex.Message}"); return 1; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { err.WriteLine($"FAIL firmware: the tree cannot be read ({ex.Message})"); return 1; }
@@ -98,6 +106,12 @@ internal static class FirmwareVerifier
             Eq("counts.cases", Num(c, "cases"), rows.ToString());
         }
         else { err.WriteLine($"FAIL firmware cases: {Str(fw, "cases") ?? "(missing)"} is not a file of the corpus"); fail++; }
+        if (roots is not null)
+        {
+            Eq("compileDbUnion", Str(fw, "compileDbUnion"), FirmwareEmitter.DbWorld2Path);
+            if (Str(fw, "functionCases") is { } fc && paths.Resolve(fc) is { } fcp && File.Exists(fcp)) okCount[0]++;
+            else { err.WriteLine($"FAIL firmware functionCases: {Str(fw, "functionCases") ?? "(missing)"} is not a file of the corpus"); fail++; }
+        }
         if (Obj(fw, "hostile") is { ValueKind: JsonValueKind.Array } hostile)
             foreach (var h in hostile.EnumerateArray())
             {
@@ -110,8 +124,12 @@ internal static class FirmwareVerifier
         foreach (var b in new[] { "main", "union" })
         {
             var lists = Obj(builds, b);
-            foreach (var (k, l) in new[] { ("mustKeepDefines", t.MustKeepDefines), ("mustDropDefines", t.MustDropDefines),
-                         ("openDefines", t.OpenDefines), ("mustKeepFunctions", t.MustKeepFunctions), ("mustKeepFiles", t.MustKeepFiles) })
+            var want = new List<(string, FwList)> { ("mustKeepDefines", t.MustKeepDefines), ("mustDropDefines", t.MustDropDefines),
+                ("openDefines", t.OpenDefines), ("mustKeepFiles", t.MustKeepFiles) };
+            if (t.UnionMustKeepFunctions is null) want.Add(("mustKeepFunctions", t.MustKeepFunctions));
+            else if (b == "main") want.AddRange([("mustKeepFunctions", t.MustKeepFunctions), ("mustDropFunctions", t.MustDropFunctions!), ("openFunctions", t.OpenFunctions!)]);
+            else want.AddRange([("mustKeepFunctions", t.UnionMustKeepFunctions), ("mustDropFunctions", t.UnionMustDropFunctions!), ("openFunctions", t.UnionOpenFunctions!)]);
+            foreach (var (k, l) in want)
             {
                 var e = Obj(lists, k);
                 Eq($"builds.{b}.{k}.sha256", Str(e, "sha256"), l.Sha256);

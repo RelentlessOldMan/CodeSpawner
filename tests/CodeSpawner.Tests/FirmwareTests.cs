@@ -241,7 +241,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     {
         var map = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var f in Directory.EnumerateFiles(root, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 }))
-            if (!f.EndsWith("compile_commands.json", StringComparison.Ordinal))   // names the tree's absolute path
+            if (!Path.GetFileName(f).StartsWith("compile_commands.", StringComparison.Ordinal))   // both dbs name the tree's absolute path
                 map[Path.GetRelativePath(root, f).Replace('\\', '/')] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(f)));
         return map;
     }
@@ -958,5 +958,145 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         var o = ArgParser.ParseGen(["--out", "x", "--firmware"]);
         o.Scale = 1e6;
         Assert.Throws<ArgException>(() => o.Eff("fw-work-defines", 2_000_000_000));
+    }
+
+    // ---------- phase 2: function truth (1.5.0) ----------
+
+    [Fact]
+    public void Functions_EveryCaseIsClassedAsSpelled_World2IsKeptInTheUnionOnly()
+    {
+        var rows = File.ReadAllLines(Path.Combine(_c.Path, FirmwareEmitter.FunctionCasesPath));
+        Assert.Equal("name\tcase\tsite", rows[0]);
+        var keep = List(_c.Path, "union", "mustKeepFunctions");
+        var drop = List(_c.Path, "union", "mustDropFunctions");
+        var open = List(_c.Path, "union", "openFunctions");
+        Assert.Empty(keep.Intersect(drop).Concat(keep.Intersect(open)).Concat(drop.Intersect(open)));
+        foreach (var row in rows.Skip(1))
+        {
+            var cols = row.Split('\t');
+            Assert.Equal(3, cols.Length);
+            Assert.True(File.Exists(Path.Combine(_c.Path, FwSpec.FwDir, cols[2])), $"{cols[0]}: site {cols[2]}");
+            string got = keep.Contains(cols[0]) ? "keep" : drop.Contains(cols[0]) ? "drop" : open.Contains(cols[0]) ? "open" : "none";
+            Assert.True(Spelled(cols[0]) == got, $"{cols[0]} ({cols[1]}): spelled {Spelled(cols[0])}, classed {got}");
+        }
+        Assert.True(keep.Count > 0 && drop.Count > 0 && open.Count > 0);
+        // every unit's fu is reached from Reset_Handler through main and m<k>_init; the dead fu-likes are not
+        Assert.Contains("main", keep);
+        Assert.Contains("m0_init", keep);
+        Assert.Contains("fu0", keep);
+        Assert.Contains("Zfu0deadZ", drop);
+        // world 2 is only in the union's db: its function drops in main
+        var mainKeep = List(_c.Path, "main", "mustKeepFunctions");
+        Assert.Contains("kworld2", keep);
+        Assert.Contains("kworld2", List(_c.Path, "main", "mustDropFunctions"));
+        Assert.DoesNotContain("kworld2", mainKeep);
+        Assert.Contains("kworld1", mainKeep);
+        Assert.Equal(open, List(_c.Path, "main", "openFunctions"));
+    }
+
+    [Fact]
+    public void Functions_ManifestNamesTheRoots_AndTheWorld2Db()
+    {
+        var fw = Manifest(_c.Path)["firmware"]!;
+        Assert.Equal(["Reset_Handler"], fw["roots"]!.AsArray().Select(x => x!.GetValue<string>()));
+        Assert.Equal(FirmwareEmitter.DbWorld2Path, fw["compileDbUnion"]!.GetValue<string>());
+        var w2 = JsonNode.Parse(File.ReadAllText(Path.Combine(_c.Path, FirmwareEmitter.DbWorld2Path)))!.AsArray();
+        Assert.Single(w2);
+        string args2 = w2[0]!.ToJsonString();
+        Assert.Contains("world.c", args2);
+        Assert.Contains("-DFW_WORLD=2", args2);
+        string main = File.ReadAllText(Path.Combine(_c.Path, FwSpec.DbPath));
+        Assert.Contains("-DFW_WORLD=1", main);
+        Assert.DoesNotContain("-DFW_WORLD=2", main);
+        Assert.Contains("--target=arm-none-eabi", main);
+        Assert.Contains("startup.S", main);
+        Assert.DoesNotContain("spare.s", main);   // asm no build names: its callee is open
+        var files = List(_c.Path, "main", "mustKeepFiles");
+        foreach (var f in new[] { "asm/spare.s", "ld/mem.ld", "ld/fw.icf", "ld/fw.sct", "ld/fw_ti.cmd", "lib/fwcrc.o", "lib/libfwx.a" })
+            Assert.True(files.Any(x => x.EndsWith(f, StringComparison.Ordinal)), $"{f} not in mustKeepFiles");
+    }
+
+    [Fact]
+    public void Functions_HandWrittenObjectAndArchive_AreArmElf_WithTheUndefinedRef()
+    {
+        byte[] o = FirmwareEmitter.ArmObject("fw_objfn", "kfwobj");
+        Assert.Equal(new byte[] { 0x7F, (byte)'E', (byte)'L', (byte)'F', 1, 1 }, o[..6]);
+        Assert.Equal(1, BitConverter.ToUInt16(o, 16));    // ET_REL
+        Assert.Equal(40, BitConverter.ToUInt16(o, 18));   // EM_ARM
+        var u = new HashSet<string>();
+        FwSpec.ObjUndefined(o, u);
+        Assert.Equal(["kfwobj"], u);
+        byte[] a = FirmwareEmitter.Archive("fwx.o", FirmwareEmitter.ArmObject("fw_arfn", "kfwar"), "fw_arfn");
+        Assert.Equal("!<arch>\n", Encoding.ASCII.GetString(a, 0, 8));
+        u.Clear();
+        FwSpec.ObjUndefined(a, u);
+        Assert.Equal(["kfwar"], u);
+        // what the corpus holds is what these write
+        Assert.Equal(o, File.ReadAllBytes(Path.Combine(_c.Path, FwSpec.FwDir, "lib", "fwcrc.o")));
+        Assert.Equal(a, File.ReadAllBytes(Path.Combine(_c.Path, FwSpec.FwDir, "lib", "libfwx.a")));
+        // garbage and truncation read as no symbols, not a crash
+        foreach (var bad in new[] { o[..60], a[..70], new byte[] { 0x7F, (byte)'E', (byte)'L', (byte)'F' } })
+        {
+            u.Clear();
+            FwSpec.ObjUndefined(bad, u);
+            Assert.Empty(u);
+        }
+    }
+
+    [Fact]
+    public void Functions_VerifyFailsATamperedTreeOrManifest()
+    {
+        using var tmp = new TempDir();
+        string c = Gen(tmp.Path, "f", [.. SmallFw, "--fw-db-paths", "relative"]);
+        var ok = Verify(c);
+        Assert.True(ok.code == 0, ok.err);
+        void Fails(string what)
+        {
+            var (code, err) = Verify(c);
+            Assert.True(code == 1, $"{what}: exit {code}: {err}");
+            Assert.Contains(what, err);
+        }
+        // main calls a Z-spelled dead function: it is reached, and its spelling says drop
+        string main = Path.Combine(c, FwSpec.FwDir, "src", "main.c");
+        string was = File.ReadAllText(main);
+        File.WriteAllText(main, was.Replace("r += kworld();", "r += kworld(); r += ZFwNoKeepZ();"));
+        Fails("ZFwNoKeepZ (function): keep, alphabet says drop");
+        File.WriteAllText(main, was);
+        // the asm stops calling the C function only it reaches: the alphabet still spells it keep
+        string util = Path.Combine(c, FwSpec.FwDir, "asm", "fw_util.s");
+        string u0 = File.ReadAllText(util);
+        File.WriteAllText(util, u0.Replace("bl kfwasmcall", "nop"));
+        Fails("kfwasmcall (function)");
+        File.WriteAllText(util, u0);
+        Assert.True(Verify(c).code == 0, "restored");
+        // the manifest: no roots, a different union db, roots not names, a function list's count, a missing list
+        foreach (var (edit, what) in new (Action<JsonObject>, string)[]
+        {
+            (f => f.Remove("roots"), "mustKeepFunctions"),
+            (f => f["compileDbUnion"] = "fw-build/other.json", "compileDbUnion"),
+            (f => f["roots"] = new JsonArray(1), "roots"),
+            (f => f["builds"]!["union"]!["openFunctions"]!["count"] = 0, "builds.union.openFunctions.count"),
+            (f => f["builds"]!["main"]!.AsObject().Remove("mustDropFunctions"), "builds.main.mustDropFunctions"),
+        })
+        {
+            var (code, err) = VerifyWith(c, edit, tmp.Path);
+            Assert.True(code == 1, $"{what}: exit {code}: {err}");
+            Assert.Contains(what, err);
+        }
+    }
+
+    [Fact]
+    public void Functions_WorkPresetHasNone()
+    {
+        using var tmp = new TempDir();
+        string c = Gen(tmp.Path, "w", [.. SmallFw, "--depth", "12",
+            "--fw-work", "--fw-work-defines", "3000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180", .. TreePcts, .. SmallWide]);
+        var fw = Manifest(c)["firmware"]!.AsObject();
+        Assert.False(fw.ContainsKey("roots") || fw.ContainsKey("compileDbUnion") || fw.ContainsKey("functionCases"));
+        Assert.False(fw["builds"]!["main"]!.AsObject().ContainsKey("mustDropFunctions"));
+        Assert.False(File.Exists(Path.Combine(c, FirmwareEmitter.DbWorld2Path)));
+        Assert.False(File.Exists(Path.Combine(c, FirmwareEmitter.FunctionCasesPath)));
+        Assert.False(File.Exists(Path.Combine(c, FwSpec.FwDir, "asm", "startup.S")));
+        Assert.False(File.Exists(Path.Combine(c, FwSpec.FwDir, "src", "main.c")));
     }
 }

@@ -227,6 +227,16 @@ public static class ManifestWriter
         w.WriteNumber("maxParseBytes", CodeSpawner.Firmware.FwSpec.MaxParseBytes);
         w.WriteString("treeSha256", t.TreeSha);
         w.WriteString("cases", CodeSpawner.Firmware.FirmwareEmitter.CasesPath);
+        bool fn = t.UnionMustKeepFunctions is not null;
+        if (fn)
+        {
+            // phase 2 (1.5.0): where execution starts, the other world's db, the function cases
+            w.WriteStartArray("roots");
+            foreach (var x in CodeSpawner.Firmware.FirmwareEmitter.Roots) w.WriteStringValue(x);
+            w.WriteEndArray();
+            w.WriteString("compileDbUnion", CodeSpawner.Firmware.FirmwareEmitter.DbWorld2Path);
+            w.WriteString("functionCases", CodeSpawner.Firmware.FirmwareEmitter.FunctionCasesPath);
+        }
         w.WriteStartObject("counts");
         w.WriteNumber("units", r.Units);
         w.WriteNumber("families", r.Families);
@@ -287,7 +297,23 @@ public static class ManifestWriter
             L("mustKeepDefines", t.MustKeepDefines);
             L("mustDropDefines", t.MustDropDefines);
             L("openDefines", t.OpenDefines);
-            L("mustKeepFunctions", t.MustKeepFunctions);
+            if (!fn) L("mustKeepFunctions", t.MustKeepFunctions);
+            else
+            {
+                // the function lists differ by build (world 2 is in the union only): each side's own file
+                void F(string key, CodeSpawner.Firmware.FwList l)
+                {
+                    w.WriteStartObject(key);
+                    w.WriteString("path", CodeSpawner.Firmware.FirmwareEmitter.TruthDir + "/" + l.Path);
+                    w.WriteString("sha256", l.Sha256);
+                    w.WriteNumber("count", l.Count);
+                    w.WriteEndObject();
+                }
+                bool m = b == "main";
+                F("mustKeepFunctions", m ? t.MustKeepFunctions : t.UnionMustKeepFunctions!);
+                F("mustDropFunctions", m ? t.MustDropFunctions! : t.UnionMustDropFunctions!);
+                F("openFunctions", m ? t.OpenFunctions! : t.UnionOpenFunctions!);
+            }
             L("mustKeepFiles", t.MustKeepFiles);
             w.WriteEndObject();
         }

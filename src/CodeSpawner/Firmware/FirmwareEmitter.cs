@@ -27,7 +27,7 @@ internal sealed class FirmwareResult
 /// keep); the truth is computed afterwards from the written tree by <see cref="FwSpec"/>, and gen fails when a name's
 /// class and spelling disagree, so a design slip in here can never ship as truth.
 /// </summary>
-internal static class FirmwareEmitter
+internal static partial class FirmwareEmitter
 {
     public const string ExtDir = "ext", BuildDir = "fw-build", TruthDir = "fw-truth";
     /// <summary>The corpus-root directories the firmware corpus owns (mutate leaves them alone: the truth names their bytes).</summary>
@@ -130,14 +130,16 @@ internal static class FirmwareEmitter
         WriteTable(p);
         WriteExt(p);
         if (p.Work is { } wx) WriteWorkExtras(p, wx);
+        else WritePhase2(p);
         WriteMisc(p, r.Hostile);
         WriteDb(p);
         r.Cases = WriteCases(p);
+        if (p.Work is null) WriteFunctionCases(p);
         r.Units = p.Units;
         r.Families = p.Families;
         r.Traps = Traps;
 
-        var truth = FwSpec.Compute(root, Path.Combine(root, TruthDir), checkAlphabet: true);
+        var truth = FwSpec.Compute(root, Path.Combine(root, TruthDir), checkAlphabet: true, p.Work is null ? Roots : null);
         if (truth.AlphabetErrors.Count > 0)
             throw new InvalidOperationException("firmware: names whose class disagrees with their spelling (a generator bug):\n  "
                 + string.Join("\n  ", truth.AlphabetErrors));
@@ -388,7 +390,7 @@ internal static class FirmwareEmitter
 
     /// <summary>The unit's use of family <paramref name="f"/>: file-scope text (local defines, comment and string
     /// calls) and a function body expression.</summary>
-    private static void UseText(Plan p, long f, StringBuilder scope, StringBuilder fn)
+    private static bool UseText(Plan p, long f, StringBuilder scope, StringBuilder fn)
     {
         string? e = p.Kind(f) switch
         {
@@ -445,7 +447,9 @@ internal static class FirmwareEmitter
             case 27: scope.Append($"#if 0\nvoid *kwg{f} = (void *)KWG{f}H;\n#endif\n"); break;
             case 38: scope.Append($"#if CAT(KIC{f}X_, 1)\nint kic{f};\n#endif\n"); break;
         }
-        if (e is not null) fn.Append($"int ff{f}(void)\n{{\n\treturn {e};\n}}\n");
+        if (e is null) return false;
+        fn.Append($"int ff{f}(void)\n{{\n\treturn {e};\n}}\n");
+        return true;
     }
 
     // ---------------- traps ----------------
@@ -724,16 +728,23 @@ internal static class FirmwareEmitter
         }
         var scope = new StringBuilder();
         var fn = new StringBuilder();
-        fn.Append($"int fu{u}(void)\n{{\n\treturn {u % 7};\n}}\n");
+        // phase 2 (plain firmware): fu<u> comes last and calls the unit's functions, so the reset path reaches them
+        var calls = p.Work is null ? new List<string>() : null;
+        if (calls is null) fn.Append($"int fu{u}(void)\n{{\n\treturn {u % 7};\n}}\n");
         for (long f = u; f < p.Families; f += p.Units)
         {
-            UseText(p, f, scope, fn);
+            if (UseText(p, f, scope, fn)) calls?.Add($"ff{f}()");
             if (scope.Length + fn.Length > 1 << 16) { w.Text(scope.ToString()); w.Text(fn.ToString()); scope.Clear(); fn.Clear(); }
         }
-        for (int t = 0; t < Traps; t++) if (p.TrapUnit(t) == u) TrapUseText(t, fn);
+        for (int t = 0; t < Traps; t++) if (p.TrapUnit(t) == u) { TrapUseText(t, fn); calls?.AddRange([$"tj64_{t}()", $"tj65_{t}()", $"tp8_{t}()"]); }
         p.Work?.UnitText(u, p.Units, scope, fn);
         if (p.Work is not null && u is 0 or 1) fn.Append($"int fwcfg{u}(void)\n{{\n\treturn KCFG0X;\n}}\n");
         if (u == 0) fn.Append("int fdv(void)\n{\n\treturn KDV_9 + KD_7 + KHWP(Z, Z) + CAT(KDE0X_, KDE_N) + KPORT(KSRC0X);\n}\n");
+        if (calls is not null)
+        {
+            if (u == 0) calls.AddRange(["fdv()", "fw_q3isp(0)"]);
+            FuText(p, u, calls, fn);
+        }
         w.Text(scope.ToString());
         w.Text(fn.ToString());
     }
@@ -865,27 +876,43 @@ internal static class FirmwareEmitter
         using var fs = File.Create(Path.Combine(p.Root, FwSpec.DbPath));
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartArray();
-        void Entry(string file)
+        // phase 2 (plain firmware) builds for a Cortex-M with clang; work keeps the generic cc
+        bool arm = p.Work is null;
+        void Entry(Utf8JsonWriter w, string file, string? world = null)
         {
             w.WriteStartObject();
             w.WriteString("directory", rel ? "." : Path.GetFullPath(p.Root));
             w.WriteStartArray("arguments");
-            w.WriteStringValue("cc");
+            if (arm) foreach (var a in ArmCc) w.WriteStringValue(a);
+            else w.WriteStringValue("cc");
             w.WriteStringValue("-std=c11");
             foreach (var i in inc) { w.WriteStringValue("-I"); w.WriteStringValue(P(i)); }
             w.WriteStringValue("-DKD_7");
             w.WriteStringValue("-DKDV_9=KDV_VAL");
             w.WriteStringValue("-DKDE_N=4");
             if (p.Work is not null) w.WriteStringValue("-DFW_HDR=\"fw_cfg.h\"");
+            if (world is not null) w.WriteStringValue($"-DFW_WORLD={world}");
             w.WriteStringValue("-c");
             w.WriteStringValue(P(file));
             w.WriteEndArray();
             w.WriteString("file", P(file));
             w.WriteEndObject();
         }
-        for (int u = 0; u < p.Units; u++) Entry($"{FwSpec.FwDir}/{p.UnitRel(u)}");
-        Entry($"{ExtDir}/app/host.c");
+        for (int u = 0; u < p.Units; u++) Entry(w, $"{FwSpec.FwDir}/{p.UnitRel(u)}");
+        if (arm)
+        {
+            foreach (var c in Phase2Units) Entry(w, $"{FwSpec.FwDir}/{c}", c == "src/world.c" ? "1" : null);
+            foreach (var s in Phase2Asm) AsmEntry(w, rel, P, s);
+        }
+        Entry(w, $"{ExtDir}/app/host.c");
         w.WriteEndArray();
+        if (!arm) return;
+        // the world-2 db: world.c alone, the other branch (firmware.compileDbUnion)
+        using var fs2 = File.Create(Path.Combine(p.Root, DbWorld2Path));
+        using var w2 = new Utf8JsonWriter(fs2, new JsonWriterOptions { Indented = true });
+        w2.WriteStartArray();
+        Entry(w2, $"{FwSpec.FwDir}/src/world.c", "2");
+        w2.WriteEndArray();
     }
 
     private static long WriteCases(Plan p)

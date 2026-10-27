@@ -11,6 +11,36 @@ reads it.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-27
+
+Phase 2 of the firmware corpus, built to CodeCarver's rulings: asm, linker scripts, prebuilt objects and a function
+truth. This is in `--preset firmware` (plain `--firmware`) only. Plain firmware corpora change: about 0.04 GB more at
+0.01, because of an oversize .s and .ld. The define lists are byte-identical to 1.4.11. Firmware-work corpora do not
+change.
+
+### Added
+- Function truth: `mustKeepFunctions` (reached from the min roots), `mustDropFunctions` (not reached from the max
+  roots) and `openFunctions`, per build. Manifest `firmware.roots` (`["Reset_Handler"]`), `firmware.compileDbUnion`
+  and `firmware.functionCases` (`fw-truth/cases.functions.tsv`).
+- A reset path: `asm/startup.S` (vector table, `Reset_Handler`) → `main` → each module's `m<k>_init()` → its units'
+  `fu<N>()` → their `ff*`s, plus a function-pointer table, and dead Z-spelled look-alikes.
+- Asm: `.macro` handlers (a plain argument and a `\name\()` paste), a cpp `##` paste in a `.S`, `.include`,
+  `.weak`/`.thumb_set` defaults overridden by C, an `.init_array` entry, an unbuilt `spare.s` and an oversize
+  `big_0.s`.
+- Linker scripts: `fw.ld` INCLUDEs `mem.ld` (with a KEEP) and an oversize `big_0.ld`. EXTERN, PROVIDE and an
+  assignment each keep a function. IAR `.icf`, armlink `.sct` and TI `.cmd` files are copy-only, and their sections
+  make functions open.
+- A prebuilt ELF32 ARM `lib/fwcrc.o` and `lib/libfwx.a`, hand-written and deterministic. Each has an undefined
+  reference to a C function nothing else calls.
+- `used`, `retain`, `constructor` and `destructor` functions, and `KEEP`ed sections.
+- Two worlds: `src/world.c` is in the main db at `-DFW_WORLD=1` and in `fw-build/compile_commands.world2.json` at
+  `-DFW_WORLD=2`, so `kworld2` is must-drop in main and must-keep in union.
+- Verify checks the function lists of both builds, `compileDbUnion` and `functionCases`.
+
+### Changed
+- In the plain preset the compile db's compiler is `clang --target=arm-none-eabi -mcpu=cortex-m4`, every C entry has
+  `-DFW_WORLD=1`, and the built asm files have entries. The whole tree compiles, assembles and links with ld.lld.
+
 ## [1.4.11] - 2026-10-27
 
 The work carve calibrated to a work tree's shape (CodeCarver's aggregates), plus CodeCarver's rule W. Firmware-work

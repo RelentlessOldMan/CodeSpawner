@@ -28,16 +28,23 @@ because the truth names their bytes.
                              #   comment around a directive's `#`, a backslash-space splice, hidden
     include/fw_q3.h          #   compiled hostile text (unit 0): a `(` in a comment and in a char literal, then 2,000 `#if`s
     work/wreg_N.h            #   the work carve, with --fw-work (see "Work shape")
+    src/main.c, src/handlers.c, src/fw_attr.c, src/world.c   # phase 2 (plain preset): main, the handlers and
+                             #   targets, the attribute/section functions, the two worlds (see "Functions")
+    asm/, ld/, lib/          #   phase 2: startup.S, fw_util.s, an unbuilt spare.s, an oversize big_0.s; fw.ld
+                             #   (INCLUDEs mem.ld, big_0.ld), IAR/armlink/TI files; a prebuilt .o and .a
   ext/include/, ext/app/     # outside the root: an OS header every unit includes (it includes a Hidden one),
                              #   one nothing includes (maybe-kept), host.c
   fw-build/compile_commands.json   # one entry per unit, plus ext/app/host.c
-  fw-truth/                  # main.<list>.txt, union.<list>.txt, cases.tsv
+  fw-build/compile_commands.world2.json   # phase 2: world.c at -DFW_WORLD=2 only (the union's other build)
+  fw-truth/                  # main.<list>.txt, union.<list>.txt, cases.tsv, cases.functions.tsv (phase 2)
 ```
 
 Every compile db entry is `cc -std=c11 -I fw/include -I fw/big -I fw/dense -I ext/include -DKD_7 -DKDV_9=KDV_VAL
 -DKDE_N=4 -c <file>`. With `--fw-work`, `-I fw/work` comes after `-I fw/dense`. With `--fw-db-paths absolute` (the default)
 `directory` and every path are absolute. With `relative`, `directory` is `"."` and the paths are relative to the
-corpus root, so the db resolves against the directory it names, resolved from the corpus root. Every unit compiles
+In the plain preset (1.5.0)
+the db's compiler is `clang --target=arm-none-eabi -mcpu=cortex-m4` instead of `cc`, every C entry has
+`-DFW_WORLD=1`, and the asm files a build names (`startup.S`, `fw_util.s`, `big_0.s`) have entries of their own. corpus root, so the db resolves against the directory it names, resolved from the corpus root. Every unit compiles
 cleanly with `-std=c11 -Wall -Werror`, with or without `-DFW_ALT`, and with `-DFW_SEL=7` or `-DFW_SEL=19`. 1.4.0
 checked this with clang; 1.4.8 and 1.4.9 checked it again, with and without `-DFW_ALT`, and 1.4.9 with gcc too. The new kinds' shapes were checked with
 gcc and clang -E.
@@ -197,9 +204,10 @@ files under `fw-truth/`:
 
 - **Lists.** Names are sorted by ordinal byte order, one per line, LF. A list over 100 MB is gzipped (`.txt.gz`);
   its sha256 is always over the uncompressed text.
-- **Builds.** Phase 1 has one build, `main`, and `union` is the same lists. Carver keeps the union of its builds,
-  so it checks `union`.
-- **`mustKeepFunctions`.** It is empty (count 0) until the call graph lands in phase 2.
+- **Builds.** The define lists have one build, `main`, and `union` is the same lists. Carver keeps the union of its
+  builds, so it checks `union`. The function lists (phase 2) differ by build: see "Functions".
+- **`mustKeepFunctions`.** Empty (count 0) in `--preset firmware-work`. In the plain preset it is phase 2's function
+  truth, with `mustDropFunctions` and `openFunctions` beside it.
 - **`mustKeepFiles`.** It lists the `fw/` files that define a must-keep name, plus every `fw/` file in a unit's
   include closure. Paths are relative to `fw/`.
 
@@ -226,6 +234,45 @@ files under `fw-truth/`:
 - **`treeSha256`** is a sha256 over every `fw/` file, in ordinal order of its `fw/`-relative path: the path, `\n`,
   the byte length, `\n`, then the bytes. Check it before carving, to catch a stale or damaged copy. It does not
   cover `ext/` or the compile db; verify checks those by recomputing the truth from them.
+
+## Functions (phase 2, 1.5.0)
+
+The plain preset (not `--fw-work`; that corpus does not change) also carries a function truth, built to CodeCarver's
+phase 2 rulings: which C functions a firmware link needs, given asm, linker scripts and prebuilt objects.
+
+- **Roots.** `firmware.roots` is `["Reset_Handler"]`. `asm/startup.S` holds the vector table and `Reset_Handler`, which
+  calls `kSystemInit` and `main`; `main` calls each module's `m<k>_init()` (in the module's first unit, prototypes in
+  `include/fw_init.h`), which calls its units' `fu<N>()`, which call the unit's `ff*`s. A function-pointer table in
+  `main.c` keeps its entries.
+- **Classes.** A function is **must-keep** if it is reached from the min roots, **must-drop** if it is not reached
+  from the max roots, and **open** otherwise. Reached means called or address-taken from a reached function or a
+  reached global's initializer. Statics are per file. The names follow the alphabet: `Z…Z` drop, `Y…Y` open.
+- **Min roots** are `roots` plus:
+  - every non-comment identifier of an asm file (`.s`, `.S`, `.asm`, `.sx`) a compile db names, following `.include`
+    and `#include`, expanding `.macro` invocations and one-parameter `##` paste macros;
+  - every identifier of every `.ld`/`.lds`/`.ldscript` under `fw/`, whether or not something INCLUDEs it, and the
+    functions placed in a `KEEP` section;
+  - the undefined globals of each prebuilt ELF `.o` and `ar` `.a`;
+  - functions marked `used`, `retain`, `constructor` or `destructor`.
+- **Max roots** add the identifiers in named asm's comments, every identifier of asm no build names (`spare.s`), and
+  the sections named in IAR `.icf` and armlink `.sct` files. A TI `.cmd` is copy-only.
+- **Two worlds.** `src/world.c` defines `kworld1` and `kworld2`, and `kworld` twice: under `#if FW_WORLD == 1` it
+  calls `kworld1`, under `#else` `kworld2`. The main db compiles it at `-DFW_WORLD=1`; `firmware.compileDbUnion`
+  (`fw-build/compile_commands.world2.json`) holds only world.c at `-DFW_WORLD=2`. So `kworld2` is must-drop in
+  `builds.main` and must-keep in `builds.union`. The alphabet is checked on the union.
+- **The C scanner** joins splices, skips comments, strings and chars, and evaluates `#if`/`#ifdef`/`#ifndef` on the
+  unit's `-D`s where it can (`N`, `X`, `X == N`, `defined`); anything else is live. Its scope is the `fw/` files in a
+  C unit's include closure, minus big and dense headers.
+- **Files.** The asm, linker, IAR/armlink/TI files, the `.o` and `.a`, and the files they include are
+  `mustKeepFiles`.
+- **Cases.** `fw-truth/cases.functions.tsv` (`name`, `case`, `site`) lists each designed name. Expected FAILs for a
+  carver that does not do these yet: `USART1_IRQHandler` (a `
+ame()` paste in a `.macro`), `UART_Handler` (a
+  cpp `##` paste in a `.S`), `kfwbigs` (only referenced from an asm file past `maxParseBytes`) and `kfwbigld` (only
+  kept by a `.ld` past `maxParseBytes`).
+
+The tree compiles, assembles and links: every db entry builds with its own flags, and `ld.lld --gc-sections -T
+fw/ld/fw.ld -L fw/ld` links the objects with `lib/fwcrc.o` and `lib/libfwx.a` (checked with clang/lld 1.5.0).
 
 ## Work shape (`--fw-work`, `--preset firmware-work`)
 
@@ -355,6 +402,7 @@ wrong, gen and verify both get wrong. It checks:
 - the `hostile` entries: each a file of the corpus, with a kind;
 - `work`, when `_meta.gen.fwWork` is true or `fw/work/` exists: its counts add up, and its per-level uses and live
   cross decoys are recounted from the lists.
+- with `roots`: `compileDbUnion`, that `functionCases` is a file, and the main and union function lists.
 
 A compile db it cannot read (malformed, or with absolute paths from where the corpus was before it moved) is a
 `FAIL firmware compileDb`, not a crash. Regenerate a moved corpus, or generate it with `--fw-db-paths relative`.

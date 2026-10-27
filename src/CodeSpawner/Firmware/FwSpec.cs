@@ -25,6 +25,8 @@ internal sealed class FwTruth
     public List<string> Carved = new();
     public List<FwDense> Dense = new();
     public FwList MustKeepDefines = null!, MustDropDefines = null!, OpenDefines = null!, MustKeepFunctions = null!, MustKeepFiles = null!;
+    /// <summary>Phase 2 only (null in phase 1, where the union lists are copies of main's and only an empty mustKeepFunctions is written).</summary>
+    public FwList? MustDropFunctions, OpenFunctions, UnionMustKeepFunctions, UnionMustDropFunctions, UnionOpenFunctions;
     /// <summary>Generator check: C names whose class disagrees with the alphabet (Z…Z, Y…Z and Z…Y drop, Y…Y open, else keep).</summary>
     public List<string> AlphabetErrors = new();
     public long MustKeepCount, MustDropCount, OpenCount;
@@ -53,6 +55,8 @@ internal sealed partial class FwSpec
 
     public readonly NameTable Names = new(1 << 16);
     private readonly string _root, _fwRoot;
+    /// <summary>firmware.roots: non-null turns on the function truth (phase 2).</summary>
+    private IReadOnlyList<string>? _roots;
 
     // files: fw files (sorted, fw-relative) then ext closure files
     private readonly List<string> _files = new();        // full paths
@@ -106,9 +110,9 @@ internal sealed partial class FwSpec
 
     /// <summary>Computes the truth of the corpus at <paramref name="root"/>. With <paramref name="listDir"/> the lists
     /// are written there (main.* and union.*); without, they are only hashed.</summary>
-    public static FwTruth Compute(string root, string? listDir, bool checkAlphabet)
+    public static FwTruth Compute(string root, string? listDir, bool checkAlphabet, IReadOnlyList<string>? roots = null)
     {
-        var s = new FwSpec(root);
+        var s = new FwSpec(root) { _roots = roots };
         try { return s.Run(listDir, checkAlphabet); }
         finally { foreach (var h in s._handles.Values) h.Dispose(); }
     }
@@ -840,13 +844,14 @@ internal sealed partial class FwSpec
         t.MustKeepDefines = keepW.Finish();
         t.MustDropDefines = dropW.Finish();
         t.OpenDefines = openW.Finish();
-        using (var fnW = new ListWriter(listDir, "mustKeepFunctions")) t.MustKeepFunctions = fnW.Finish();
 
         // files: defining a must-keep name, the fw units, and their closures
         var files = new SortedSet<string>(StringComparer.Ordinal);
         for (int k = 0; k < _cdName.Count; k++) if (Names.Has(_cdName[k], NameTable.WantMin)) files.Add(_rel[CFile(k, out _)]);
         for (int k = 0; k < _fwDefName.Count; k++) if (Names.Has(_fwDefName[k], NameTable.WantMin)) files.Add(_rel[_fwDefFile[k]]);
         foreach (int f in _closure) if (f < _fwCount) files.Add(_rel[f]);
+        if (_roots is null) { using var fnW = new ListWriter(listDir, "mustKeepFunctions"); t.MustKeepFunctions = fnW.Finish(); }
+        else Functions(t, listDir, checkAlphabet, files);
         using (var fw = new ListWriter(listDir, "mustKeepFiles"))
         {
             foreach (var p in files) fw.Add(Encoding.UTF8.GetBytes(p));
@@ -867,7 +872,7 @@ internal sealed class ListWriter : IDisposable
     /// <summary>A list longer than this is written gzipped. Settable only so a test can reach the gz path.</summary>
     internal static long GzipPast = 100L << 20;
     private bool _finished;
-    private readonly string? _dir, _name;
+    private readonly string? _dir, _name, _side;
     private readonly IncrementalHash _sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly FileStream? _out;
     private readonly string? _tmp;
@@ -875,12 +880,14 @@ internal sealed class ListWriter : IDisposable
     public long Count { get; private set; }
     private static readonly byte[] Lf = { (byte)'\n' };
 
-    public ListWriter(string? dir, string name)
+    /// <param name="side">"main" or "union" to write only that side's list (phase 2's function lists differ); null writes main and copies it to union.</param>
+    public ListWriter(string? dir, string name, string? side = null)
     {
         _dir = dir;
         _name = name;
+        _side = side;
         if (dir is null) return;
-        _tmp = Path.Combine(dir, $"main.{name}.txt.tmp");
+        _tmp = Path.Combine(dir, $"{side ?? "main"}.{name}.txt.tmp");
         _out = new FileStream(_tmp, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16);
     }
 
@@ -899,7 +906,7 @@ internal sealed class ListWriter : IDisposable
         string sha = Convert.ToHexString(_sha.GetHashAndReset()).ToLowerInvariant();
         if (_out is null) return new FwList(null, sha, Count);
         _out.Dispose();
-        string main = Path.Combine(_dir!, $"main.{_name}.txt"), union = Path.Combine(_dir!, $"union.{_name}.txt");
+        string main = Path.Combine(_dir!, $"{_side ?? "main"}.{_name}.txt"), union = Path.Combine(_dir!, $"union.{_name}.txt");
         string rel;
         if (_bytes > GzipPast)
         {
@@ -908,15 +915,15 @@ internal sealed class ListWriter : IDisposable
             using (var dst = File.Create(main + ".gz"))
             using (var gz = new System.IO.Compression.GZipStream(dst, System.IO.Compression.CompressionLevel.Fastest))
                 src.CopyTo(gz);
-            File.Copy(main + ".gz", union + ".gz", true);
+            if (_side is null) File.Copy(main + ".gz", union + ".gz", true);
             File.Delete(_tmp!);
-            rel = $"main.{_name}.txt.gz";
+            rel = $"{_side ?? "main"}.{_name}.txt.gz";
         }
         else
         {
-            File.Copy(_tmp!, union, true);
+            if (_side is null) File.Copy(_tmp!, union, true);
             File.Move(_tmp!, main, true);
-            rel = $"main.{_name}.txt";
+            rel = $"{_side ?? "main"}.{_name}.txt";
         }
         _finished = true;
         return new FwList(rel, sha, Count);
