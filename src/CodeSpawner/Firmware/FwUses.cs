@@ -1371,6 +1371,7 @@ internal sealed partial class FwSpec
     {
         if (!_poolOn) return;
         _poolOn = false;
+        if (_run == 0) return;   // a name only a pool builds is open (CodeCarver, 1.4.10): min wants only exact builds
         bool anyEnd = _poolAnyE || _poolDigitsE || _poolE.Count > 0;
         if ((!_poolAnyS && _poolS.Count == 0) || !anyEnd) return;
         var eLens = new HashSet<int>();

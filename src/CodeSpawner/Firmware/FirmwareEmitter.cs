@@ -361,10 +361,10 @@ internal static class FirmwareEmitter
                 sb.Append($"#define KEW{f}N(a, b) , 3\n#define KEU{f}M() kcat KET{f}E KEW{f}N\n#define ZEU{f}X_2Z 1\n");
                 break;
             // a body ending in a parameter: an empty argument, or one that opens with (, calls the name before it; a
-            // call after a use of it is computed, so its own pool builds KPV (a name it cannot start stays dropped)
+            // call after a use of it is computed, so its own pool builds YPV, open (a name it cannot start stays dropped)
             case 43:
                 sb.Append($"#define KPT{f}M(x) CAT x\n#define KPT{f}X_1 {v}\n#define KPU{f}X_2 1\n");
-                sb.Append($"#define KPX{f}N(a, b) , 4\n#define KPW{f}M(x) kcat x\n#define KPV{f}X_3Z 1\n#define ZPV{f}Y_3Z 1\n");
+                sb.Append($"#define KPX{f}N(a, b) , 4\n#define KPW{f}M(x) kcat x\n#define YPV{f}X_3Y 1\n#define ZPV{f}Y_3Z 1\n");
                 break;
         }
     }
@@ -432,7 +432,7 @@ internal static class FirmwareEmitter
             // KID rescans: at top level `CAT EMPTY (` calls nothing (the DEFER idiom), though the truth keeps it either
             // way; the decoys swallow their arguments into `, 3`: (void)kcat, 3
             42 => $"KID(KET{f}M()(KET{f}X_, 1)) + ((void)KEU{f}M()(ZEU{f}X_, 2Z))",
-            43 => $"KPT{f}M()(KPT{f}X_, 1) + KPT{f}M((KPU{f}X_, 2)) + ((void)KPW{f}M(KPX{f}N)(KPV{f}X_, 3Z))",
+            43 => $"KPT{f}M()(KPT{f}X_, 1) + KPT{f}M((KPU{f}X_, 2)) + ((void)KPW{f}M(KPX{f}N)(YPV{f}X_, 3Y))",
             _ => null,
         };
         switch (p.Kind(f))

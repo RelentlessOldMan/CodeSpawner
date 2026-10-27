@@ -507,11 +507,13 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             "#define KAP(m, a, b) m(a, b)\n#define KHX_1 1\n#define ZHX_2Z 1\n#define ZHX_1Z 1\n" +
             "#define KCP_9 1\n#define KCP_Q9 1\n#define ZCP_Z 1\n#define ZCP_9Z 1\n",
             "int a = KAP(CAT, KHX_, 1) + CAT(CA, T)(KCP_, 9);\n");
-        Assert.Empty(Bad(t));
+        // the pool (a start piece and an end piece, anything between) builds KCP_Q9 and no exact build does: open
+        // since 1.4.10 (CodeCarver), though its K spelling says keep
+        Assert.Equal(["KCP_Q9: open, alphabet says keep"], Bad(t));
         var keep = Keep(tmp);
         Assert.Contains("KHX_1", keep);
         Assert.Contains("KCP_9", keep);
-        Assert.Contains("KCP_Q9", keep);   // the pool: a start piece and an end piece, anything between
+        Assert.Contains("KCP_Q9", Lists(tmp, "open"));
     }
 
 
@@ -630,10 +632,12 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             $"#define LEFT {first}\n#define RIGHT {first.Replace("KP", "Q")}\n#define P3(a, b) a##_##b\n#define DO(a, b) P3(a, b)\n" +
             "#define KP0_Q0 1\n#define KP3_XQ9 1\n#define ZP3_XZ 1\n",
             "int a = DO(LEFT, RIGHT);\n");
-        Assert.Empty(Bad(t));
-        var keep = Keep(tmp);
-        Assert.Contains("KP0_Q0", keep);
-        Assert.Contains("KP3_XQ9", keep);
+        // only the pool builds them: open since 1.4.10 (CodeCarver), though their K spelling says keep
+        Assert.Equal(["KP0_Q0: open, alphabet says keep", "KP3_XQ9: open, alphabet says keep"], Bad(t));
+        var open = Lists(tmp, "open");
+        Assert.Contains("KP0_Q0", open);
+        Assert.Contains("KP3_XQ9", open);
+        Assert.Contains("ZP3_XZ", Lists(tmp, "mustDrop"));
     }
 
     // ---------- review round 9 ----------
@@ -844,15 +848,16 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     public void Alias_AParameterTailMayBeEmpty_AnArgumentOpeningWithParenCalls_AComputedCallPools()
     {
         // PICK2() leaves CAT before the (; PICK2((a, b)) gives CAT (a, b); PICK2(KPXN)(..) calls KPXN, but the
-        // computed call's own pool still builds KPVX_3Z, while ZPVY_ is no piece of it
+        // computed call's own pool still builds YPVX_3Y, open (only a pool builds it), while ZPVY_ is no piece of it
         using var tmp = new TempDir();
         var t = Mini(tmp, Kcat + "#define PICK2(x) CAT x\n#define KPKX_1 1\n#define KPKX_2 1\n" +
-            "#define KPXN(a, b) , 4\n#define KPWM(x) kcat x\n#define KPVX_3Z 1\n#define ZPVY_3Z 1\n",
-            "int a = PICK2()(KPKX_, 1) + PICK2((KPKX_, 2)) + ((void)KPWM(KPXN)(KPVX_, 3Z))" + KcatUse + ";\n");
+            "#define KPXN(a, b) , 4\n#define KPWM(x) kcat x\n#define YPVX_3Y 1\n#define ZPVY_3Z 1\n",
+            "int a = PICK2()(KPKX_, 1) + PICK2((KPKX_, 2)) + ((void)KPWM(KPXN)(YPVX_, 3Y))" + KcatUse + ";\n");
         Assert.Empty(Bad(t));
         Assert.Contains("KPKX_1", Keep(tmp));
         Assert.Contains("KPKX_2", Keep(tmp));
-        Assert.Contains("KPVX_3Z", Keep(tmp));
+        Assert.DoesNotContain("YPVX_3Y", Keep(tmp));
+        Assert.DoesNotContain("YPVX_3Y", Lists(tmp, "mustDrop"));
         Assert.Contains("ZPVY_3Z", Lists(tmp, "mustDrop"));
     }
 

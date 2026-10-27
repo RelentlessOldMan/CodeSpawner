@@ -141,13 +141,15 @@ kept header. A carve that also drops unreached files does not match it. Run the 
 
    A use also gets its own **pool** (any of its start pieces with any of its end pieces, never overlapping) when its
    callee is computed or the call is open across `#if`/`#elif`/`#else`/`#endif`, and falls back to the pool alone
-   for a chain whose product passes 4,096 names (a wildcard counts 1). Since 1.4.8 those calls are also built
+   for a chain whose product passes 4,096 names (a wildcard counts 1; its names are open). Since 1.4.8 those calls are also built
    exactly: a computed callee (`CAT(GET, CAT)(0)(x, y)`, `APPLY(ID(CAT), x, y)`) through the names it can expand to,
    and a call across a conditional through each branch's tokens.
-   A computed call keeps its pool (CodeCarver's ruling for 1.4.9): `PICK2(NOPE)(ZX_, 3)` builds `ZX_3` from its
-   own pool even though `NOPE` takes the arguments; a name none of its start pieces begins stays dropped. A use's
-   exact end names (for a callee computed from it) are only the names it can end with: every token after them can
-   be empty.
+   A computed call keeps its pool (CodeCarver's ruling for 1.4.9): `PICK2(NOPE)(YX_, 3Y)` builds `YX_3Y` from its
+   own pool even though `NOPE` takes the arguments; a name none of its start pieces begins stays dropped. A pool is
+   max only (CodeCarver's ruling for 1.4.10): a name only a pool builds, and no exact build, is **open**, since the
+   truth cannot tell whether the call is made, and a carve that keeps it (sound) or drops it (proved) both pass.
+   Exact builds stay must-keep. A use's exact end names (for a callee computed from it) are only the names it can
+   end with: every token after them can be empty.
    - `%:` and `%:%:` are `#` and `##`. The builds' `-D` values are define bodies.
 
    An argument list runs to its matching `)` across lines and directives. At `#elif`/`#else` the tracker goes back
@@ -170,7 +172,7 @@ kept header. A carve that also drops unreached files does not match it. Run the 
    - the reserved names.
 
    It grows to a fixpoint through the bodies of wanted defines, and every use in a wanted body is followed. A
-   carved-file define is also wanted when a use builds its name (exactly, by a wildcard, or from its pool).
+   carved-file define is also wanted when a use builds its name (exactly, by a wildcard, or from its pool, under max only).
 
    A header in a build's include dir outside the root that no build includes is **maybe-kept** text: a computed
    `#include MACRO` could name it, so a sound carver may keep it, and one that proves it unused may drop it. It

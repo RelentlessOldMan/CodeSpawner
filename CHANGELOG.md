@@ -11,6 +11,19 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.10] - 2026-10-27
+
+CodeCarver's ruling after its T2 run on the 1.4.9 smalls. Firmware corpora change: the `param-tail-alias` kind's
+pool-built name is renamed `KPV<f>X_3Z` → `YPV<f>X_3Y` and moves from must-keep to open, so `fw/`, the lists and
+the counts differ from 1.4.9. Nothing else moves: firmware 0.01 has 227 more open names (all `YPV`), firmware-work
+0.05 has 4.
+
+### Changed
+- A use's own pool counts under max only. A name that only a pool builds, and no exact build, is open: the truth
+  cannot tell whether the call is made (`KPW(KPXN)(YPV_, 3Y)` expands to `kcat , 4`, so nothing builds `YPV_3Y`), so a
+  carve passes whether it keeps the name (the pool, sound) or drops it (it proved the call is never made). Exact
+  builds stay must-keep. This covers computed calls and chains past the 4,096-name cap.
+
 ## [1.4.9] - 2026-10-23
 
 Review round 10 of the firmware truth engine (1.4.8), with CodeCarver's rulings, checked against gcc and clang
