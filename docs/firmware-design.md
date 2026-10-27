@@ -325,7 +325,14 @@ At `--scale 0.01`:
   keep after that pass).
 - The correctness part also seeds pieces, so at small scales pass 1→2 growth is a little under ×9.
 
-Before 1.4.11 (not calibrated, no wide population), Measured on the 1.4.6 release exe (`--preset firmware-work`), on an otherwise idle machine:
+Measured on the 1.4.11 release exe (`--preset firmware-work`), on a busy machine:
+
+| Scale | Size | Work headers | Work defines | mustKeep / mustDrop / open | Gen | Verify | Peak memory |
+|---|---|---|---|---|---|---|---|
+| 0.05 | 0.99 GB | 27 | 6,115,549 | 3,629 / 1,162,804 / 5,376,995 | 135 s | 136 s | ~1.4 GB |
+| 0.1 | 1.91 GB | 55 | 12,231,103 | 5,546 / 1,899,500 / 10,753,964 | 318 s | 487 s | ~2.4 GB |
+
+Before 1.4.11 (not calibrated, no wide population), measured on the 1.4.6 release exe (`--preset firmware-work`), on an otherwise idle machine:
 
 | Scale | Size | Work headers | Work defines | Exact kept / under global pools | Gen | Verify | Peak memory |
 |---|---|---|---|---|---|---|---|
