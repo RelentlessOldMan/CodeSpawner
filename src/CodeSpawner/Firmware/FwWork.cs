@@ -25,7 +25,7 @@ namespace CodeSpawner.Firmware;
 internal sealed class FwWork
 {
     public const string Dir = "work";
-    private const long HeaderBytes = 22L << 20;
+    private const long HeaderBytes = 30L << 20;   // ~31 MB (CodeCarver's work headers)
     /// <summary>Every work header is padded past this, so each is big.</summary>
     public const long MinHeaderBytes = FwSpec.MaxParseBytes + 1_000_000;
 
@@ -36,6 +36,10 @@ internal sealed class FwWork
     /// <summary>Longest forwarder chain (--fw-chain-max).</summary>
     public int ChainMax;
     public long Exact, CrossDecoys, HalfDecoys, Filler;
+    /// <summary>The wide population (since 1.4.11).</summary>
+    public FwWide Wide = null!;
+    /// <summary>.c files outside the compile db, and assembly files (since 1.4.11).</summary>
+    public int Uncovered, Asm;
     public long UsesDirect, UsesForwarded, UsesHigherOrder;
     /// <summary>Filler written past the plan to bring a header over maxParseBytes.</summary>
     public long ExtraFiller;
@@ -63,14 +67,20 @@ internal sealed class FwWork
             Depth = o.FwWorkDepth,
             ChainMax = o.FwChainMax,
         };
-        long exact = w.Defines * o.FwWorkKeepPct / 100;
-        w.CrossDecoys = w.Defines * o.FwWorkDecoyPct / 100;
-        w.HalfDecoys = w.Defines * o.FwWorkHalfPct / 100;
+        long exact = Math.Max(1, (long)(w.Defines * o.FwWorkKeepPct / 100));
+        w.CrossDecoys = (long)(w.Defines * o.FwWorkDecoyPct / 100);
+        w.HalfDecoys = (long)(w.Defines * o.FwWorkHalfPct / 100);
+        w.Wide = FwWide.Plan(o, w.Defines - exact - w.CrossDecoys - w.HalfDecoys, w.Defines);
+        w.Uncovered = o.Eff("fw-work-uncovered", o.FwWorkUncovered);
+        w.Asm = Math.Max(2, o.Eff("fw-work-asm", o.FwWorkAsm));
+        var wd = w.Wide;
 
-        // ~80 bytes an exact define (its body holds its children's uses), ~40 a decoy, ~100 filler
-        long rest = Math.Max(0, w.Defines - exact - w.CrossDecoys - w.HalfDecoys);
-        long bytes = exact * 80 + (w.CrossDecoys + w.HalfDecoys) * 40 + rest * 100;
-        w.Headers = (int)Math.Clamp(bytes / HeaderBytes, 1, 10_000);
+        // ~80 bytes an exact define (its body holds its children's uses), ~40 a decoy, ~100 filler, ~150 a matched
+        // define, ~140 a named-only or near-miss one, ~45 a macro
+        long rest = Math.Max(0, w.Defines - exact - w.CrossDecoys - w.HalfDecoys - wd.Defines);
+        long bytes = exact * 80 + (w.CrossDecoys + w.HalfDecoys) * 40 + rest * 100 + wd.Matched * 150 + (wd.Named + wd.Near) * 140
+                     + (wd.Defines - wd.Matched - wd.Named - wd.Near) * 45;
+        w.Headers = (int)Math.Clamp((bytes + HeaderBytes / 2) / HeaderBytes, 1, 10_000);
 
         // Level 1 is (growth - 1) x level 0, so the pieces grow x growth from pass 1 to pass 2; each later level
         // halves. A level smaller than the header count ends the tree.
@@ -105,7 +115,7 @@ internal sealed class FwWork
         w._nb = w._cumB[^1];
         w.CrossDecoys = Math.Min(w.CrossDecoys, w._na * w._nb);
         if (w._na == 0 || w._nb == 0) w.HalfDecoys = 0;
-        w.Filler = Math.Max(0, w.Defines - w.Exact - w.CrossDecoys - w.HalfDecoys);
+        w.Filler = Math.Max(0, w.Defines - w.Exact - w.CrossDecoys - w.HalfDecoys - wd.Defines);
 
         // Each level has its own pasters, forwarders and applier: a use expands its children inside its own
         // expansion, where a macro it is in cannot expand again. A pool is cut to the uses that take it, so every
@@ -224,8 +234,9 @@ internal sealed class FwWork
 
     /// <summary>Appends the functions holding unit <paramref name="u"/>'s level-0 uses: of each header it serves,
     /// the level-0 nodes whose index falls to it.</summary>
-    public void UnitText(int u, int units, StringBuilder fn)
+    public void UnitText(int u, int units, StringBuilder scope, StringBuilder fn)
     {
+        Wide.UnitText(u, units, scope, fn);
         int fi = 0;
         foreach (int h in HeadersOfUnit(u, units))
         {
@@ -266,6 +277,7 @@ internal sealed class FwWork
             for (int k = 0; k < Level.Length; k++) if (_ap[k]) line($"#define WAP{k}(m, p, r) m(p, r)");
         }
         else line("#include \"wreg_0.h\"");
+        foreach (var s in Wide.MacroLines(h, Headers)) line(s);
 
         int K = Level.Length;
         long nodes = 0;
@@ -296,6 +308,7 @@ internal sealed class FwWork
                 for (long until = Start(half, q + 1, nodes); hi < until; hi++) line($"#define {HalfDecoy(hi * Headers + h)} 1");
                 for (long until = Start(fill, q + 1, nodes); fl < until; fl++) fillerOne(fl);
             }
+        foreach (var s in Wide.ValueLines(h, Headers)) line(s);
         while (bytes() < MinHeaderBytes) fillerOne(fl++);
         line("#endif");
         Interlocked.Add(ref ExtraFiller, fl - fill);
@@ -310,6 +323,7 @@ internal sealed class FwWork
                 yield return (ExactName(0, k, l), $"work-exact (level {k})", Site(0));
         for (long i = 0; i < Math.Min(3, CrossDecoys); i++) yield return (CrossDecoy(i), "work-cross-decoy", Site((int)(i % Headers)));
         for (long i = 0; i < Math.Min(2, HalfDecoys); i++) yield return (HalfDecoy(i), "work-half-decoy", Site((int)(i % Headers)));
+        foreach (var r in Wide.Cases()) yield return (r.Name, r.Case, Site((int)(r.Index % Headers)));
     }
 
     // items i < n with i % Headers == h

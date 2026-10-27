@@ -152,6 +152,7 @@ internal sealed class Tracker : ITokenSink
     private readonly FwSpec _a;
     private readonly int _run;
     private readonly bool _commitAtEof, _marks, _named;
+    private bool _carved;
     private DefineParse? _params;
     private List<Path> _paths = new() { new Path() };
     private Path _p = null!;
@@ -174,10 +175,12 @@ internal sealed class Tracker : ITokenSink
         _named = named;
     }
 
-    /// <summary>Starts a new stream; <paramref name="defineParams"/> is the define whose body this is, if any.</summary>
-    public void Begin(DefineParse? defineParams)
+    /// <summary>Starts a new stream; <paramref name="defineParams"/> is the define whose body this is, if any, and
+    /// <paramref name="carved"/> says it is a carved-file define's.</summary>
+    public void Begin(DefineParse? defineParams, bool carved = false)
     {
         _params = defineParams;
+        _carved = carved;
         _paths = new List<Path> { new Path() };
         _conds.Clear();
         _afterHash = _hasLast = false;
@@ -308,7 +311,8 @@ internal sealed class Tracker : ITokenSink
             if (_marks) _a.Called(id);
             if (_a.IsPaster(id, _run)) foreach (var f in _p.Frames) f.Marked = true;
         }
-        else if (_marks && _named) _a.Named(id, _run);
+        // rule W (CodeCarver, 1.4.11): a name only a carved define's body names, not called there, is named under max only
+        else if (_marks && _named && !(_carved && _run == 0)) _a.Named(id, _run);
     }
 
     // A chain with no parameter builds its literal name; one with a parameter is a template.

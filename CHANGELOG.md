@@ -11,6 +11,33 @@ reads it.
 
 ## [Unreleased]
 
+## [1.4.11] - 2026-10-27
+
+The work carve calibrated to a work tree's shape (CodeCarver's aggregates), plus CodeCarver's rule W. Firmware-work
+corpora change a lot: at 1x the work carve is 122.3M defines in about 590 headers of about 31 MB, 0.018% kept, and
+most of it is a new wide population. Plain `--preset firmware` corpora do not change (0.01 lists byte-identical to
+1.4.10).
+
+### Added
+- The wide population (`--fw-work-patterns`, `-near-pct`, `-named-pct`, `-body-pasters`, `-body-forwarders`,
+  `-body-uses`, `-pieces`): kept wildcard paste patterns named in units' `#if 0` blocks, the open register defines
+  they match, open names only matched bodies reach, must-drop near misses and unused body macros.
+- Two kept edges a carve has to follow: a paste macro reached through a forwarder, and a call with a space before
+  its `(`.
+- `.c` files in no compile command (`--fw-work-uncovered`), `.s`/`.asm` files (`--fw-work-asm`), and a computed
+  include (`#include FW_HDR` with `-DFW_HDR="fw_cfg.h"`).
+- Manifest `firmware.work`: `exactUsed`, `openByPattern`, `openByBody`, `nearMissDropped`, the pattern, body-macro,
+  piece, edge and file counts. Verify recounts each from the lists.
+
+### Changed
+- Rule W (CodeCarver): a name that only a carved define's body names, without calling it there, is named under max
+  only, so its any-text use is open.
+- The alphabet: `Y…Z` and `Z…Y` spell must-drop too.
+- `firmware.work`'s use-tree counts moved under `firmware.work.tree`; the top level is now the whole work carve.
+- `--fw-work-keep-pct`, `-decoy-pct` and `-half-pct` take fractions; the defaults are 0.018, 1 and 1 (were 4, 16,
+  20). `--fw-work-defines` defaults to 122,300,000 (was 18,900,000). Work headers are about 31 MB.
+- `--preset firmware-work`'s correctness part has 296 files (222 units; was 400).
+
 ## [1.4.10] - 2026-10-27
 
 CodeCarver's ruling after its T2 run on the 1.4.9 smalls. Firmware corpora change: the `param-tail-alias` kind's

@@ -295,14 +295,38 @@ public static class ManifestWriter
         w.WriteEndObject();
     }
 
-    // The work carve's construction counts (docs/firmware-design.md "Work shape"); verify recounts the class ones
-    // from the truth lists.
+    // The work carve's construction counts (docs/firmware-design.md "Work shape"): the flat fields CodeCarver asked for
+    // (1.4.11), then the use tree's in "tree". Verify recounts the class ones from the truth lists.
     private static void WriteWork(Utf8JsonWriter w, CodeSpawner.Firmware.FwWork k)
     {
+        var wd = k.Wide;
+        long tree = k.Exact + k.CrossDecoys + k.HalfDecoys + k.FillerWritten;
         w.WriteStartObject("work");
         w.WriteString("dir", CodeSpawner.Firmware.FwSpec.FwDir + "/" + CodeSpawner.Firmware.FwWork.Dir);
         w.WriteNumber("headers", k.Headers);
-        w.WriteNumber("defines", k.Exact + k.CrossDecoys + k.HalfDecoys + k.FillerWritten);
+        w.WriteNumber("defines", tree + k.Pasters + k.Forwarders + k.Appliers + wd.Defines);
+        w.WriteNumber("exactUsed", k.Exact + k.Pasters + k.Forwarders + k.Appliers + 2 * wd.Patterns + CodeSpawner.Firmware.FwWide.EdgeDefines);
+        w.WriteNumber("openByPattern", wd.Matched);
+        w.WriteNumber("openByBody", wd.Named + wd.UsedPasters + wd.UsedForwarders);
+        w.WriteNumber("nearMissDropped", wd.Near);
+        w.WriteNumber("patterns", wd.Patterns);
+        w.WriteNumber("patternsTwoSided", wd.Two);
+        w.WriteNumber("patternsPrefixOnly", wd.Pre);
+        w.WriteNumber("patternsSuffixOnly", wd.Suf);
+        w.WriteNumber("namedOnly", wd.Named);
+        w.WriteNumber("pasteMacros", wd.UsedPasters + wd.UnusedPasters);
+        w.WriteNumber("pasteMacrosUsed", wd.UsedPasters);
+        w.WriteNumber("forwarders", wd.UsedForwarders + wd.UnusedForwarders);
+        w.WriteNumber("forwardersUsed", wd.UsedForwarders);
+        w.WriteNumber("uses", wd.Uses);
+        w.WriteNumber("pieces", wd.Pieces);
+        w.WriteNumber("piecesStart", wd.PiecesS);
+        w.WriteNumber("piecesEnd", wd.PiecesE);
+        w.WriteNumber("edges", CodeSpawner.Firmware.FwWide.EdgeDefines);
+        w.WriteNumber("uncoveredFiles", k.Uncovered);
+        w.WriteNumber("asmFiles", k.Asm);
+        w.WriteStartObject("tree");
+        w.WriteNumber("defines", tree);
         w.WriteNumber("exactKept", k.Exact);
         w.WriteNumber("crossDecoys", k.CrossDecoys);
         w.WriteNumber("halfDecoys", k.HalfDecoys);
@@ -334,6 +358,7 @@ public static class ManifestWriter
             w.WriteEndObject();
         }
         w.WriteEndArray();
+        w.WriteEndObject();
         w.WriteEndObject();
     }
 

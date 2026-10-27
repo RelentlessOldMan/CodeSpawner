@@ -78,7 +78,9 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     }
 
     private static string Spelled(string name) =>
-        name.Length > 1 && name[0] == 'Z' && name[^1] == 'Z' ? "drop" : name.Length > 1 && name[0] == 'Y' && name[^1] == 'Y' ? "open" : "keep";
+        name.Length < 2 ? "keep"
+        : (name[0] is 'Z' or 'Y') && name[^1] == 'Z' || name[0] == 'Z' && name[^1] == 'Y' ? "drop"
+        : name[0] == 'Y' && name[^1] == 'Y' ? "open" : "keep";
 
     // ---------- knobs ----------
 
@@ -110,10 +112,10 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     {
         var o = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "firmware-work"])]);
         Assert.True(o.Firmware && o.FwWork);
-        Assert.Equal((1, 400, 192, 20_000, 0), (o.FwBigHeaders, o.FwFiles, o.FwFamilies, o.FwPasters, o.FwDenseHeaders));
+        Assert.Equal((1, 296, 192, 20_000, 0), (o.FwBigHeaders, o.FwFiles, o.FwFamilies, o.FwPasters, o.FwDenseHeaders));
         Assert.Equal(1, o.Eff("fw-big-headers", o.FwBigHeaders, keepOne: true));
         o.Scale = 0.1;
-        Assert.Equal((1_890_000, 500, 1_500), (o.Eff("fw-work-defines", o.FwWorkDefines), o.Eff("fw-work-pasters", o.FwWorkPasters),
+        Assert.Equal((12_230_000, 500, 1_500), (o.Eff("fw-work-defines", o.FwWorkDefines), o.Eff("fw-work-pasters", o.FwWorkPasters),
             o.Eff("fw-work-forwarders", o.FwWorkForwarders)));
     }
 
@@ -299,13 +301,14 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.False(Manifest(_c.Path)["firmware"]!.AsObject().ContainsKey("work"));
 
         using var tmp = new TempDir();
-        string c = Gen(tmp.Path, "w",
+        string c = Gen(tmp.Path, "w", [
             "--firmware", "--fw-big-headers", "1", "--fw-files", "40", "--fw-families", "64", "--fw-pasters", "200",
-            "--fw-dense-headers", "0", "--fw-work", "--fw-work-defines", "40000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180");
+            "--fw-dense-headers", "0", "--fw-work", "--fw-work-defines", "40000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180", .. TreePcts, .. SmallWide]);
         var (code, err) = Verify(c);
         Assert.True(code == 0, err);
 
-        var w = Manifest(c)["firmware"]!["work"]!;
+        var wk = Manifest(c)["firmware"]!["work"]!;
+        var w = wk["tree"]!;
         long L(string k) => w[k]!.GetValue<long>();
         var levels = w["byLevel"]!.AsArray().Select(x => x!["uses"]!.GetValue<long>()).ToArray();
         Assert.Equal(6, L("levels"));
@@ -322,20 +325,30 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Equal(L("pasters"), keep.Count(n => n.StartsWith("WRP", StringComparison.Ordinal)));
         Assert.Equal(L("appliers"), keep.Count(n => n.StartsWith("WAP", StringComparison.Ordinal)));
         Assert.Equal(L("crossDecoys"), drop.Count(n => FwWork.Classify(n) == "cross"));
+        // the wide population (1.4.11): kept pasters and roots, open matches and body names, dropped near misses
+        long WL(string k) => wk[k]!.GetValue<long>();
+        var open = List(c, "main", "openDefines");
+        Assert.Equal(10, WL("patterns"));
+        Assert.Equal(WL("patterns"), keep.Count(n => FwWide.Classify(n) == "widePaster"));
+        Assert.Equal(WL("openByPattern"), open.Count(n => FwWide.Classify(n) == "matched"));
+        Assert.Equal(WL("nearMissDropped"), drop.Count(n => FwWide.Classify(n) == "near"));
+        Assert.True(WL("openByPattern") > 0 && WL("namedOnly") > 0 && WL("nearMissDropped") > 0 && WL("pasteMacrosUsed") > 0);
+        Assert.Equal(12, keep.Count(n => FwWide.Classify(n) == "edge"));
         foreach (var row in File.ReadAllLines(Path.Combine(c, FirmwareEmitter.CasesPath)).Where(r => r.Contains("\twork-")))
         {
             string n = row.Split('\t')[0];
-            Assert.True(row.Contains("work-exact") ? keep.Contains(n) : drop.Contains(n), row);
+            Assert.True(row.Contains("work-exact") || row.Contains(", kept)") || row.Contains("work-wide-paster") ? keep.Contains(n)
+                : row.Contains("open)") ? open.Contains(n) : drop.Contains(n), row);
         }
 
         // a wrong work count fails verify
         var m = Manifest(c);
-        m["firmware"]!["work"]!["crossDecoys"] = L("crossDecoys") + 1;
+        m["firmware"]!["work"]!["tree"]!["crossDecoys"] = L("crossDecoys") + 1;
         string mp = Path.Combine(tmp.Path, "m.json");
         File.WriteAllText(mp, m.ToJsonString());
         var (code2, err2) = Verify(c, mp);
         Assert.True(code2 == 1, err2);
-        Assert.Contains("work.crossDecoys", err2);
+        Assert.Contains("work.tree.crossDecoys", err2);
     }
 
     [Fact]
@@ -643,6 +656,14 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     // ---------- review round 9 ----------
 
     // a firmware corpus without the size of the shared one: one big header, no dense ones
+    // the tree's pre-1.4.11 shares, so a small tree still has levels and decoys
+    private static readonly string[] TreePcts = ["--fw-work-keep-pct", "4", "--fw-work-decoy-pct", "16", "--fw-work-half-pct", "20"];
+    private static readonly string[] SmallWide =
+    [
+        "--fw-work-patterns", "10", "--fw-work-body-pasters", "100", "--fw-work-body-forwarders", "100", "--fw-work-body-uses", "100",
+        "--fw-work-pieces", "40", "--fw-work-uncovered", "3", "--fw-work-asm", "2",
+    ];
+
     private static readonly string[] SmallFw =
     [
         "--firmware", "--fw-big-headers", "1", "--fw-files", "40", "--fw-families", "64", "--fw-pasters", "200", "--fw-dense-headers", "0",
@@ -795,10 +816,10 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     {
         using var tmp = new TempDir();
         string c = Gen(tmp.Path, "w", [.. SmallFw, "--depth", "12",
-            "--fw-work", "--fw-work-defines", "3000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180"]);
+            "--fw-work", "--fw-work-defines", "3000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180", .. TreePcts, .. SmallWide]);
         var (code, err) = Verify(c);
         Assert.True(code == 0, err);
-        var w = Manifest(c)["firmware"]!["work"]!;
+        var w = Manifest(c)["firmware"]!["work"]!["tree"]!;
         var keep = List(c, "main", "mustKeepDefines");
         Assert.Equal(w["appliers"]!.GetValue<long>(), keep.Count(n => n.StartsWith("WAP", StringComparison.Ordinal)));
         Assert.Equal(w["uses"]!["higherOrder"]!.GetValue<long>() > 0, w["appliers"]!.GetValue<long>() > 0);
@@ -806,8 +827,11 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         foreach (var edit in new Action<JsonObject>[]
         {
             f => f.Remove("work"),
-            f => f["work"]!["byLevel"]![0]!["uses"] = f["work"]!["byLevel"]![0]!["uses"]!.GetValue<long>() + 1,
-            f => f["work"]!["expectedPasses"] = f["work"]!["expectedPasses"]!.GetValue<long>() + 1,
+            f => f["work"]!["tree"]!["byLevel"]![0]!["uses"] = f["work"]!["tree"]!["byLevel"]![0]!["uses"]!.GetValue<long>() + 1,
+            f => f["work"]!["tree"]!["expectedPasses"] = f["work"]!["tree"]!["expectedPasses"]!.GetValue<long>() + 1,
+            f => f["work"]!["openByPattern"] = f["work"]!["openByPattern"]!.GetValue<long>() + 1,
+            f => f["work"]!["nearMissDropped"] = f["work"]!["nearMissDropped"]!.GetValue<long>() - 1,
+            f => f["work"]!["asmFiles"] = f["work"]!["asmFiles"]!.GetValue<long>() + 1,
         })
         {
             var (code2, err2) = VerifyWith(c, edit, tmp.Path);

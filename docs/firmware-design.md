@@ -46,7 +46,7 @@ gcc and clang -E.
 
 Every name a case is about is spelled by its class:
 
-- `Z…Z` (starts and ends with `Z`): **must drop**;
+- `Z…Z`, `Y…Z` and `Z…Y` (starts and ends with `Z` or `Y`, at least one of them `Z`; since 1.4.11 for the last two): **must drop**;
 - `Y…Y`: **open** (the truth does not decide it);
 - anything else: **must keep**.
 
@@ -135,7 +135,9 @@ kept header. A carve that also drops unreached files does not match it. Run the 
 
    A chain with no parameter builds its literal name. A paste macro that is named in code but never called gets
    one use whose arguments are all any text. "Called" is over the whole tree, dropped text included; comments and
-   strings (max) never call or name. A name is called when `(` follows it, when it ends a define body, when only
+   strings (max) never call or name. A name that only a carved define's body names, and does not call there, is named
+   under max only (rule W, CodeCarver's ruling for 1.4.11): whether that paste macro is called depends on whether the
+   define is kept, so its any-text use is open, not must-keep. A name is called when `(` follows it, when it ends a define body, when only
    names that may be empty or parameters follow it there (since 1.4.9: `CAT EMPTYM`, `CAT x`), and when the
    argument for the parameter after it opens with `(` (`PICK2((KPK_, 2))` gives `CAT (KPK_, 2)`).
 
@@ -229,13 +231,16 @@ files under `fw-truth/`:
 
 `--fw-work` adds a carve shaped like a work tree, for measuring how a carver's passes grow. It sits beside the
 correctness part, in `fw/work/wreg_N.h` (each one over `maxParseBytes`; on `-I fw/work`). `--preset firmware-work` is
-the work carve at `--scale` plus a small, fixed correctness part (1 big header, 400 files, 192 families, 20,000
+the work carve at `--scale` plus a small, fixed correctness part (1 big header, 296 files, 192 families, 20,000
 pasters, no dense headers), so nearly all of its size and time is the work carve.
 
 - **A tree of paste uses.** Each must-keep define is a `##` use: `WRP<n>(a, b)` pastes a start piece and an end
   piece. Units call level 0. Each level-k define's body holds 8 level-k+1 uses at the first step (`--fw-work-growth`
   9: the pieces seeded grow ×9 from pass 1 to pass 2), then the levels halve, down to `--fw-work-depth` levels. A
   carve that seeds level by level needs `levels + 1` passes (the last one finds nothing new).
+- **Calibrated to a work tree (1.4.11).** At 1x the work carve is 122,300,000 defines in about 590 headers of
+  about 31 MB, 0.018% of them kept; the correctness part adds 222 units. Most of the work defines are the wide
+  population below, and the use tree is a small part.
 - **Three use modes**, cycling 10:7:3 over each level: direct (`WRP<n>`), forwarded (`WFW<n>`, a forwarder to a
   paster) and higher-order (`WAP<k>(WRP<n>, a, b)`). A macro can't expand inside its own expansion, so each level has
   its own pasters, forwarders and applier `WAP<k>`. `--fw-work-pasters` and `--fw-work-forwarders` set the pools,
@@ -246,7 +251,37 @@ pasters, no dense headers), so nearly all of its size and time is the work carve
 - **Half decoys** (`--fw-work-half-pct`, 20%) have one real piece and a dead end: must-drop under either rule.
 - **Filler** (`ZWF…Z`) makes up the rest and pads each header past `maxParseBytes`.
 
-With the defaults, 4% of the work defines are kept, and 20% would be kept under global pools.
+The tree's shares are percents of the work defines (fractions allowed): `--fw-work-keep-pct` 0.018, `-decoy-pct` 1,
+`-half-pct` 1. Before 1.4.11 they were 4, 16 and 20.
+
+**The wide population (1.4.11)** is the bulk of a work tree: register defines whose names only a wildcard paste
+matches, so a carver has to match patterns, not look names up. The pieces are 2 chars from `a–z` (no `q`) and `0–9`.
+
+- **Patterns** (`--fw-work-patterns`, 2,300). Each is a kept paste macro `KWP<p>(x)` whose body pastes a fixed prefix
+  and suffix around its parameter, and a kept root `KWT<p>` = `(KWP<p> + 0x…u)`, named (not called) in a unit's `#if
+  0` block. Rule W does not apply (a unit is not a carved file), so `KWP<p>` gets an any-text use: every name with its
+  prefix and suffix is wanted under max. 70% are two-sided (`Y<cc>`…`<cc>Y`), 15% prefix-only (`Yq<cc>`…`_Y`), 15%
+  suffix-only (`Y_`…`<cc>qY`).
+- **Matched** names (`openByPattern`): register defines a pattern matches. Open: wanted under max (the any-text use
+  is in a `#if 0` block, which min skips), not under min. They take what the other kinds leave of the budget.
+- **Named only** (`--fw-work-named-pct`, 11%): `Y_<mid>_Y`, named only in a matched define's body. Open.
+- **Near misses** (`--fw-work-near-pct`, 6%): a pattern's prefix with a wrong end (`…Z`), a wrong start with its
+  suffix (`Z…`), or the full name with a char after it. Must drop.
+- **Body macros** (`--fw-work-body-pasters` 2,600,000, `-body-forwarders` 2,900,000): a tenth are named in matched
+  bodies (`Y_WP<j>_Y(p, r) p##r`, `Y_WF<f>_Y`: open), the rest nowhere (`ZWQP<j>Z`, `ZWQF<f>Z`: must drop).
+  `--fw-work-body-uses` (1,800,000) matched bodies call a used paster on 2 of `--fw-work-pieces` (500,000) pieces.
+  Rule W makes each body macro's names open, not kept: whether it is called depends on whether the matched define is
+  kept.
+- **Edges** (2, 6 kept defines each, in `wreg_0.h`): a paste macro reached through a forwarder (`KWEF<e>(KWER<e>)`
+  builds `KWEA<e>KWER<e>_Q`) and a function-like call with a space before its `(` (`KWEQ<e> (KWES<e>)`). Unit 0
+  calls both in `fwe<e>()`.
+- **Outside the db**: `fw/src/uncovered/unc_<i>.c` (`--fw-work-uncovered`, 4,340) and `fw/asm/start_<i>.s` /
+  `vec_<i>.asm` (`--fw-work-asm`, 21, at least 2). No build compiles them, they name nothing a carve keeps, and they
+  hold no define (so they are in no list). Kept text, kept whole.
+- **A computed include**: unit 0 includes `FW_HDR`, given by the db as `-DFW_HDR="fw_cfg.h"`; unit 1 includes
+  `fw_cfg.h` directly. Both use `KCFG0X`, which only that header defines.
+
+Value lines are about 145 bytes: a register expression and a `/* rst 0x…, rw, bit n */` comment.
 
 At the edges the counts give way to the shape, and the manifest records what was written:
 
@@ -257,27 +292,40 @@ At the edges the counts give way to the shape, and the manifest records what was
 - A level with no forwarders folds its forwarded uses into direct ones. A level with no higher-order use (a level of
   under 18 uses) gets no applier, so `appliers` can be fewer than `levels`.
 - A forwarder chain goes back to a paster every `--fw-chain-max` links.
-- `byLevel[k].piecesSoFar` counts the uses (one start and one end piece each) seeded by the end of level `k`.
+- `tree.byLevel[k].piecesSoFar` counts the uses (one start and one end piece each) seeded by the end of level `k`.
 
-`firmware.work` in the manifest gives the construction counts, which verify recounts from the lists:
+`firmware.work` in the manifest gives the construction counts, which verify recounts from the lists. Since 1.4.11
+the top level is the whole work carve and the use tree's counts are under `tree` (before, they were the top level).
+At `--scale 0.01`:
 
 ```json
-"work": { "dir": "fw/work", "headers": 3, "defines": 945000, "exactKept": 37785, "crossDecoys": 151200,
-          "halfDecoys": 189000, "filler": 567015, "keptUnderGlobalPools": 188985, "pasters": 250, "forwarders": 750,
-          "appliers": 6, "uses": { "direct": 18905, "forwarded": 13216, "higherOrder": 5664 }, "levels": 6, "expectedPasses": 7,
-          "byLevel": [{ "level": 0, "uses": 2290, "startPieces": 2290, "endPieces": 2290, "piecesSoFar": 2290,
-                        "crossDecoysLiveSoFar": 8980 }, …] }
+"work": { "dir": "fw/work", "headers": 5, "defines": 1223104, "exactUsed": 376, "openByPattern": 935352,
+          "openByBody": 140030, "nearMissDropped": 73380, "patterns": 23, "patternsTwoSided": 17,
+          "patternsPrefixOnly": 3, "patternsSuffixOnly": 3, "namedOnly": 134530, "pasteMacros": 26000,
+          "pasteMacrosUsed": 2600, "forwarders": 29000, "forwardersUsed": 2900, "uses": 18000, "pieces": 5000,
+          "piecesStart": 2500, "piecesEnd": 2500, "edges": 12, "uncoveredFiles": 43, "asmFiles": 2,
+          "tree": { "defines": 24680, "exactKept": 214, "crossDecoys": 11349, "halfDecoys": 12230, "filler": 887,
+                    "keptUnderGlobalPools": 11563, "pasters": 47, "forwarders": 54, "appliers": 3,
+                    "uses": { "direct": 126, "forwarded": 64, "higherOrder": 24 }, "levels": 6, "expectedPasses": 7,
+                    "byLevel": [{ "level": 0, "uses": 13, "startPieces": 13, "endPieces": 13, "piecesSoFar": 13,
+                                  "crossDecoysLiveSoFar": 40 }, …] } }
 ```
 
-- **`exactKept`** is the must-keep work defines (one per use). `pasters`, `forwarders` and `appliers` are the must-keep
-  macros. `filler` counts what was written, padding included.
-- **`keptUnderGlobalPools`** = `exactKept + crossDecoys`: what a carve that pools pieces tree-wide keeps.
-- **`byLevel`**: per level, the uses and the pieces they seed. `piecesSoFar` is the pieces seeded once that level is
+- **`defines`**: every define the work carve writes (`fw/work/` plus the pattern roots and pastes in the units).
+- **`exactUsed`**: the must-keep work names: the tree's `exactKept`, `pasters`, `forwarders` and `appliers`, plus
+  `2 × patterns` (`KWP`, `KWT`) and the 12 edge defines. The tree's `exactKept` alone is the kept register defines.
+- **`openByPattern`**: the matched names. **`openByBody`** = `namedOnly + pasteMacrosUsed + forwardersUsed`: the open
+  names only a matched body reaches. **`nearMissDropped`**: the near misses.
+- **`pasteMacros`** / **`forwarders`**: the body macros, `…Used` of them named in a body; the rest are must-drop.
+- **`tree.exactKept`** is the must-keep tree defines (one per use). `pasters`, `forwarders` and `appliers` are the
+  must-keep macros. `filler` counts what was written, padding included.
+- **`tree.keptUnderGlobalPools`** = `exactKept + crossDecoys`: what a carve that pools pieces tree-wide keeps.
+- **`tree.byLevel`**: per level, the uses and the pieces they seed. `piecesSoFar` is the pieces seeded once that level is
   reached. `crossDecoysLiveSoFar` is the cross decoys whose two pieces are both seeded by then (what global pools
   keep after that pass).
 - The correctness part also seeds pieces, so at small scales pass 1→2 growth is a little under ×9.
 
-Measured on the 1.4.6 release exe (`--preset firmware-work`), on an otherwise idle machine:
+Before 1.4.11 (not calibrated, no wide population), Measured on the 1.4.6 release exe (`--preset firmware-work`), on an otherwise idle machine:
 
 | Scale | Size | Work headers | Work defines | Exact kept / under global pools | Gen | Verify | Peak memory |
 |---|---|---|---|---|---|---|---|
@@ -331,14 +379,23 @@ All counts scale with `--scale` (an explicit knob is used as given). `_meta.gen`
 | `--fw-chain-max` | 40 | The long forwarder chains' length (2–10,000; not scaled). |
 | `--fw-db-paths` | `absolute` | `absolute` or `relative`: how the compile db names paths (not scaled). |
 | `--fw-work` | off | The work carve (see "Work shape"). Every `--fw-work-*` knob is refused without it. |
-| `--fw-work-defines` | 18,900,000 | Work defines: kept uses, decoys and filler. |
+| `--fw-work-defines` | 122,300,000 | Work defines: the use tree, the wide population and filler. |
 | `--fw-work-pasters` | 5,000 | Paste macros, split across the levels. |
 | `--fw-work-forwarders` | 15,000 | Forwarders, split across the levels. |
 | `--fw-work-depth` | 6 | Levels of the use tree (1–64; not scaled). |
 | `--fw-work-growth` | 9 | Pieces grow ×growth from pass 1 to pass 2 (2–1000; not scaled). |
-| `--fw-work-keep-pct` | 4 | Percent of the work defines that are kept uses (1–100; not scaled). |
-| `--fw-work-decoy-pct` | 16 | Percent that are cross-call decoys (not scaled; keep + decoy + half ≤ 100). |
-| `--fw-work-half-pct` | 20 | Percent that are half decoys (not scaled). |
+| `--fw-work-keep-pct` | 0.018 | Percent of the work defines that are kept uses (over 0, at most 100, fractions allowed; not scaled). |
+| `--fw-work-decoy-pct` | 1 | Percent that are cross-call decoys (not scaled; keep + decoy + half + near + named ≤ 100). |
+| `--fw-work-half-pct` | 1 | Percent that are half decoys (not scaled). |
+| `--fw-work-patterns` | 2,300 | Wide patterns: a kept `KWP` paste macro and `KWT` root each. |
+| `--fw-work-near-pct` | 6 | Percent that are near misses of a pattern, must drop (not scaled). |
+| `--fw-work-named-pct` | 11 | Percent named only by a matched body, open (not scaled). |
+| `--fw-work-body-pasters` | 2,600,000 | Paste macros for matched bodies; a tenth are used (open), the rest must drop. |
+| `--fw-work-body-forwarders` | 2,900,000 | Forwarders for matched bodies; a tenth are used. |
+| `--fw-work-body-uses` | 1,800,000 | Paste uses in matched bodies. |
+| `--fw-work-pieces` | 500,000 | Distinct pieces those uses paste. |
+| `--fw-work-uncovered` | 4,340 | `.c` files in the tree but in no compile command. |
+| `--fw-work-asm` | 21 | `.s` and `.asm` files (at least 2). |
 
 ## Sizes
 

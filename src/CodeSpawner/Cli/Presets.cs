@@ -70,7 +70,7 @@ public static class Presets
     // firmware-work: the work-shaped carve (docs/firmware-design.md "Work shape") at --scale, beside a small fixed
     // correctness part (one big header, every kind a few times), so the size and the pass shape come from the work part.
     private static readonly string[] FirmwareWork =
-        [.. Bare, "--firmware", "--fw-work", "--fw-families", "192", "--fw-pasters", "20000", "--fw-files", "400",
+        [.. Bare, "--firmware", "--fw-work", "--fw-families", "192", "--fw-pasters", "20000", "--fw-files", "296",
          "--fw-big-headers", "1", "--fw-dense-headers", "0"];
 
     // Single source of truth: resolution (TryGet), the advertised name list (Names), and the error-message

@@ -339,9 +339,18 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("fwWorkForwarders", (long)o.Eff("fw-work-forwarders", o.FwWorkForwarders)));
         g.Add(GenKnob.Of("fwWorkDepth", (long)o.FwWorkDepth));
         g.Add(GenKnob.Of("fwWorkGrowth", (long)o.FwWorkGrowth));
-        g.Add(GenKnob.Of("fwWorkKeepPct", (long)o.FwWorkKeepPct));
-        g.Add(GenKnob.Of("fwWorkDecoyPct", (long)o.FwWorkDecoyPct));
-        g.Add(GenKnob.Of("fwWorkHalfPct", (long)o.FwWorkHalfPct));
+        g.Add(GenKnob.Of("fwWorkKeepPct", o.FwWorkKeepPct));
+        g.Add(GenKnob.Of("fwWorkDecoyPct", o.FwWorkDecoyPct));
+        g.Add(GenKnob.Of("fwWorkHalfPct", o.FwWorkHalfPct));
+        g.Add(GenKnob.Of("fwWorkPatterns", (long)o.Eff("fw-work-patterns", o.FwWorkPatterns)));
+        g.Add(GenKnob.Of("fwWorkNearPct", o.FwWorkNearPct));
+        g.Add(GenKnob.Of("fwWorkNamedPct", o.FwWorkNamedPct));
+        g.Add(GenKnob.Of("fwWorkBodyPasters", (long)o.Eff("fw-work-body-pasters", o.FwWorkBodyPasters)));
+        g.Add(GenKnob.Of("fwWorkBodyForwarders", (long)o.Eff("fw-work-body-forwarders", o.FwWorkBodyForwarders)));
+        g.Add(GenKnob.Of("fwWorkBodyUses", (long)o.Eff("fw-work-body-uses", o.FwWorkBodyUses)));
+        g.Add(GenKnob.Of("fwWorkPieces", (long)o.Eff("fw-work-pieces", o.FwWorkPieces)));
+        g.Add(GenKnob.Of("fwWorkUncovered", (long)o.Eff("fw-work-uncovered", o.FwWorkUncovered)));
+        g.Add(GenKnob.Of("fwWorkAsm", (long)Math.Max(2, o.Eff("fw-work-asm", o.FwWorkAsm))));
     }
 
     /// <summary>The include web's truth: its -I order, the template instances as symbols, and the closures.</summary>

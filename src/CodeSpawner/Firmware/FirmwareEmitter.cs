@@ -129,6 +129,7 @@ internal static class FirmwareEmitter
         WriteBigSrc(p);
         WriteTable(p);
         WriteExt(p);
+        if (p.Work is { } wx) WriteWorkExtras(p, wx);
         WriteMisc(p, r.Hostile);
         WriteDb(p);
         r.Cases = WriteCases(p);
@@ -715,7 +716,12 @@ internal static class FirmwareEmitter
         int hdr = p.HeaderOfDir(p.DirOf(file));
         if (hdr >= 0) w.L($"#include \"k{hdr}.h\"");
         if (u == 0) w.L("#include \"fw_q3.h\"");
-        if (p.Work is { } wk) foreach (int h in wk.HeadersOfUnit(u, p.Units)) w.L($"#include \"{FwWork.HeaderFile(h)}\"");
+        if (p.Work is { } wk)
+        {
+            foreach (int h in wk.HeadersOfUnit(u, p.Units)) w.L($"#include \"{FwWork.HeaderFile(h)}\"");
+            if (u == 0) w.L("#include FW_HDR");
+            if (u == 1) w.L("#include \"fw_cfg.h\"");
+        }
         var scope = new StringBuilder();
         var fn = new StringBuilder();
         fn.Append($"int fu{u}(void)\n{{\n\treturn {u % 7};\n}}\n");
@@ -725,7 +731,8 @@ internal static class FirmwareEmitter
             if (scope.Length + fn.Length > 1 << 16) { w.Text(scope.ToString()); w.Text(fn.ToString()); scope.Clear(); fn.Clear(); }
         }
         for (int t = 0; t < Traps; t++) if (p.TrapUnit(t) == u) TrapUseText(t, fn);
-        p.Work?.UnitText(u, p.Units, fn);
+        p.Work?.UnitText(u, p.Units, scope, fn);
+        if (p.Work is not null && u is 0 or 1) fn.Append($"int fwcfg{u}(void)\n{{\n\treturn KCFG0X;\n}}\n");
         if (u == 0) fn.Append("int fdv(void)\n{\n\treturn KDV_9 + KD_7 + KHWP(Z, Z) + CAT(KDE0X_, KDE_N) + KPORT(KSRC0X);\n}\n");
         w.Text(scope.ToString());
         w.Text(fn.ToString());
@@ -828,6 +835,25 @@ internal static class FirmwareEmitter
         hostile.Add(new FwHostile($"{FwSpec.FwDir}/dense/dense_small.h", $"size {BoundarySmall} (one under the dense floor)"));
     }
 
+
+    // The work tree's files outside the compile db (since 1.4.11): .c files no command compiles and assembly
+    // sources. Both are kept whole and seed under min, so they name no define; and fw_cfg.h, which unit 0 includes
+    // through -DFW_HDR="fw_cfg.h" and unit 1 by name.
+    private static void WriteWorkExtras(Plan p, FwWork wk)
+    {
+        File.WriteAllText(p.Fw("include/fw_cfg.h"),
+            "#ifndef FW_CFG_H\n#define FW_CFG_H\n/* included through -DFW_HDR=\"fw_cfg.h\" (#include FW_HDR) */\n#define KCFG0X 3\n#endif\n");
+        if (wk.Uncovered > 0) Directory.CreateDirectory(p.Fw("src/uncovered"));
+        Parallel.For(0, wk.Uncovered, i => File.WriteAllText(p.Fw($"src/uncovered/unc_{i}.c"),
+            $"/* unc_{i}.c: in the tree, in no compile command */\nstatic int unc_{i}_tab[4] = {{ {i % 7}, {i % 11}, {i % 13}, {i % 17} }};\n"
+            + $"int unc_{i}(int a)\n{{\n\treturn unc_{i}_tab[a & 3] * {i % 5 + 2} + a;\n}}\n"));
+        Directory.CreateDirectory(p.Fw("asm"));
+        for (int i = 0; i < wk.Asm; i++)
+            File.WriteAllText(p.Fw(i % 2 == 0 ? $"asm/start_{i}.s" : $"asm/vec_{i}.asm"), i % 2 == 0
+                ? $"/* start_{i}.s: assembly, in no compile command */\n\t.syntax unified\n\t.text\n\t.global fw_start_{i}\nfw_start_{i}:\n\tldr r0, =0x{0x20000000 + i * 0x100:X8}\n\tmov sp, r0\n\tbx lr\n"
+                : $"; vec_{i}.asm: assembly, in no compile command\n\tarea vec_{i}, code, readonly\n\texport fw_vec_{i}\nfw_vec_{i}\n\tdcd 0x{0x20001000 + i * 0x100:X8}\n\tend\n");
+    }
+
     // ---------------- compile db, cases ----------------
 
     private static void WriteDb(Plan p)
@@ -850,6 +876,7 @@ internal static class FirmwareEmitter
             w.WriteStringValue("-DKD_7");
             w.WriteStringValue("-DKDV_9=KDV_VAL");
             w.WriteStringValue("-DKDE_N=4");
+            if (p.Work is not null) w.WriteStringValue("-DFW_HDR=\"fw_cfg.h\"");
             w.WriteStringValue("-c");
             w.WriteStringValue(P(file));
             w.WriteEndArray();

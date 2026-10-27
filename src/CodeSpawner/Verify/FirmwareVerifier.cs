@@ -130,35 +130,59 @@ internal static class FirmwareVerifier
         if (Obj(fw, "work") is { ValueKind: JsonValueKind.Object } work)
         {
             fail += CheckWorkShape(corpus, work, err, okCount);
+            var tree = Obj(work, "tree");
             var main = Obj(builds, "main");
-            string? keepRel = Str(Obj(main, "mustKeepDefines"), "path"), dropRel = Str(Obj(main, "mustDropDefines"), "path");
-            string? keepF = keepRel is null ? null : paths.Resolve(keepRel), dropF = dropRel is null ? null : paths.Resolve(dropRel);
-            if (keepF is null || dropF is null || !File.Exists(keepF) || !File.Exists(dropF))
+            string? keepRel = Str(Obj(main, "mustKeepDefines"), "path"), dropRel = Str(Obj(main, "mustDropDefines"), "path"),
+                openRel = Str(Obj(main, "openDefines"), "path");
+            string? keepF = keepRel is null ? null : paths.Resolve(keepRel), dropF = dropRel is null ? null : paths.Resolve(dropRel),
+                openF = openRel is null ? null : paths.Resolve(openRel);
+            if (keepF is null || dropF is null || openF is null || !File.Exists(keepF) || !File.Exists(dropF) || !File.Exists(openF))
             { err.WriteLine("FAIL firmware work: the main build's truth lists are missing"); fail++; }
             else
             {
                 var kc = WorkCounts(keepF);
+                var oc = WorkCounts(openF);
                 var dc = WorkCounts(dropF);
-                Eq("work.exactKept", Num(work, "exactKept"), kc.Exact.ToString());
-                Eq("work.pasters", Num(work, "pasters"), kc.Pasters.ToString());
-                Eq("work.forwarders", Num(work, "forwarders"), kc.Forwarders.ToString());
-                Eq("work.appliers", Num(work, "appliers"), kc.Appliers.ToString());
-                Eq("work.crossDecoys", Num(work, "crossDecoys"), dc.Cross.ToString());
-                Eq("work.halfDecoys", Num(work, "halfDecoys"), dc.Half.ToString());
-                Eq("work.filler", Num(work, "filler"), dc.Filler.ToString());
-                Eq("work: decoys and filler kept", "0", (kc.Cross + kc.Half + kc.Filler).ToString());
-                Eq("work: exact names dropped", "0", dc.Exact.ToString());
+                Eq("work.tree.exactKept", Num(tree, "exactKept"), kc.Exact.ToString());
+                Eq("work.tree.pasters", Num(tree, "pasters"), kc.Pasters.ToString());
+                Eq("work.tree.forwarders", Num(tree, "forwarders"), kc.Forwarders.ToString());
+                Eq("work.tree.appliers", Num(tree, "appliers"), kc.Appliers.ToString());
+                Eq("work.tree.crossDecoys", Num(tree, "crossDecoys"), dc.Cross.ToString());
+                Eq("work.tree.halfDecoys", Num(tree, "halfDecoys"), dc.Half.ToString());
+                Eq("work.tree.filler", Num(tree, "filler"), dc.Filler.ToString());
+                Eq("work: tree decoys and filler kept or open", "0", (kc.Cross + kc.Half + kc.Filler + oc.Cross + oc.Half + oc.Filler).ToString());
+                Eq("work: tree exact names not kept", "0", (dc.Exact + oc.Exact).ToString());
+                // the wide population (1.4.11): each kind in its one class
+                long W(WorkCount c, string k) => c.Wide.GetValueOrDefault(k);
+                Eq("work.exactUsed", Num(work, "exactUsed"),
+                    (kc.Exact + kc.Pasters + kc.Forwarders + kc.Appliers + W(kc, "widePaster") + W(kc, "root") + W(kc, "edge")).ToString());
+                Eq("work.patterns (wide pasters kept)", Num(work, "patterns"), W(kc, "widePaster").ToString());
+                Eq("work.patterns (roots kept)", Num(work, "patterns"), W(kc, "root").ToString());
+                Eq("work.edges", Num(work, "edges"), W(kc, "edge").ToString());
+                Eq("work.openByPattern", Num(work, "openByPattern"), W(oc, "matched").ToString());
+                Eq("work.namedOnly", Num(work, "namedOnly"), W(oc, "named").ToString());
+                Eq("work.pasteMacrosUsed", Num(work, "pasteMacrosUsed"), W(oc, "usedPaster").ToString());
+                Eq("work.forwardersUsed", Num(work, "forwardersUsed"), W(oc, "usedForwarder").ToString());
+                Eq("work.openByBody", Num(work, "openByBody"), (W(oc, "named") + W(oc, "usedPaster") + W(oc, "usedForwarder")).ToString());
+                Eq("work.nearMissDropped", Num(work, "nearMissDropped"), W(dc, "near").ToString());
+                Eq("work.pasteMacros", Num(work, "pasteMacros"), (W(oc, "usedPaster") + W(dc, "unusedPaster")).ToString());
+                Eq("work.forwarders", Num(work, "forwarders"), (W(oc, "usedForwarder") + W(dc, "unusedForwarder")).ToString());
+                long misplaced = 0;
+                foreach (var k in new[] { "matched", "named", "usedPaster", "usedForwarder" }) misplaced += W(kc, k) + W(dc, k);
+                foreach (var k in new[] { "widePaster", "root", "edge" }) misplaced += W(oc, k) + W(dc, k);
+                foreach (var k in new[] { "near", "unusedPaster", "unusedForwarder" }) misplaced += W(kc, k) + W(oc, k);
+                Eq("work: wide names outside their class", "0", misplaced.ToString());
                 // byLevel[k].uses: the kept exact names of level k (a use's id is <h>H<k>L<l>)
-                if (Obj(work, "byLevel") is { ValueKind: JsonValueKind.Array } bl)
+                if (Obj(tree, "byLevel") is { ValueKind: JsonValueKind.Array } bl)
                 {
-                    Eq("work.byLevel: levels", bl.GetArrayLength().ToString(), kc.ByLevel.Count.ToString());
+                    Eq("work.tree.byLevel: levels", bl.GetArrayLength().ToString(), kc.ByLevel.Count.ToString());
                     int k = 0;
                     long live = 0;
                     foreach (var e in bl.EnumerateArray())
                     {
-                        Eq($"work.byLevel[{k}].uses", Num(e, "uses"), (k < kc.ByLevel.Count ? kc.ByLevel[k] : 0).ToString());
+                        Eq($"work.tree.byLevel[{k}].uses", Num(e, "uses"), (k < kc.ByLevel.Count ? kc.ByLevel[k] : 0).ToString());
                         live += k < dc.CrossByLevel.Count ? dc.CrossByLevel[k] : 0;
-                        Eq($"work.byLevel[{k}].crossDecoysLiveSoFar", Num(e, "crossDecoysLiveSoFar"), live.ToString());
+                        Eq($"work.tree.byLevel[{k}].crossDecoysLiveSoFar", Num(e, "crossDecoysLiveSoFar"), live.ToString());
                         k++;
                     }
                 }
@@ -183,12 +207,13 @@ internal static class FirmwareVerifier
     }
 
     private sealed record WorkCount(long Exact, long Cross, long Half, long Filler, long Pasters, long Forwarders, long Appliers,
-        List<long> ByLevel, List<long> CrossByLevel);
+        List<long> ByLevel, List<long> CrossByLevel, Dictionary<string, long> Wide);
 
     private static WorkCount WorkCounts(string list)
     {
         long e = 0, c = 0, h = 0, f = 0, pa = 0, fo = 0, ap = 0;
         List<long> byLevel = new(), crossByLevel = new();
+        var wide = new Dictionary<string, long>(StringComparer.Ordinal);
         static void Bump(List<long> l, int k) { while (l.Count <= k) l.Add(0); l[k]++; }
         using var r = new StreamReader(OpenList(list), Encoding.UTF8);
         for (string? n; (n = r.ReadLine()) is not null;)
@@ -208,10 +233,11 @@ internal static class FirmwareVerifier
                     if (Numbered(n, "WRP")) pa++;
                     else if (Numbered(n, "WFW")) fo++;
                     else if (Numbered(n, "WAP")) ap++;
+                    else if (FwWide.Classify(n) is { } wk) wide[wk] = wide.GetValueOrDefault(wk) + 1;
                     break;
             }
         }
-        return new WorkCount(e, c, h, f, pa, fo, ap, byLevel, crossByLevel);
+        return new WorkCount(e, c, h, f, pa, fo, ap, byLevel, crossByLevel, wide);
     }
 
     /// <summary>The level k of the use id <c>&lt;h&gt;H&lt;k&gt;L&lt;l&gt;</c> starting at <paramref name="at"/>, or null.</summary>
@@ -244,15 +270,32 @@ internal static class FirmwareVerifier
         string full = Path.Combine(corpus, FwSpec.FwDir, FwWork.Dir);
         long headers = Directory.Exists(full) ? Directory.EnumerateFiles(full, "wreg_*.h").LongCount() : 0;
         Is("headers", N(work, "headers"), headers);
+        // the flat counts (1.4.11)
+        long? Files(string sub, params string[] exts)
+        {
+            string d = Path.Combine(corpus, FwSpec.FwDir, sub);
+            return Directory.Exists(d) ? Directory.EnumerateFiles(d).LongCount(p => exts.Any(x => p.EndsWith(x, StringComparison.OrdinalIgnoreCase))) : 0;
+        }
+        Is("uncoveredFiles", N(work, "uncoveredFiles"), Files("src/uncovered", ".c"));
+        Is("asmFiles", N(work, "asmFiles"), Files("asm", ".s", ".asm"));
+        Is("patterns (twoSided + prefixOnly + suffixOnly)", N(work, "patterns"),
+            N(work, "patternsTwoSided") + N(work, "patternsPrefixOnly") + N(work, "patternsSuffixOnly"));
+        Is("pieces (start + end)", N(work, "pieces"), N(work, "piecesStart") + N(work, "piecesEnd"));
+        var work0 = work;
+        work = work.TryGetProperty("tree", out var tv) && tv.ValueKind == JsonValueKind.Object ? tv : default;
+        if (work.ValueKind != JsonValueKind.Object) { err.WriteLine("FAIL firmware work.tree: missing"); return fail + 1; }
         long? exact = N(work, "exactKept"), cross = N(work, "crossDecoys"), half = N(work, "halfDecoys"), filler = N(work, "filler");
-        Is("defines", N(work, "defines"), exact + cross + half + filler);
-        Is("keptUnderGlobalPools", N(work, "keptUnderGlobalPools"), exact + cross);
+        Is("tree.defines", N(work, "defines"), exact + cross + half + filler);
+        Is("defines (tree + exactUsed - exactKept + open + near + body macros)", N(work0, "defines"),
+            N(work, "defines") + N(work0, "exactUsed") - exact + N(work0, "openByPattern") + N(work0, "namedOnly") + N(work0, "nearMissDropped")
+            + N(work0, "pasteMacros") + N(work0, "forwarders"));
+        Is("tree.keptUnderGlobalPools", N(work, "keptUnderGlobalPools"), exact + cross);
         var uses = work.TryGetProperty("uses", out var u) ? u : default;
-        Is("uses (direct + forwarded + higherOrder)", N(uses, "direct") + N(uses, "forwarded") + N(uses, "higherOrder"), exact);
+        Is("tree.uses (direct + forwarded + higherOrder)", N(uses, "direct") + N(uses, "forwarded") + N(uses, "higherOrder"), exact);
         long? levels = N(work, "levels");
         int bl = work.TryGetProperty("byLevel", out var b) && b.ValueKind == JsonValueKind.Array ? b.GetArrayLength() : -1;
-        Is("levels", levels, bl < 0 ? null : bl);
-        Is("expectedPasses", N(work, "expectedPasses"), levels + 1);
+        Is("tree.levels", levels, bl < 0 ? null : bl);
+        Is("tree.expectedPasses", N(work, "expectedPasses"), levels + 1);
         if (bl < 0) return fail;
         long cum = 0, crossCum = 0;
         int i = 0;
@@ -260,18 +303,18 @@ internal static class FirmwareVerifier
         {
             long? lu = N(e, "uses");
             cum += lu ?? 0;
-            Is($"byLevel[{i}].level", N(e, "level"), i);
-            Is($"byLevel[{i}].startPieces", N(e, "startPieces"), lu);
-            Is($"byLevel[{i}].endPieces", N(e, "endPieces"), lu);
-            Is($"byLevel[{i}].piecesSoFar", N(e, "piecesSoFar"), cum);
+            Is($"tree.byLevel[{i}].level", N(e, "level"), i);
+            Is($"tree.byLevel[{i}].startPieces", N(e, "startPieces"), lu);
+            Is($"tree.byLevel[{i}].endPieces", N(e, "endPieces"), lu);
+            Is($"tree.byLevel[{i}].piecesSoFar", N(e, "piecesSoFar"), cum);
             long? live = N(e, "crossDecoysLiveSoFar");
             if (live is not null && live >= crossCum) okCount[0]++;
-            else { err.WriteLine($"FAIL firmware work.byLevel[{i}].crossDecoysLiveSoFar: {live?.ToString() ?? "(missing)"} falls below level {i - 1}'s {crossCum}"); fail++; }
+            else { err.WriteLine($"FAIL firmware work.tree.byLevel[{i}].crossDecoysLiveSoFar: {live?.ToString() ?? "(missing)"} falls below level {i - 1}'s {crossCum}"); fail++; }
             crossCum = live ?? crossCum;
             i++;
         }
-        Is("byLevel: last piecesSoFar", cum, exact);
-        Is("byLevel: last crossDecoysLiveSoFar", crossCum, cross);
+        Is("tree.byLevel: last piecesSoFar", cum, exact);
+        Is("tree.byLevel: last crossDecoysLiveSoFar", crossCum, cross);
         return fail;
     }
 

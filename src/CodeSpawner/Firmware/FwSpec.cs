@@ -25,7 +25,7 @@ internal sealed class FwTruth
     public List<string> Carved = new();
     public List<FwDense> Dense = new();
     public FwList MustKeepDefines = null!, MustDropDefines = null!, OpenDefines = null!, MustKeepFunctions = null!, MustKeepFiles = null!;
-    /// <summary>Generator check: C names whose class disagrees with the alphabet (Z…Z drop, Y…Y open, else keep).</summary>
+    /// <summary>Generator check: C names whose class disagrees with the alphabet (Z…Z, Y…Z and Z…Y drop, Y…Y open, else keep).</summary>
     public List<string> AlphabetErrors = new();
     public long MustKeepCount, MustDropCount, OpenCount;
 }
@@ -579,7 +579,7 @@ internal sealed partial class FwSpec
             _min1?.Token(kind, text);
         }
 
-        public void Begin(DefineParse? d) { _min0?.Begin(d); _min1?.Begin(d); _shadow?.Begin(d); }
+        public void Begin(DefineParse? d, bool carved = false) { _min0?.Begin(d, carved); _min1?.Begin(d, carved); _shadow?.Begin(d, carved); }
         public void Directive(LineKind k) { _min0?.Directive(k); _min1?.Directive(k); _shadow?.Directive(k); }
         public void End() { _min0?.End(); _min1?.End(); _shadow?.End(); }
 
@@ -763,7 +763,7 @@ internal sealed partial class FwSpec
                     if (d.IsParam(s)) return;
                     Want(Names.Find(s), run);
                 });
-                streams.Begin(d);
+                streams.Begin(d, carved: true);
                 streams.Lex(b, false);
                 streams.End();
             }
@@ -819,7 +819,7 @@ internal sealed partial class FwSpec
             (cls == 0 ? keepW : cls == 1 ? dropW : openW).Add(s);
             if (checkAlphabet)
             {
-                int want = s.Length >= 2 && s[0] == 'Z' && s[^1] == 'Z' ? 1 : s.Length >= 2 && s[0] == 'Y' && s[^1] == 'Y' ? 2 : 0;
+                int want = s.Length < 2 ? 0 : (s[0] == 'Z' || s[0] == 'Y') && s[^1] == 'Z' || s[0] == 'Z' && s[^1] == 'Y' ? 1 : s[0] == 'Y' && s[^1] == 'Y' ? 2 : 0;
                 if (want != cls && t.AlphabetErrors.Count < 50)
                     t.AlphabetErrors.Add($"{Encoding.ASCII.GetString(s)}: {ClassName(cls)}, alphabet says {ClassName(want)}");
             }

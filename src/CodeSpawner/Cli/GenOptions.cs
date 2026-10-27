@@ -153,7 +153,7 @@ public sealed class GenOptions
     /// default to the 1x work shape and scale.</summary>
     public bool FwWork { get; set; } = false;
     /// <summary>Register defines in the work headers (exact, decoys and filler). Scaled.</summary>
-    public int FwWorkDefines { get; set; } = 18_900_000;
+    public int FwWorkDefines { get; set; } = 122_300_000;
     /// <summary>Work paste macros WRP{j}. Scaled, never below 1.</summary>
     public int FwWorkPasters { get; set; } = 5_000;
     /// <summary>Work forwarders WFW{f}, each a chain down to a paster. Scaled.</summary>
@@ -163,11 +163,29 @@ public sealed class GenOptions
     /// <summary>Pieces after pass 2 over pieces after pass 1.</summary>
     public int FwWorkGrowth { get; set; } = 9;
     /// <summary>Percent of the work defines that are exact (kept) names.</summary>
-    public int FwWorkKeepPct { get; set; } = 4;
+    public double FwWorkKeepPct { get; set; } = 0.018;
     /// <summary>Percent that are cross decoys (kept by global pools, dropped by rule 3').</summary>
-    public int FwWorkDecoyPct { get; set; } = 16;
+    public double FwWorkDecoyPct { get; set; } = 1;
     /// <summary>Percent that are half decoys (one side only).</summary>
-    public int FwWorkHalfPct { get; set; } = 20;
+    public double FwWorkHalfPct { get; set; } = 1;
+    /// <summary>Wide paste macros KWP{j}, one a pattern (since 1.4.11; 70% two-sided, 15% each one-sided). Scaled.</summary>
+    public int FwWorkPatterns { get; set; } = 2_300;
+    /// <summary>Percent of the work defines that are near misses (a pattern's start or end only; dropped).</summary>
+    public double FwWorkNearPct { get; set; } = 6;
+    /// <summary>Percent named only by a matched define's body (open).</summary>
+    public double FwWorkNamedPct { get; set; } = 11;
+    /// <summary>Paste macros for matched defines' bodies (a tenth used, open; the rest unused, dropped). Scaled.</summary>
+    public int FwWorkBodyPasters { get; set; } = 2_600_000;
+    /// <summary>Forwarders for matched defines' bodies (a tenth used). Scaled.</summary>
+    public int FwWorkBodyForwarders { get; set; } = 2_900_000;
+    /// <summary>Paste uses in matched defines' bodies, at most one a body. Scaled.</summary>
+    public int FwWorkBodyUses { get; set; } = 1_800_000;
+    /// <summary>Distinct pieces those uses paste, half start, half end. Scaled.</summary>
+    public int FwWorkPieces { get; set; } = 500_000;
+    /// <summary>.c files outside the compile db. Scaled.</summary>
+    public int FwWorkUncovered { get; set; } = 4_340;
+    /// <summary>Assembly files (.s, .asm) outside the compile db. Scaled, never below 2.</summary>
+    public int FwWorkAsm { get; set; } = 21;
 
     // --- scan/shape-profile regeneration (gen --from-profile). ---
 
