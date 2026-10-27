@@ -289,7 +289,7 @@ internal static partial class FirmwareEmitter
             /* mem.ld: the memory map, INCLUDEd by fw.ld */
             MEMORY
             {
-            	FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 512K
+            	FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 64M
             	RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 128K
             }
             SECTIONS

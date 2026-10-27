@@ -11,6 +11,12 @@ reads it.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-27
+
+### Fixed
+- `fw/ld/mem.ld`'s FLASH region is 64M, up from 512K, so a firmware corpus links at every scale. At 0.1, about
+  89k kept functions overflowed 512K by about 1 MB. The truth lists do not change; `treeSha256` does.
+
 ## [1.5.0] - 2026-10-27
 
 Phase 2 of the firmware corpus, built to CodeCarver's rulings: asm, linker scripts, prebuilt objects and a function
