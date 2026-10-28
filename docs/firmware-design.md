@@ -209,7 +209,8 @@ files under `fw-truth/`:
 - **`mustKeepFunctions`.** Empty (count 0) in `--preset firmware-work`. In the plain preset it is phase 2's function
   truth, with `mustDropFunctions` and `openFunctions` beside it.
 - **`mustKeepFiles`.** It lists the `fw/` files that define a must-keep name, plus every `fw/` file in a unit's
-  include closure. Paths are relative to `fw/`.
+  include closure. A carved header no unit includes is not listed, even if it defines a must-keep name (since 1.5.2:
+  the only must-keep names in `dense_60.h` and `dense_70.h` are their own guards). Paths are relative to `fw/`.
 
 **Counts:**
 

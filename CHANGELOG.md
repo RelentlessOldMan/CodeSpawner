@@ -11,6 +11,14 @@ reads it.
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-10-27
+
+### Fixed
+- Firmware `mustKeepFiles` no longer lists a carved header that no unit includes. `dense/dense_60.h` and
+  `dense/dense_70.h` were listed only because each one's guard line seeds its own guard, so a carve run without
+  forced keeps (which rightly drops them) failed on them. No other list changes, in either preset.
+  Firmware-work trees are byte-identical; their `mustKeepFiles` lose the same two headers.
+
 ## [1.5.1] - 2026-10-27
 
 ### Fixed

@@ -845,9 +845,15 @@ internal sealed partial class FwSpec
         t.MustDropDefines = dropW.Finish();
         t.OpenDefines = openW.Finish();
 
-        // files: defining a must-keep name, the fw units, and their closures
+        // files: defining a must-keep name, the fw units, and their closures. A carved header no unit includes is not
+        // one (since 1.5.2): its own guard line seeds its guard, but an unforced carve rightly drops the header.
         var files = new SortedSet<string>(StringComparer.Ordinal);
-        for (int k = 0; k < _cdName.Count; k++) if (Names.Has(_cdName[k], NameTable.WantMin)) files.Add(_rel[CFile(k, out _)]);
+        for (int k = 0; k < _cdName.Count; k++)
+        {
+            if (!Names.Has(_cdName[k], NameTable.WantMin)) continue;
+            int f = CFile(k, out _);
+            if (_closure.Contains(f) || !_rel[f].EndsWith(".h", StringComparison.OrdinalIgnoreCase)) files.Add(_rel[f]);
+        }
         for (int k = 0; k < _fwDefName.Count; k++) if (Names.Has(_fwDefName[k], NameTable.WantMin)) files.Add(_rel[_fwDefFile[k]]);
         foreach (int f in _closure) if (f < _fwCount) files.Add(_rel[f]);
         if (_roots is null) { using var fnW = new ListWriter(listDir, "mustKeepFunctions"); t.MustKeepFunctions = fnW.Finish(); }

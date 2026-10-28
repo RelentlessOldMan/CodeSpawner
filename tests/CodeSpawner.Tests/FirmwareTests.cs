@@ -1014,6 +1014,9 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         var files = List(_c.Path, "main", "mustKeepFiles");
         foreach (var f in new[] { "asm/spare.s", "ld/mem.ld", "ld/fw.icf", "ld/fw.sct", "ld/fw_ti.cmd", "lib/fwcrc.o", "lib/libfwx.a" })
             Assert.True(files.Any(x => x.EndsWith(f, StringComparison.Ordinal)), $"{f} not in mustKeepFiles");
+        // nothing includes the density fixtures, so an unforced carve drops them
+        foreach (var f in new[] { "dense/dense_60.h", "dense/dense_70.h" })
+            Assert.DoesNotContain(f, files);
     }
 
     [Fact]

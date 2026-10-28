@@ -393,7 +393,7 @@ root.
     **`mustDropFunctions`** and **`openFunctions`**, and these three differ by build: `main` is the main db's world,
     `union` adds `compileDbUnion`'s. Each build names its own `main.`/`union.` file.
   - **`mustKeepFiles`** lists the files under `root` that define a must-keep name, and every file under `root` in a
-    unit's include closure.
+    unit's include closure. A carved header no unit includes is not listed (since 1.5.2).
 - **`counts`** are exact, except the `…Min`/`…Max` pairs, which bound a sound carve: definesKept + definesDropped =
   `totalDefineLines`.
   - **`definesDroppedMin`** is the must-drop define lines in carved files, and **`definesDroppedMax`** every define
