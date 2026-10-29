@@ -583,6 +583,8 @@ internal static partial class FirmwareEmitter
         w.L($"/* regs_{h}.h: generated register map */");
         if (!headless) { w.L($"#ifndef FW_REGS_{h}_H"); w.L($"#define FW_REGS_{h}_H"); }
         w.L($"#define KDV_VAL 9");
+        // phase 2: a function name in a header too big to scan is open (cases.functions.tsv)
+        if (h == 0 && p.Work is null) w.L("/* the fault path (YFwBigHY) reads this map */");
 
         long blockBytes = blocks.Sum(b => (long)b.Length) * (crlf ? 2 : 1);
         long pasterBytes = (p1 - p0) * 30;

@@ -208,12 +208,12 @@ internal sealed partial class FwSpec
         string db = Path.Combine(_root, DbPath);
         byte[] bytes = File.ReadAllBytes(db);
         // a db that is not an array of { directory, file, arguments | command } is a bad corpus, not a crash
-        try { ReadDb(bytes); }
+        try { ReadDb(bytes, DbPath); }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or NullReferenceException)
         { throw new FwDbException($"{DbPath} is not a compile db this generator writes ({ex.Message})"); }
     }
 
-    private void ReadDb(byte[] bytes)
+    private void ReadDb(byte[] bytes, string name)
     {
         using var doc = JsonDocument.Parse(bytes);
         foreach (var e in doc.RootElement.EnumerateArray())
@@ -223,7 +223,7 @@ internal sealed partial class FwSpec
             dir = Path.GetFullPath(dir);
             // --fw-db-paths absolute names the corpus where it was generated: once moved, every path misses
             if (!string.Equals(Path.TrimEndingDirectorySeparator(dir), Path.TrimEndingDirectorySeparator(_root), StringComparison.OrdinalIgnoreCase))
-                throw new FwDbException($"{DbPath} names directory {dir}, not this corpus ({_root}): an absolute-path db " +
+                throw new FwDbException($"{name} names directory {dir}, not this corpus ({_root}): an absolute-path db " +
                                         "only fits the corpus where it was generated; regenerate it there, or with --fw-db-paths relative");
             var args = new List<string>();
             if (e.TryGetProperty("arguments", out var a)) foreach (var x in a.EnumerateArray()) args.Add(x.GetString()!);
@@ -845,14 +845,16 @@ internal sealed partial class FwSpec
         t.MustDropDefines = dropW.Finish();
         t.OpenDefines = openW.Finish();
 
-        // files: defining a must-keep name, the fw units, and their closures. A carved header no unit includes is not
-        // one (since 1.5.2): its own guard line seeds its guard, but an unforced carve rightly drops the header.
+        // files: defining a must-keep name, the fw units, and their closures. A file no build compiles and nothing
+        // includes is never one (Carver ruling, 1.5.3): its own lines seed its names (a header guard, bigsrc_0.c's CAT
+        // use), but an unforced carve rightly drops the file. Those names stay must-keep defines only because defines
+        // are graded in the forced carve.
         var files = new SortedSet<string>(StringComparer.Ordinal);
         for (int k = 0; k < _cdName.Count; k++)
         {
             if (!Names.Has(_cdName[k], NameTable.WantMin)) continue;
             int f = CFile(k, out _);
-            if (_closure.Contains(f) || !_rel[f].EndsWith(".h", StringComparison.OrdinalIgnoreCase)) files.Add(_rel[f]);
+            if (_closure.Contains(f)) files.Add(_rel[f]);
         }
         for (int k = 0; k < _fwDefName.Count; k++) if (Names.Has(_fwDefName[k], NameTable.WantMin)) files.Add(_rel[_fwDefFile[k]]);
         foreach (int f in _closure) if (f < _fwCount) files.Add(_rel[f]);

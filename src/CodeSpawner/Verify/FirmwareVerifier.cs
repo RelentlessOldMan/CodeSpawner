@@ -109,9 +109,18 @@ internal static class FirmwareVerifier
         if (roots is not null)
         {
             Eq("compileDbUnion", Str(fw, "compileDbUnion"), FirmwareEmitter.DbWorld2Path);
-            if (Str(fw, "functionCases") is { } fc && paths.Resolve(fc) is { } fcp && File.Exists(fcp)) okCount[0]++;
-            else { err.WriteLine($"FAIL firmware functionCases: {Str(fw, "functionCases") ?? "(missing)"} is not a file of the corpus"); fail++; }
+            // the grader starts its function carve from these: exactly the generator's
+            ListEq("roots", fw, "roots", FirmwareEmitter.Roots);
+            if (!File.Exists(Path.Combine(corpus, FirmwareEmitter.DbWorld2Path)))
+            { err.WriteLine($"FAIL firmware compileDbUnion: {FirmwareEmitter.DbWorld2Path} is missing"); fail++; }
+            Eq("functionCases", Str(fw, "functionCases"), FirmwareEmitter.FunctionCasesPath);
+            string fcp = Path.Combine(corpus, FirmwareEmitter.FunctionCasesPath);
+            if (!File.Exists(fcp)) { err.WriteLine($"FAIL firmware functionCases: {FirmwareEmitter.FunctionCasesPath} is missing"); fail++; }
+            else if (CaseRows(fcp, corpus) is (_, { } bad)) { err.WriteLine($"FAIL firmware functionCases: {bad}"); fail++; }
+            else okCount[0]++;
         }
+        else if (File.Exists(Path.Combine(corpus, FirmwareEmitter.DbWorld2Path)))
+        { err.WriteLine($"FAIL firmware roots: missing, but {FirmwareEmitter.DbWorld2Path} exists (a phase-2 tree)"); fail++; }
         if (Obj(fw, "hostile") is { ValueKind: JsonValueKind.Array } hostile)
             foreach (var h in hostile.EnumerateArray())
             {
@@ -134,10 +143,16 @@ internal static class FirmwareVerifier
                 var e = Obj(lists, k);
                 Eq($"builds.{b}.{k}.sha256", Str(e, "sha256"), l.Sha256);
                 Eq($"builds.{b}.{k}.count", Num(e, "count"), l.Count.ToString());
+                // each build names its own file, as gen writes it
                 string? rel = Str(e, "path");
-                string? full = rel is null ? null : paths.Resolve(rel);
-                if (full is null || !File.Exists(full)) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel ?? "(no path)"} is not a file of the corpus"); fail++; continue; }
-                Eq($"builds.{b}.{k} ({rel}) on disk", l.Sha256, ListSha(full));
+                string canon = $"{FirmwareEmitter.TruthDir}/{b}.{k}.txt";
+                if (rel != canon && rel != canon + ".gz")
+                { err.WriteLine($"FAIL firmware builds.{b}.{k}.path: manifest says {rel ?? "(missing)"}, the tree gives {canon}[.gz]"); fail++; continue; }
+                string full = Path.Combine(corpus, rel);
+                if (!File.Exists(full)) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel} is not a file of the corpus"); fail++; continue; }
+                if (ListSha(full) is not { } disk) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel} is not gzip"); fail++; continue; }
+                if (disk == l.Sha256) okCount[0]++;
+                else { err.WriteLine($"FAIL firmware builds.{b}.{k} ({rel}): on disk it hashes {disk}, the truth is {l.Sha256}"); fail++; }
             }
         }
 
@@ -156,11 +171,10 @@ internal static class FirmwareVerifier
                 openF = openRel is null ? null : paths.Resolve(openRel);
             if (keepF is null || dropF is null || openF is null || !File.Exists(keepF) || !File.Exists(dropF) || !File.Exists(openF))
             { err.WriteLine("FAIL firmware work: the main build's truth lists are missing"); fail++; }
+            else if (TryWorkCounts(keepF, openF, dropF) is not var (kc, oc, dc))
+            { err.WriteLine("FAIL firmware work: a main build truth list ending .gz is not gzip"); fail++; }
             else
             {
-                var kc = WorkCounts(keepF);
-                var oc = WorkCounts(openF);
-                var dc = WorkCounts(dropF);
                 Eq("work.tree.exactKept", Num(tree, "exactKept"), kc.Exact.ToString());
                 Eq("work.tree.pasters", Num(tree, "pasters"), kc.Pasters.ToString());
                 Eq("work.tree.forwarders", Num(tree, "forwarders"), kc.Forwarders.ToString());
@@ -226,6 +240,12 @@ internal static class FirmwareVerifier
 
     private sealed record WorkCount(long Exact, long Cross, long Half, long Filler, long Pasters, long Forwarders, long Appliers,
         List<long> ByLevel, List<long> CrossByLevel, Dictionary<string, long> Wide);
+
+    private static (WorkCount, WorkCount, WorkCount)? TryWorkCounts(string keep, string open, string drop)
+    {
+        try { return (WorkCounts(keep), WorkCounts(open), WorkCounts(drop)); }
+        catch (InvalidDataException) { return null; }
+    }
 
     private static WorkCount WorkCounts(string list)
     {
@@ -366,11 +386,12 @@ internal static class FirmwareVerifier
         return path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? new GZipStream(s, CompressionMode.Decompress) : s;
     }
 
-    // A list's sha256 is of its text (uncompressed).
-    private static string ListSha(string path)
+    // A list's sha256 is of its text (uncompressed); null for a .gz that is not gzip.
+    private static string? ListSha(string path)
     {
         using var s = OpenList(path);
-        return Convert.ToHexString(SHA256.HashData(s)).ToLowerInvariant();
+        try { return Convert.ToHexString(SHA256.HashData(s)).ToLowerInvariant(); }
+        catch (InvalidDataException) { return null; }
     }
 
     /// <summary>The file a reference carve leaves in its directory, so a later carve may replace it.</summary>

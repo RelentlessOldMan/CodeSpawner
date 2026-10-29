@@ -30,24 +30,32 @@ because the truth names their bytes.
     work/wreg_N.h            #   the work carve, with --fw-work (see "Work shape")
     src/main.c, src/handlers.c, src/fw_attr.c, src/world.c   # phase 2 (plain preset): main, the handlers and
                              #   targets, the attribute/section functions, the two worlds (see "Functions")
-    asm/, ld/, lib/          #   phase 2: startup.S, fw_util.s, an unbuilt spare.s, an oversize big_0.s; fw.ld
+    asm/, ld/, lib/          #   phase 2: startup.S, fw_util.s, an unbuilt spare.s, an oversize big_0.s, the
+                             #   headers and .inc they include; fw.ld
                              #   (INCLUDEs mem.ld, big_0.ld), IAR/armlink/TI files; a prebuilt .o and .a
   ext/include/, ext/app/     # outside the root: an OS header every unit includes (it includes a Hidden one),
                              #   one nothing includes (maybe-kept), host.c
-  fw-build/compile_commands.json   # one entry per unit, plus ext/app/host.c
+  fw-build/compile_commands.json   # one entry per unit, plus ext/app/host.c; phase 2 adds main.c, handlers.c,
+                             #   fw_attr.c, world.c and the asm a build names (startup.S, fw_util.s, big_0.s)
   fw-build/compile_commands.world2.json   # phase 2: world.c at -DFW_WORLD=2 only (the union's other build)
   fw-truth/                  # main.<list>.txt, union.<list>.txt, cases.tsv, cases.functions.tsv (phase 2)
 ```
 
 Every compile db entry is `cc -std=c11 -I fw/include -I fw/big -I fw/dense -I ext/include -DKD_7 -DKDV_9=KDV_VAL
--DKDE_N=4 -c <file>`. With `--fw-work`, `-I fw/work` comes after `-I fw/dense`. With `--fw-db-paths absolute` (the default)
-`directory` and every path are absolute. With `relative`, `directory` is `"."` and the paths are relative to the
-In the plain preset (1.5.0)
-the db's compiler is `clang --target=arm-none-eabi -mcpu=cortex-m4` instead of `cc`, every C entry has
-`-DFW_WORLD=1`, and the asm files a build names (`startup.S`, `fw_util.s`, `big_0.s`) have entries of their own. corpus root, so the db resolves against the directory it names, resolved from the corpus root. Every unit compiles
-cleanly with `-std=c11 -Wall -Werror`, with or without `-DFW_ALT`, and with `-DFW_SEL=7` or `-DFW_SEL=19`. 1.4.0
-checked this with clang; 1.4.8 and 1.4.9 checked it again, with and without `-DFW_ALT`, and 1.4.9 with gcc too. The new kinds' shapes were checked with
-gcc and clang -E.
+-DKDE_N=4 -c <file>`. With `--fw-work`, `-I fw/work` comes after `-I fw/dense`. With `--fw-db-paths absolute` (the
+default) `directory` and every path are absolute. With `relative`, `directory` is `"."` and the paths are relative to
+the corpus root, so the db resolves against the directory it names, resolved from the corpus root.
+
+In the plain preset (1.5.0) the db's compiler is `clang --target=arm-none-eabi -mcpu=cortex-m4` instead of `cc`.
+`world.c` alone adds `-DFW_WORLD=1` (`=2` in the world-2 db). The asm files a build names (`startup.S`, `fw_util.s`,
+`big_0.s`) have entries of their own: `clang --target=arm-none-eabi -mcpu=cortex-m4 -I fw/asm -c <file>`.
+
+Every unit compiles cleanly with `-std=c11 -Wall -Werror`, with or without `-DFW_ALT`, and with `-DFW_SEL=7` or
+`-DFW_SEL=19`. 1.4.0 checked this with clang; 1.4.8 and 1.4.9 checked it again, with and without `-DFW_ALT`, and 1.4.9
+with gcc too. The new kinds' shapes were checked with gcc and clang -E. 1.5.3 compiled every arm entry of both dbs
+with clang `-Wall -Werror -ffunction-sections -fdata-sections` and linked them with ld.lld `--gc-sections -T fw.ld
+-L fw/ld`, with `lib/fwcrc.o` and `lib/libfwx.a`, at scales 0.01 and 0.1. In the linked images every must-keep
+function is defined, and no must-drop or open function is.
 
 ## Names carry their class
 
@@ -63,7 +71,9 @@ nothing). A slip in the generator can never ship as truth.
 
 `fw-truth/cases.tsv` (`name\tcase\tsite`, LF) names each case's target and where it is exercised. The site is
 relative to `fw/`, or `../…` for a site outside the root (`../ext/…`; the `-DKDV_9=KDV_VAL` case is
-`../fw-build/compile_commands.json`, since 1.4.7). It lists:
+`../fw-build/compile_commands.json`, since 1.4.7). A site need not be in `mustKeepFiles`: the `big-source` row's site
+`src/bigsrc_0.c` is a file no build compiles and nothing includes, so it is unlisted (open) by Carver's ruling (1.5.3),
+while its `KBS0X_5` stays a must-keep define, graded in the forced pass. It lists:
 
 - every trap;
 - the hostile and reserved cases, and (since 1.4.9) `self-comma`: `KPORT(KSRC0X)` with `KSRC0X = KSRC0X, 1`, an
@@ -209,8 +219,11 @@ files under `fw-truth/`:
 - **`mustKeepFunctions`.** Empty (count 0) in `--preset firmware-work`. In the plain preset it is phase 2's function
   truth, with `mustDropFunctions` and `openFunctions` beside it.
 - **`mustKeepFiles`.** It lists the `fw/` files that define a must-keep name, plus every `fw/` file in a unit's
-  include closure. A carved header no unit includes is not listed, even if it defines a must-keep name (since 1.5.2:
-  the only must-keep names in `dense_60.h` and `dense_70.h` are their own guards). Paths are relative to `fw/`.
+  include closure. A file no build compiles and nothing includes is never listed, even if it defines a must-keep name
+  (Carver ruling, 1.5.3; 1.5.2 did this for headers). An unlisted file is open: a carve may keep or drop it. So
+  `dense_60.h`, `dense_70.h` (whose only must-keep names are their own guards) and `src/bigsrc_0.c` (whose `KBS0X_5`
+  its own `CAT` line seeds) are not listed. Those self-seeded names stay must-keep defines only because defines are
+  graded in the forced pass. Paths are relative to `fw/`.
 
 **Counts:**
 
@@ -245,35 +258,55 @@ phase 2 rulings: which C functions a firmware link needs, given asm, linker scri
   calls `kSystemInit` and `main`; `main` calls each module's `m<k>_init()` (in the module's first unit, prototypes in
   `include/fw_init.h`), which calls its units' `fu<N>()`, which call the unit's `ff*`s. A function-pointer table in
   `main.c` keeps its entries.
+- **The assumed link.** The corpus has no link command. The truth assumes the documented one: C built
+  `-ffunction-sections -fdata-sections`, then `ld.lld --gc-sections -T fw/ld/fw.ld -L fw/ld` over every arm db entry's
+  object, `lib/fwcrc.o` and `lib/libfwx.a`, with no `-u`/`--undefined` and no `-e`/`--entry`.
+- **Nodes are input sections:** each C function and global; each section of a linked asm file (after `.section`,
+  `.pushsection`, `.text`, `.data`); each section of a prebuilt object (an archive member only when it defines a name
+  the link still needs). **An input section is kept whole once any symbol in it is reached.**
 - **Classes.** A function is **must-keep** if it is reached from the min roots, **must-drop** if it is not reached
-  from the max roots, and **open** otherwise. Reached means called or address-taken from a reached function or a
-  reached global's initializer. Statics are per file. The names follow the alphabet: `Z…Z` drop, `Y…Y` open.
+  from the max roots, and **open** otherwise. Reach starts from exactly `firmware.roots` and the roots below. Reached
+  means called or address-taken from a reached section, or from a reached global's initializer. Statics, and a local
+  that shadows a global, resolve in their own file, and a second definition keeps its own statics. Where the truth
+  cannot prove what the real toolchain decides, the name is open, never drop (Carver ruling, 1.5.3).
+- **The alphabet.** `Z…Z`, `Y…Z` and `Z…Y` are drop; `Y…Y` is open; any other name is keep. Gen and verify check it
+  on the union.
 - **Min roots** are `roots` plus:
-  - every non-comment identifier of an asm file (`.s`, `.S`, `.asm`, `.sx`) a compile db names, following `.include`
-    and `#include`, expanding `.macro` invocations and one-parameter `##` paste macros;
-  - every identifier of every `.ld`/`.lds`/`.ldscript` under `fw/`, whether or not something INCLUDEs it, and the
-    functions placed in a `KEEP` section;
-  - the undefined globals of each prebuilt ELF `.o` and `ar` `.a`;
-  - functions marked `used`, `retain`, `constructor` or `destructor`.
-- **Max roots** add the identifiers in named asm's comments, every identifier of asm no build names (`spare.s`), and
-  the sections named in IAR `.icf` and armlink `.sct` files. A TI `.cmd` is copy-only.
+  - the names a linker script says (`ENTRY`, `EXTERN`, `PROVIDE`, assignments), in `fw.ld` and what it `INCLUDE`s, and
+    every `.ld`/`.lds`/`.ldscript` under `fw/`;
+  - the sections a linker script `KEEP`s (`KEEP` as a word; `SORT`, `EXCLUDE_FILE` read);
+  - the undefined globals of `lib/fwcrc.o`, which links whole (ELF32/64, either byte order; `ar` with SysV, GNU, BSD
+    and thin names);
+  - functions marked `retain` (`used, retain` on a prototype counts), and `constructor`s and `destructor`s whose
+    `.init_array`/`.fini_array` input sections a script `KEEP`s.
+- **What a reached section references** (strong, followed under min): C calls and address-taking, after the C
+  preprocessor expands macros (function-like ones too, with `#`, `##` and `__VA_ARGS__`); `alias("t")` and
+  `#pragma weak X = Y`; in linked asm, every branch and data operand, after `.include`/`#include` (quoted and `<…>`)
+  and after `.macro` (`:req`, `:vararg`, keyword arguments, `\()`), `.irp`, `.irpc` and `.rept` are expanded;
+  `.set`/`.equ`/`.thumb_set` aliases; in C inline asm (and top-level `__asm__`), branch and data operands.
+- **Max only** (so open unless something strong reaches it): a reference to a `.weak` name the object never defines;
+  names in an asm comment (`@`, `//`, `/* */`, `#`, `;` in `.asm`) or `#if 0`; the rest of an inline asm string; every
+  name of asm no build names (`spare.s`); `used` functions; sections only an IAR `.icf`, an armlink `.sct` or a TI
+  `.cmd` keeps, or a `sym = .;` bracket holds without `KEEP`; constructors and destructors without a `KEEP`; function
+  names that appear in a header too big to scan (big and dense headers, Carver ruling Q2).
 - **Two worlds.** `src/world.c` defines `kworld1` and `kworld2`, and `kworld` twice: under `#if FW_WORLD == 1` it
   calls `kworld1`, under `#else` `kworld2`. The main db compiles it at `-DFW_WORLD=1`; `firmware.compileDbUnion`
   (`fw-build/compile_commands.world2.json`) holds only world.c at `-DFW_WORLD=2`. So `kworld2` is must-drop in
-  `builds.main` and must-keep in `builds.union`. The alphabet is checked on the union.
+  `builds.main` and must-keep in `builds.union`. The union is the union of the two builds, not one image.
 - **The C scanner** joins splices, skips comments, strings and chars, and evaluates `#if`/`#ifdef`/`#ifndef` on the
-  unit's `-D`s where it can (`N`, `X`, `X == N`, `defined`); anything else is live. Its scope is the `fw/` files in a
-  C unit's include closure, minus big and dense headers.
-- **Files.** The asm, linker, IAR/armlink/TI files, the `.o` and `.a`, and the files they include are
+  unit's `-D`s where it can (`N`, `X`, `X == N`, `defined`); anything else is live. A function-like macro whose `(` comes
+  after a directive line is not invoked (as `clang -E` does). Its scope is the `fw/` files in a C unit's include
+  closure, minus big and dense headers.
+- **Files.** The asm, linker, IAR/armlink/TI files, the `.inc`, `.o` and `.a`, and the files they include are
   `mustKeepFiles`.
 - **Cases.** `fw-truth/cases.functions.tsv` (`name`, `case`, `site`) lists each designed name. Expected FAILs for a
-  carver that does not do these yet: `USART1_IRQHandler` (a `
-ame()` paste in a `.macro`), `UART_Handler` (a
+  carver that does not do these yet: `USART1_IRQHandler` (a `\name\()` paste in a `.macro`), `UART_Handler` (a
   cpp `##` paste in a `.S`), `kfwbigs` (only referenced from an asm file past `maxParseBytes`) and `kfwbigld` (only
   kept by a `.ld` past `maxParseBytes`).
 
 The tree compiles, assembles and links: every db entry builds with its own flags, and `ld.lld --gc-sections -T
-fw/ld/fw.ld -L fw/ld` links the objects with `lib/fwcrc.o` and `lib/libfwx.a` (checked with clang/lld 1.5.0).
+fw/ld/fw.ld -L fw/ld` links the objects with `lib/fwcrc.o` and `lib/libfwx.a` (checked with clang/lld 1.5.0, and
+1.5.3 against the truth lists).
 
 ## Work shape (`--fw-work`, `--preset firmware-work`)
 

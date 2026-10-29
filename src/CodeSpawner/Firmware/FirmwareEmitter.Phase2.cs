@@ -60,14 +60,25 @@ internal static partial class FirmwareEmitter
             int kworld(void);
             int fw_asm_crc(int);
             int fw_objfn(void);
+            int fw_big_s(void);
             #endif
 
             """);
         File.WriteAllText(p.Fw("include/fw_init.h"), h.ToString());
+        File.WriteAllText(p.Fw("include/fw_inl.h"), """
+            /* fw_inl.h: static inline functions; each includer has its own */
+            #ifndef FW_INL_H
+            #define FW_INL_H
+            static inline int kfwinl(void) { return 1; }
+            static inline int ZFwInlDeadZ(void) { return 2; }
+            #endif
+
+            """);
 
         var m = new StringBuilder("""
             /* main.c: Reset_Handler's bl main lands here */
             #include "fw_init.h"
+            #include "fw_inl.h"
             typedef int (*fwfp)(void);
             const fwfp fw_tbl[] = { kfz1, kfz2 };
             int main(void)
@@ -81,6 +92,8 @@ internal static partial class FirmwareEmitter
             	r += kworld();
             	r += fw_asm_crc(r);
             	r += fw_objfn();
+            	r += fw_big_s();
+            	r += kfwinl();
             	return r;
             }
 
@@ -102,7 +115,6 @@ internal static partial class FirmwareEmitter
             void ZUART4_IRQHandler(void) { }
             int ZKTIM5_IRQHandlerZ(void) { return 1; }
             int ZUART4_IRQHandler_oldZ(void) { return 2; }
-            int kSystemInit(void) { return 0; }
             int kcat(int a, int b) { return a + b; }
             int kfst(int a, int b) { return a - b; }
             int kfz1(void) { return 1; }
@@ -126,14 +138,72 @@ internal static partial class FirmwareEmitter
             int YFwSpareY(void) { return 12; }
             int YFwCmtY(void) { return 13; }
             int YFwCmtSY(void) { return 14; }
+            int YFwBigHY(void) { return 15; }
+            int kfwhdr(void) { return 16; }
+            int kfwhdrvec(void) { return 17; }
+            int kfwang(void) { return 18; }
+            int kfwpst(void) { return 19; }
+            int YFwIf0Y(void) { return 20; }
+            int kfwincmac(void) { return 21; }
+            int kfwpp(void) { return 22; }
+            int ZFwPpWrongZ(void) { return 23; }
+            int kfwva1(void) { return 24; }
+            int kfwva2(void) { return 25; }
+            int kfwirp1(void) { return 26; }
+            int kfwirp2(void) { return 27; }
+            int kfwrept(void) { return 28; }
+            int kfwinasm(void) { return 29; }
+            int YFwInStrY(void) { return 30; }
+            int kfwtopasm(void) { return 31; }
+            __asm__(".pushsection .fwtab.2,\"a\"\n\t.p2align 2\n\t.word kfwtopasm\n\t.popsection");
+
+            /* calls through macros: a function-like one, an object-like alias, a ## paste, a file-scope table entry */
+            #define FW_CALL(f) f()
+            #define FW_ALIAS kfwmacalias
+            #define FW_CAT(a, b) a##b
+            #define FW_INIT(f) static int (*const fw_init_##f)(void) __attribute__((used, section(".fwtab.1"))) = f
+            int kfwmaccall(void) { return 32; }
+            int kfwmacalias(void) { return 33; }
+            int kfwmacpaste(void) { return 34; }
+            int kfwsysinit(void) { return 35; }
+            FW_INIT(kfwsysinit);
+
+            /* an alias attribute and a #pragma weak alias: calling the alias needs its target */
+            int kfwaliast(void) { return 36; }
+            int kfwalias(void) __attribute__((alias("kfwaliast")));
+            #pragma weak kfwpw = kfwpwt
+            int kfwpwt(void) { return 37; }
+            int kfwpw(void);
+
+            /* statics: kfwdup is also a dead static in fw_attr.c; fw_attr.c's static kfwshd shadows this one */
+            static int kfwdup(void) { return 38; }
+            int ZFwShdDeadZ(void) { return 39; }
+            int kfwshd(void) { return ZFwShdDeadZ(); }
+
+            int kSystemInit(void)
+            {
+            	int r = FW_CALL(kfwmaccall) + FW_ALIAS() + FW_CAT(kfwmac, paste)();
+            	r += kfwalias() + kfwpw() + kfwdup();
+            	__asm__ volatile("b 1f\n\t.p2align 2\n\t.word kfwinasm\n1:");
+            	__asm__ volatile("nop @ YFwInStrY");
+            	return r;
+            }
 
             """);
 
         File.WriteAllText(p.Fw("src/fw_attr.c"), """
             /* fw_attr.c: functions an attribute keeps, or a linker script's section */
-            __attribute__((used)) int kfwused(void) { return 1; }
-            __attribute__((used, retain)) int kfwretain(void) { return 2; }
+            __attribute__((used)) int YFwUsedY(void) { return 1; }
+            static int kfwshd(void) { return 9; }
+            __attribute__((used, retain)) int kfwretain(void) { return kfwshd(); }
+            __attribute__((used, retain)) int kfwproto(void);
+            int kfwproto(void) { return 10; }
+            __attribute__((unused)) static int kfwdup(void) { return 11; }
             __attribute__((constructor)) void kfwctor(void) { }
+            __attribute__((destructor)) void kfwdtor(void) { }
+            __attribute__((section(".fwsort.1"))) int kfwsort(void) { return 12; }
+            __attribute__((section(".fwbr"))) int YFwBrY(void) { return 13; }
+            __attribute__((section(".fwtab_ti"))) int YFwTiY(void) { return 14; }
             __attribute__((section(".fwtab.0"))) int kfwtab0(void) { return 3; }
             __attribute__((section(".fwmem"))) int kfwmem(void) { return 4; }
             __attribute__((section(".fwbig"))) int kfwbigld(void) { return 5; }
@@ -156,30 +226,43 @@ internal static partial class FirmwareEmitter
             """);
 
         File.WriteAllText(p.Fw("asm/fw_asm.h"), """
-            /* fw_asm.h: a header of assembler lines startup.S includes */
+            /* fw_asm.h: a header of assembler lines and macros startup.S includes */
+            #define FW_HDR_FN kfwhdr
             	.equ fw_stack_words, 256
+            	.pushsection .fwtab.3,"a"
+            	.p2align 2
+            	.word kfwhdrvec
+            	.popsection
+
+            """);
+        File.WriteAllText(p.Fw("asm/fw_ang.h"), """
+            /* fw_ang.h: startup.S includes it as <fw_ang.h>, found only through -I */
+            #define FW_ANG_FN kfwang
 
             """);
         File.WriteAllText(p.Fw("asm/startup.S"), $$"""
             /* startup.S: the vector table and the reset path; this comment names YFwCmtSY */
             #include "fw_asm.h"
+            #include <fw_ang.h>
             #define H(x) x##_Handler
+            #define FW_BL(x) bl x##fwpst
             	.syntax unified
             	.cpu cortex-m4
             	.thumb
 
             	.macro def_irq name
             	.weak \name
-            	.thumb_set \name, Default_Handler
+            	.thumb_set \name, fw_default
             	.endm
 
             	.macro def_vec name
             	.word \name\()_IRQHandler
             	.endm
 
-            	.set fw_vec_count, 11
+            	.set fw_vec_count, 12
 
             	.section .isr_vector,"a",%progbits
+            	.p2align 7
             	.global g_fwVectors
             g_fwVectors:
             	.word _estack
@@ -199,13 +282,23 @@ internal static partial class FirmwareEmitter
             	.type {{Reset}}, %function
             {{Reset}}:
             	bl kSystemInit
+            	bl FW_HDR_FN
+            	bl FW_ANG_FN
+            	FW_BL(k)
+            #if 0
+            	bl YFwIf0Y
+            #endif
             	bl main
             	b .
 
+            	.type fw_default, %function
+            fw_default:
+            	b Default_Handler
+
             	.weak NMI_Handler
-            	.thumb_set NMI_Handler, Default_Handler
+            	.thumb_set NMI_Handler, fw_default
             	.weak TIM2_IRQHandler
-            	.thumb_set TIM2_IRQHandler, Default_Handler
+            	.thumb_set TIM2_IRQHandler, fw_default
             	def_irq TIM3_IRQHandler
 
             """);
@@ -220,16 +313,40 @@ internal static partial class FirmwareEmitter
             	.syntax unified
             	.cpu cortex-m4
             	.thumb
+            	.include "fw_mac.inc"
             	.text
             	.global fw_asm_crc
             	.type fw_asm_crc, %function
             fw_asm_crc:
             	push {r4, lr}
             	bl kfwasmcall
+            	fw_call kfwincmac
+            	fw_pp ZFwPpWrongZ, kfwpp
+            	.irp f, kfwirp1, kfwirp2
+            	bl \f
+            	.endr
+            	.rept 1
+            	bl kfwrept
+            	.endr
             	pop {r4, pc}
+            	.p2align 2
+            	fw_va kfwva1, kfwva2
 
             	.section .init_array,"aw",%init_array
             	.word kfwinit
+
+            """);
+        File.WriteAllText(p.Fw("asm/fw_mac.inc"), """
+            @ fw_mac.inc: macros fw_util.s .includes and uses
+            	.macro fw_call target:req
+            	bl \target
+            	.endm
+            	.macro fw_pp a, ab
+            	bl \ab
+            	.endm
+            	.macro fw_va list:vararg
+            	.word \list
+            	.endm
 
             """);
         File.WriteAllText(p.Fw("asm/spare.s"), """
@@ -268,21 +385,24 @@ internal static partial class FirmwareEmitter
         File.WriteAllText(p.Fw("ld/fw.ld"), $$"""
             /* fw.ld: the link script (ld -T fw.ld -L fw/ld) */
             ENTRY({{Reset}})
-            INCLUDE mem.ld
-            INCLUDE big_0.ld
             EXTERN(kfwextern fw_arfn)
             PROVIDE(fw_hook = kfwprovide);
             fw_alias = kfwassign;
-            _estack = ORIGIN(RAM) + LENGTH(RAM);
             SECTIONS
             {
             	.isr_vector : { KEEP(*(.isr_vector)) } > FLASH
             	.text : { *(.text*) } > FLASH
             	.fwtab : { __fwtab_start = .; KEEP(*(.fwtab.*)) __fwtab_end = .; } > FLASH
+            	.fwsort : { KEEP(*(SORT(.fwsort.*))) } > FLASH
+            	.fwbr : { __fwbr_start = .; *(.fwbr*) __fwbr_end = .; } > FLASH
             	.init_array : { KEEP(*(.init_array*)) } > FLASH
+            	.fini_array : { KEEP(*(.fini_array*)) } > FLASH
             	.data : { *(.data*) } > RAM AT > FLASH
             	.bss : { *(.bss*) *(COMMON) } > RAM
             }
+            INCLUDE mem.ld
+            INCLUDE big_0.ld
+            _estack = ORIGIN(RAM) + LENGTH(RAM);
 
             """);
         File.WriteAllText(p.Fw("ld/mem.ld"), """
@@ -311,7 +431,7 @@ internal static partial class FirmwareEmitter
             if (!w.PadTo(BoundaryBig)) throw new InvalidOperationException("firmware: big_0.ld overran its size");
         }
         File.WriteAllText(p.Fw("ld/fw.icf"), """
-            /* fw.icf: an IAR ILINK configuration (copied, not read) */
+            /* fw.icf: an IAR ILINK configuration (the documented link never reads it) */
             define memory mem with size = 4G;
             define region ROM_region = mem:[from 0x08000000 to 0x0807FFFF];
             define region RAM_region = mem:[from 0x20000000 to 0x2001FFFF];
@@ -321,7 +441,7 @@ internal static partial class FirmwareEmitter
 
             """);
         File.WriteAllText(p.Fw("ld/fw.sct"), """
-            ; fw.sct: an armlink scatter file (copied, not read)
+            ; fw.sct: an armlink scatter file (the documented link never reads it)
             LR_IROM1 0x08000000 0x00080000 {
               ER_IROM1 0x08000000 0x00080000 {
                 *.o (RESET, +First)
@@ -335,7 +455,7 @@ internal static partial class FirmwareEmitter
 
             """);
         File.WriteAllText(p.Fw("ld/fw_ti.cmd"), """
-            /* fw_ti.cmd: a TI linker command file (copied, not read) */
+            /* fw_ti.cmd: a TI linker command file (the documented link never reads it) */
             -stack 0x400
             MEMORY
             {
@@ -345,6 +465,7 @@ internal static partial class FirmwareEmitter
             SECTIONS
             {
                 .text : > FLASH
+                .fwtab_ti : > FLASH
                 .bss : > SRAM
             }
 
@@ -473,7 +594,7 @@ internal static partial class FirmwareEmitter
     private static IEnumerable<(string Name, string Case, string Site)> Phase2Cases() =>
     [
         ("fu0", "reached: main, m0_init, fu", "src/" + "m0/u0.c"),
-        ("Default_Handler", "weak default (.thumb_set)", "src/handlers.c"),
+        ("Default_Handler", "weak default (.thumb_set to a stub that branches to it)", "src/handlers.c"),
         ("TIM2_IRQHandler", "strong over a weak alias", "src/handlers.c"),
         ("TIM3_IRQHandler", "asm .macro, plain argument", "src/handlers.c"),
         ("USART1_IRQHandler", "asm .macro, \\name\\() paste", "src/handlers.c"),
@@ -489,6 +610,34 @@ internal static partial class FirmwareEmitter
         ("kfwasmcall", "asm bl", "src/handlers.c"),
         ("kfwinit", "asm .init_array", "src/handlers.c"),
         ("YFwCmtY", "named only in an asm comment", "src/handlers.c"),
+        ("YFwCmtSY", "named only in a /* */ comment of a .S", "src/handlers.c"),
+        ("YFwIf0Y", "named only under #if 0 in a .S", "src/handlers.c"),
+        ("YFwBigHY", "named only in a header too big to scan", "src/handlers.c"),
+        ("kfwhdr", "a .S #include's #define", "src/handlers.c"),
+        ("kfwhdrvec", "a .S #include's assembler lines", "src/handlers.c"),
+        ("kfwang", "a .S #include <...>, found through -I", "src/handlers.c"),
+        ("kfwpst", "a .S function-like #define, ## paste", "src/handlers.c"),
+        ("kfwincmac", "asm .macro from an .include, :req", "src/handlers.c"),
+        ("kfwpp", "asm .macro parameters, longest first", "src/handlers.c"),
+        ("ZFwPpWrongZ", "asm .macro argument the body never uses", "src/handlers.c"),
+        ("kfwva1", "asm .macro :vararg", "src/handlers.c"),
+        ("kfwirp1", "asm .irp", "src/handlers.c"),
+        ("kfwrept", "asm .rept", "src/handlers.c"),
+        ("kfwinasm", "inline asm .word", "src/handlers.c"),
+        ("YFwInStrY", "named only in an inline asm comment", "src/handlers.c"),
+        ("kfwtopasm", "file-scope asm, .pushsection under ld KEEP", "src/handlers.c"),
+        ("kfwmaccall", "called through a function-like macro", "src/handlers.c"),
+        ("kfwmacalias", "called through an object-like macro", "src/handlers.c"),
+        ("kfwmacpaste", "called through a ## paste", "src/handlers.c"),
+        ("kfwsysinit", "a macro's file-scope table entry under ld KEEP", "src/handlers.c"),
+        ("kfwaliast", "target of an alias attribute", "src/handlers.c"),
+        ("kfwpwt", "target of #pragma weak", "src/handlers.c"),
+        ("kfwdup", "static in two units, one reached", "src/handlers.c"),
+        ("kfwshd", "a static shadows a global of the same name", "src/fw_attr.c"),
+        ("ZFwShdDeadZ", "called only by the shadowed global", "src/handlers.c"),
+        ("kfwinl", "static inline in a header, called", "include/fw_inl.h"),
+        ("ZFwInlDeadZ", "static inline in a header, never called", "include/fw_inl.h"),
+        ("kfst", "a function-like macro's name, its ( past a directive", "src/handlers.c"),
         ("YFwSpareY", "named only by asm no build names", "src/handlers.c"),
         ("kfwbigs", "named only by asm past maxParseBytes", "src/handlers.c"),
         ("kfwprovide", "ld PROVIDE", "src/handlers.c"),
@@ -496,9 +645,14 @@ internal static partial class FirmwareEmitter
         ("kfwassign", "ld assignment", "src/handlers.c"),
         ("kfwobj", "needed by a prebuilt .o", "src/handlers.c"),
         ("kfwar", "needed by a prebuilt .a", "src/handlers.c"),
-        ("kfwused", "attribute used", "src/fw_attr.c"),
+        ("YFwUsedY", "attribute used (--gc-sections may still drop it)", "src/fw_attr.c"),
         ("kfwretain", "attribute retain", "src/fw_attr.c"),
-        ("kfwctor", "attribute constructor", "src/fw_attr.c"),
+        ("kfwproto", "attribute retain on a separate prototype", "src/fw_attr.c"),
+        ("kfwctor", "attribute constructor, ld KEEPs .init_array", "src/fw_attr.c"),
+        ("kfwdtor", "attribute destructor, ld KEEPs .fini_array", "src/fw_attr.c"),
+        ("kfwsort", "section under KEEP(SORT(...))", "src/fw_attr.c"),
+        ("YFwBrY", "section a sym = .; bracket holds without KEEP", "src/fw_attr.c"),
+        ("YFwTiY", "section placed only by a TI .cmd", "src/fw_attr.c"),
         ("kfwtab0", "section under ld KEEP", "src/fw_attr.c"),
         ("kfwmem", "section under KEEP in an INCLUDEd ld", "src/fw_attr.c"),
         ("kfwbigld", "section under KEEP in ld past maxParseBytes", "src/fw_attr.c"),

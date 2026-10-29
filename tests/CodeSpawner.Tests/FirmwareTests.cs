@@ -240,9 +240,15 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     private static SortedDictionary<string, string> Snap(string root)
     {
         var map = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        // both dbs (main and world 2) name the tree's absolute path: they compare with it taken out
+        string full = Path.GetFullPath(root), json = System.Text.Json.JsonSerializer.Serialize(full)[1..^1];
         foreach (var f in Directory.EnumerateFiles(root, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 }))
-            if (!Path.GetFileName(f).StartsWith("compile_commands.", StringComparison.Ordinal))   // both dbs name the tree's absolute path
-                map[Path.GetRelativePath(root, f).Replace('\\', '/')] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(f)));
+        {
+            byte[] b = File.ReadAllBytes(f);
+            if (Path.GetFileName(f).StartsWith("compile_commands.", StringComparison.Ordinal))
+                b = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(b).Replace(json, "<root>").Replace(full, "<root>"));
+            map[Path.GetRelativePath(root, f).Replace('\\', '/')] = Convert.ToHexString(SHA256.HashData(b));
+        }
         return map;
     }
 
@@ -1014,8 +1020,8 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         var files = List(_c.Path, "main", "mustKeepFiles");
         foreach (var f in new[] { "asm/spare.s", "ld/mem.ld", "ld/fw.icf", "ld/fw.sct", "ld/fw_ti.cmd", "lib/fwcrc.o", "lib/libfwx.a" })
             Assert.True(files.Any(x => x.EndsWith(f, StringComparison.Ordinal)), $"{f} not in mustKeepFiles");
-        // nothing includes the density fixtures, so an unforced carve drops them
-        foreach (var f in new[] { "dense/dense_60.h", "dense/dense_70.h" })
+        // no build compiles or includes these, so an unforced carve drops them (Carver ruling, 1.5.3)
+        foreach (var f in new[] { "dense/dense_60.h", "dense/dense_70.h", "src/bigsrc_0.c" })
             Assert.DoesNotContain(f, files);
     }
 
@@ -1072,7 +1078,9 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Fails("kfwasmcall (function)");
         File.WriteAllText(util, u0);
         Assert.True(Verify(c).code == 0, "restored");
-        // the manifest: no roots, a different union db, roots not names, a function list's count, a missing list
+        // the manifest: no roots, a different union db, roots not names, a function list's count, a missing list,
+        // other roots, no case table, another build's list, a .gz that is not gzip
+        File.WriteAllText(Path.Combine(c, FirmwareEmitter.TruthDir, "main.openFunctions.txt.gz"), "not gzip\n");
         foreach (var (edit, what) in new (Action<JsonObject>, string)[]
         {
             (f => f.Remove("roots"), "mustKeepFunctions"),
@@ -1080,11 +1088,44 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             (f => f["roots"] = new JsonArray(1), "roots"),
             (f => f["builds"]!["union"]!["openFunctions"]!["count"] = 0, "builds.union.openFunctions.count"),
             (f => f["builds"]!["main"]!.AsObject().Remove("mustDropFunctions"), "builds.main.mustDropFunctions"),
+            (f => f["roots"] = new JsonArray("X"), "roots"),
+            (f => f.Remove("functionCases"), "functionCases"),
+            // each build names its own file: main pointing at the union's list fails even where they match
+            (f => f["builds"]!["main"]!["openFunctions"]!["path"] = $"{FirmwareEmitter.TruthDir}/union.openFunctions.txt",
+                "builds.main.openFunctions.path"),
+            (f => f["builds"]!["main"]!["openFunctions"]!["path"] = $"{FirmwareEmitter.TruthDir}/main.openFunctions.txt.gz",
+                "is not gzip"),
         })
         {
             var (code, err) = VerifyWith(c, edit, tmp.Path);
             Assert.True(code == 1, $"{what}: exit {code}: {err}");
             Assert.Contains(what, err);
+        }
+    }
+
+    [Fact]
+    public void Functions_TwoModules_EachInitAndEveryUnitIsKept_AndVerifies()
+    {
+        // past FilesPerDir (100) files the units span two modules; main calls each m<d>_init, which calls its fu<u>
+        using var tmp = new TempDir();
+        string c = Gen(tmp.Path, "m", [.. SmallFw[..3], "--fw-files", "120", .. SmallFw[5..]]);
+        var ok = Verify(c);
+        Assert.True(ok.code == 0, ok.err);
+        var keep = List(c, "main", "mustKeepFunctions");
+        Assert.Contains("m0_init", keep);
+        Assert.Contains("m1_init", keep);
+        Assert.DoesNotContain("m2_init", keep);
+        string main = File.ReadAllText(Path.Combine(c, FwSpec.FwDir, "src", "main.c"));
+        Assert.Contains("m1_init();", main);
+        var units = Directory.GetFiles(Path.Combine(c, FwSpec.FwDir, "src", "m1"), "u*.c");
+        Assert.NotEmpty(units);
+        foreach (var u in units)
+        {
+            // a unit file is named by its file index, its fu by its unit index
+            var fu = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(u), @"^int (fu\d+)\(void\)$",
+                System.Text.RegularExpressions.RegexOptions.Multiline);
+            Assert.True(fu.Success, u);
+            Assert.Contains(fu.Groups[1].Value, keep);
         }
     }
 

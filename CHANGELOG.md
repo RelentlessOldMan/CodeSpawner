@@ -11,6 +11,59 @@ reads it.
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-10-28
+
+A truth release, from review round 11 and CodeCarver's rulings (Q1–Q9). Plain firmware corpora change; the define
+lists are byte-identical to 1.5.2. Firmware-work trees do not change, apart from `mustKeepFiles` (below).
+
+### Changed
+- The function truth now models the documented link: C built `-ffunction-sections -fdata-sections`, then `ld.lld
+  --gc-sections -T fw/ld/fw.ld -L fw/ld`, with no `-u`/`-e`. Its nodes are input sections, and an input section is kept
+  whole once any symbol in it is reached. Reach starts from exactly `firmware.roots`, plus what the link itself keeps.
+- Where the truth cannot prove what the real toolchain decides, a name is open, never drop (Carver's general rule):
+  - names in asm comments and in `#if 0` (Q1);
+  - function names in headers too big to scan (Q2);
+  - inline asm operands that are not branch or data operands (Q3);
+  - a section only a `sym = .;` bracket holds without `KEEP` (Q5);
+  - `used` alone (Q6);
+  - a destructor without a `KEEP(.fini_array*)` (Q7);
+  - a reference to a `.weak` name the object never defines.
+- `.irp`, `.irpc` and `.rept` are expanded (Q4). `used, retain` is must-keep (Q6).
+- **keep → open on the smalls.** `firmware` 0.01 and 0.1: `kfwused` (a `used` function) is open now, renamed
+  `YFwUsedY` so the alphabet spells its class. No other existing name changes class. The new cases below add names
+  only (Q8). Firmware-work has no function lists.
+- `mustKeepFiles` never lists a file no build compiles and nothing includes, even if it defines a must-keep name
+  (Carver ruling 2). `src/bigsrc_0.c` leaves the list in both presets. An unlisted file is open.
+- Verify pins `firmware.roots` to `["Reset_Handler"]`, `functionCases` to its path (and checks its rows), and each
+  list's `path` to `fw-truth/<build>.<list>.txt[.gz]`. A `.gz` list that is not gzip is a FAIL line, not a crash.
+
+### Fixed
+- These were classed wrong before (each now has a case row):
+  - a call through a function-like macro, an alias macro, a `##` paste and a file-scope `SYS_INIT`-style macro;
+  - attributes on a separate prototype (`kfwproto`), `alias("t")` and `#pragma weak X = Y`;
+  - static inline functions in a header (`kfwinl`);
+  - a second definition's statics (`kfwdup`), and a static that shadows a global (`kfwshd`);
+  - asm: a `.macro` from an `.include`, `#include`d C-header `#define`s in a `.S` (quoted and `<…>`), keyword and
+    `:req`/`:vararg` parameters, parameters substituted longest first, paste bodies keeping their spaces;
+  - `KEEP(*(SORT(.x.*)))`; `KEEP` matched only as a word.
+- The ELF reader takes ELF32/64 in either byte order, and `ar` with SysV, GNU, BSD and thin names.
+- The weak defaults in `startup.S` alias a local `fw_default` stub, so clang emits `NMI_Handler`, `TIM2_IRQHandler`
+  and the rest as real weak symbols, and the C overrides win. Before, the vector words resolved straight to
+  `Default_Handler`.
+- `fw.ld` INCLUDEs `mem.ld` and `big_0.ld` after its `SECTIONS`, and the vector table is `.p2align 7`, so the table
+  sits at the start of FLASH.
+- `main` calls `fw_big_s`, so `kfwbigs` (referenced only from the oversize `big_0.s`) is load-bearing under
+  `--gc-sections`.
+
+### Added
+- Function cases: macro calls (`kfwmaccall`, `kfwmacalias`, `kfwmacpaste`, `kfwsysinit`), `kfwaliast`, `kfwpwt`,
+  `kfwproto`, `kfwdtor`, `kfwsort`, `kfwinl`/`ZFwInlDeadZ`, `kfwdup`, `kfwshd`/`ZFwShdDeadZ`, `kfwhdr`, `kfwhdrvec`,
+  `kfwang`, `kfwpst`, `kfwincmac`, `kfwpp`/`ZFwPpWrongZ`, `kfwva1`/`kfwva2`, `kfwirp1`/`kfwirp2`, `kfwrept`,
+  `kfwinasm`, `kfwtopasm`, `kfst` (a function-like macro's name with its `(` past a directive: not invoked), and the
+  open ones `YFwCmtSY`, `YFwIf0Y`, `YFwBigHY`, `YFwInStrY`, `YFwBrY`, `YFwTiY` (a section only TI `.cmd` keeps).
+- The 1.5.3 corpus was compiled with clang (`-Wall -Werror -ffunction-sections -fdata-sections`) and linked with
+  ld.lld `--gc-sections` at 0.01 and 0.1. Each image defines every must-keep function and no must-drop or open one.
+
 ## [1.5.2] - 2026-10-27
 
 ### Fixed
@@ -42,18 +95,19 @@ change.
   `.weak`/`.thumb_set` defaults overridden by C, an `.init_array` entry, an unbuilt `spare.s` and an oversize
   `big_0.s`.
 - Linker scripts: `fw.ld` INCLUDEs `mem.ld` (with a KEEP) and an oversize `big_0.ld`. EXTERN, PROVIDE and an
-  assignment each keep a function. IAR `.icf`, armlink `.sct` and TI `.cmd` files are copy-only, and their sections
-  make functions open.
+  assignment each keep a function. IAR `.icf` and armlink `.sct` files are not part of the documented link, and the
+  sections they keep make functions open. (These notes also listed TI `.cmd`; 1.5.0 did not read it. 1.5.3 does.)
 - A prebuilt ELF32 ARM `lib/fwcrc.o` and `lib/libfwx.a`, hand-written and deterministic. Each has an undefined
   reference to a C function nothing else calls.
-- `used`, `retain`, `constructor` and `destructor` functions, and `KEEP`ed sections.
+- `used`, `retain` and `constructor` functions, and `KEEP`ed sections. (These notes said `destructor` too; the first
+  destructor is in 1.5.3.)
 - Two worlds: `src/world.c` is in the main db at `-DFW_WORLD=1` and in `fw-build/compile_commands.world2.json` at
   `-DFW_WORLD=2`, so `kworld2` is must-drop in main and must-keep in union.
 - Verify checks the function lists of both builds, `compileDbUnion` and `functionCases`.
 
 ### Changed
-- In the plain preset the compile db's compiler is `clang --target=arm-none-eabi -mcpu=cortex-m4`, every C entry has
-  `-DFW_WORLD=1`, and the built asm files have entries. The whole tree compiles, assembles and links with ld.lld.
+- In the plain preset the compile db's compiler is `clang --target=arm-none-eabi -mcpu=cortex-m4`, `world.c` has
+  `-DFW_WORLD=1` (corrected in 1.5.3: earlier notes said every C entry), and the built asm files have entries. The whole tree compiles, assembles and links with ld.lld.
 
 ## [1.4.11] - 2026-10-27
 
