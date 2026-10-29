@@ -20,7 +20,7 @@ every structural invariant + the manifest contract hold. Same seed → identical
 ## 1. Project layout
 
 ```
-C:\Playground\CodeSpawner\
+CodeSpawner/
   CodeSpawner.sln
   src/CodeSpawner/
     CodeSpawner.csproj          # net10.0, PublishAot=true, InvariantGlobalization

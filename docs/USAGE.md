@@ -323,8 +323,8 @@ contract, versioned in [`manifest-schema.md`](manifest-schema.md)).
 
 ```powershell
 # From the CodeSpawner repo, after building:
-.\scripts\vendor-codespawner.ps1 -Target C:\Playground\CodeCompass
-.\scripts\vendor-codespawner.ps1 -Target C:\Playground\CodeCarver
+.\scripts\vendor-codespawner.ps1 -Target ..\CodeCompass
+.\scripts\vendor-codespawner.ps1 -Target ..\CodeCarver
 ```
 
 This copies `codespawner.exe` and the contract docs (`manifest-schema.md`, `mutate-design.md`,

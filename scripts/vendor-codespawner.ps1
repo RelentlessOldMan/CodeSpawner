@@ -8,7 +8,7 @@
   GENERATOR_VERSION file (generator version, manifestVersion, source commit-less stamp). The real coupling
   is the manifest + delta contracts, so their docs travel with the binary and the version is asserted downstream.
 
-.PARAMETER Target   The consumer repo root to vendor into (e.g. C:\Playground\CodeCompass).
+.PARAMETER Target   The consumer repo root to vendor into (e.g. ..\CodeCompass).
 .PARAMETER Exe      Path to a prebuilt codespawner.exe (default: .\dist\codespawner.exe).
 #>
 param(
