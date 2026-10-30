@@ -11,6 +11,14 @@ reads it.
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-10-29
+
+### Changed
+- The `death` and `death-lite` presets are renamed `huge` and `huge-lite`. The old names still work as hidden
+  aliases (left out of the usage text and the preset list). A preset's name isn't written into the corpus or its
+  manifest, so `--preset huge` makes the same bytes `--preset death` did.
+- Docs, usage text and test names use the new names, and the doc examples no longer use local paths.
+
 ## [1.5.3] - 2026-10-28
 
 A truth release, from review round 11 and CodeCarver's rulings (Q1–Q9). Plain firmware corpora change; the define

@@ -110,14 +110,14 @@ public class IncludeWebTests
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(["--out", "x", .. args]));
 
     [Fact]
-    public void Presets_DeathCarriesTheWeb_DeathLiteHasItsCountsWithSmallHeaders()
+    public void Presets_HugeCarriesTheWeb_HugeLiteHasItsCountsWithSmallHeaders()
     {
-        var death = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "death"])]);
-        var lite = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "death-lite"])]);
-        Assert.Equal(3000, death.WebUnits);
-        Assert.Equal((death.WebUnits, death.WebHeaders, death.WebDepth, death.WebWindow, death.WebTemplates, death.WebTail),
+        var huge = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "huge"])]);
+        var lite = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "huge-lite"])]);
+        Assert.Equal(3000, huge.WebUnits);
+        Assert.Equal((huge.WebUnits, huge.WebHeaders, huge.WebDepth, huge.WebWindow, huge.WebTemplates, huge.WebTail),
                      (lite.WebUnits, lite.WebHeaders, lite.WebDepth, lite.WebWindow, lite.WebTemplates, lite.WebTail));
-        Assert.True(lite.WebHeaderLines < death.WebHeaderLines && lite.WebTailMb < death.WebTailMb);
+        Assert.True(lite.WebHeaderLines < huge.WebHeaderLines && lite.WebTailMb < huge.WebTailMb);
         Assert.Equal(32, lite.MaxHeaderMB);
     }
 

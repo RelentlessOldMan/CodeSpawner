@@ -314,8 +314,8 @@ public static class Program
                with a _meta.conflictTruthSha over [conflicts-3way, merged-clean]; see docs/diff-delta-design.md)
 
             PRESETS (bundled knob sets; your own knobs still override):
-              --preset death         ~90 GB, ~50k files, 12 headers >1 GB (the "repo of death") + the include web
-              --preset death-lite    all of death's shapes in ~0.5 GB (32 MB giants; the web at death's counts)
+              --preset huge          ~90 GB, ~50k files, 12 headers >1 GB (the huge repo) + the include web
+              --preset huge-lite     all of huge's shapes in ~0.5 GB (32 MB giants; the web at huge's counts)
               --preset ci            ~1/100 counts, keeps >=1 pathology header (fast smoke)
               --preset memory        one giant header + a few includers (preprocessor-memory axis)
               --preset dense-band    dense sub-threshold headers (posting/trigram memory OOM shape)

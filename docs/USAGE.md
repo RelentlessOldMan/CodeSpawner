@@ -52,8 +52,8 @@ codespawner verify --corpus .\_fw
 # One giant header + the .c files that include it (the memory-axis repro).
 codespawner gen --out .\_mem --preset memory
 
-# Full work-scale "repo of death": ~90 GB, 12 headers over 1 GB.
-codespawner gen --out D:\death --preset death
+# Full work-scale huge repo: ~90 GB, 12 headers over 1 GB.
+codespawner gen --out D:\huge --preset huge
 ```
 
 ---
@@ -110,8 +110,8 @@ Adds an **include web** beside the C corpus: register-map headers chained deep a
 template headers expanded through `TNAME`, an `#include_next` vendor dir, and `n` `.c` units under `web/`. The
 manifest records each unit's include closure (`closures`: files, bytes, reads, readBytes, depth, defines,
 templateInstances) and every template instance as a symbol. `verify` recomputes all of it from the text. Contract
-and knobs: [include-web-design.md](include-web-design.md). `--preset death` carries it, and `--preset death-lite`
-carries it at death's counts in about 0.5 GB.
+and knobs: [include-web-design.md](include-web-design.md). `--preset huge` carries it, and `--preset huge-lite`
+carries it at huge's counts in about 0.5 GB.
 
 ```powershell
 codespawner gen --out C:\corpora\web --scale 0.001 --web-units 200 --web-headers 600
@@ -235,8 +235,8 @@ must never force another to change; tool-specific knobs stay optional and defaul
 
 ### Presets
 Scale tiers: `--preset ci` (≈1/100, keeps a giant), `--preset memory` (one giant + includers, nothing
-else), `--preset death` (~90 GB, 12 headers >1 GB, plus the include web), `--preset death-lite` (all of
-death's shapes in ~0.5 GB: `--scale 0.05`, 32 MB giants, the web at death's counts with small headers).
+else), `--preset huge` (~90 GB, 12 headers >1 GB, plus the include web), `--preset huge-lite` (all of
+huge's shapes in ~0.5 GB: `--scale 0.05`, 32 MB giants, the web at huge's counts with small headers).
 
 Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.md)):
 `--preset dense-band` (posting/trigram memory OOM), `--preset broad-token` (`find_references` at scale +
@@ -275,7 +275,7 @@ error at scale. Two things make it fast:
   Override anytime with `--io-parallelism <n>`.
 
 Rough numbers on a 12-core box, NVMe: ~1.7 GB/s for pure-header runs, ~870 MB/s for mixed corpora — a
-full ~90 GB death corpus in roughly 1–2 minutes. On a slower disk it is disk-bound; the auto-tune keeps
+full ~90 GB huge corpus in roughly 1–2 minutes. On a slower disk it is disk-bound; the auto-tune keeps
 it from being *needlessly* slow.
 
 **Generate local, then copy.** Per-file writes over SMB are far slower than local. Generate on a local
@@ -286,7 +286,7 @@ the copy unchanged.
 
 ## 8. Disk space planning
 
-You need roughly `--out` size free locally (plus the same on a share if staging). `--preset death` is
+You need roughly `--out` size free locally (plus the same on a share if staging). `--preset huge` is
 ~90 GB. To estimate a custom run: `giants × max-header-mb` + `big-headers × ~55 MB` +
 `med-headers × ~5 MB` dominate; small files are negligible. Start small and read the `Done:` line, which
 reports actual size.
@@ -356,9 +356,9 @@ codespawner gen --out .\_more --scale 0.05 --macro-density 4000000   # only the 
 codespawner gen --out D:\big --giant-headers 2 --max-header-mb 1229 --big-headers 0 --med-headers 0 --cfiles 5
 
 # Full work-scale over SMB: generate local, stage to a share, index THAT.
-codespawner gen --out D:\death --preset death
-robocopy D:\death \\SERVER\share\death /E /MT:16 /R:1 /W:1
-# (then run your tool against \\SERVER\share\death)
+codespawner gen --out D:\huge --preset huge
+robocopy D:\huge \\SERVER\share\huge /E /MT:16 /R:1 /W:1
+# (then run your tool against \\SERVER\share\huge)
 
 # Before a release: run the full battery (release.ps1 runs only `dotnet test`).
 .\scripts\bench.ps1

@@ -7,17 +7,17 @@ machine-generated headers over 1 GB amid tens of thousands of tiny files) so you
 scale/memory failures on demand and assert correctness against known truth.
 
 ```console
-$ codespawner gen --out D:\death --preset death
+$ codespawner gen --out D:\huge --preset huge
   io-parallelism: 12 (auto for SSD; override with --io-parallelism)
-Fabricating corpus at D:\death (scale 1, seed 1337, compileDb=None) ...
+Fabricating corpus at D:\huge (scale 1, seed 1337, compileDb=None) ...
   register headers ... 42.4s
     ^ 12 giant (<=1229MB) + 1375 big + 1957 medium
   source call graph ... 2.6s
   tiny files ... 4.5s
-    ^ D:\death-manifest.json (5124 symbols)
+    ^ D:\huge-manifest.json (5124 symbols)
 Done: 51,873 files, 97.23 GB, 5,697 dirs, 1 root(s) in 56.4s.
 
-$ codespawner verify --corpus D:\death
+$ codespawner verify --corpus D:\huge
   OK  _meta.manifestVersion == 1
   checked: 5124 defs, 5125 refs, 5125 edges, 0 gated refs
 verify: PASS (5124 symbols)
@@ -28,7 +28,7 @@ verify: PASS (5124 symbols)
   generation runs multi-threaded.
 - **Fast, and disk-aware** — a byte-level header emitter (~440 MB/s single-thread, >1 GB/s parallel) with
   write concurrency auto-tuned to the target disk (SSD → all cores; HDD → sequential, to avoid head
-  thrash). A ~90 GB "repo of death" builds in a couple of minutes on NVMe.
+  thrash). A ~90 GB huge repo builds in a couple of minutes on NVMe.
 - **Scale by COUNTS, not per-file size.** The bimodal shape (~90% of bytes in ~2% of files — giant
   machine-generated register headers amid tens of thousands of tiny files) **is the test**. Even-sized
   corpora reproduce none of the real failures.
@@ -66,8 +66,8 @@ codespawner verify --corpus .\_fw
 # Presets
 codespawner gen --out .\_fw   --preset ci        # fast smoke, keeps >=1 giant header
 codespawner gen --out .\_mem  --preset memory    # preprocessor-memory axis
-codespawner gen --out D:\death --preset death    # ~90 GB, 12 headers >1 GB, + the include web
-codespawner gen --out .\_lite --preset death-lite # all of death's shapes in ~0.5 GB
+codespawner gen --out D:\huge --preset huge    # ~90 GB, 12 headers >1 GB, + the include web
+codespawner gen --out .\_lite --preset huge-lite # all of huge's shapes in ~0.5 GB
 ```
 
 Run `codespawner --help` for the full knob list, or see [`docs/knobs.md`](docs/knobs.md).

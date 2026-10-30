@@ -169,8 +169,8 @@ and `_meta.gen` records the effective values. The full table, the layout and the
 
 | Preset | Expands to | Use |
 |---|---|---|
-| `--preset death` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` + the include web (`--web-units 3000 --web-headers 3000 --web-depth 15 --web-window 18-28 --web-aggregators 40 --web-templates 60 --web-template-sites 4 --web-tail 24 --web-header-lines 2000 --web-tail-mb 48`) | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale "repo of death". |
-| `--preset death-lite` | `--scale 0.05 --giant-headers 3 --max-header-mb 32 --big-headers 1 --med-headers 12` + the web at death's counts with `--web-header-lines 150 --web-tail-mb 8` | All of death's shapes in ~0.5 GB; no compute gate needed. |
+| `--preset huge` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` + the include web (`--web-units 3000 --web-headers 3000 --web-depth 15 --web-window 18-28 --web-aggregators 40 --web-templates 60 --web-template-sites 4 --web-tail 24 --web-header-lines 2000 --web-tail-mb 48`) | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale huge repo. |
+| `--preset huge-lite` | `--scale 0.05 --giant-headers 3 --max-header-mb 32 --big-headers 1 --med-headers 12` + the web at huge's counts with `--web-header-lines 150 --web-tail-mb 8` | All of huge's shapes in ~0.5 GB; no compute gate needed. |
 | `--preset ci` | `--scale 0.01` | Fast smoke tier; keeps ≥1 pathology header. |
 | `--preset memory` | one giant header, 5 `.c` files of which 3 include it (`--giant-includers` default), everything else off, 1M macro density | Pure preprocessor-memory repro. |
 | `--preset dense-band` | `--dense-headers 40 --dense-under-mb 127` (noise off) | Posting/trigram memory explosion — the OOM regression (~5 GB). |
@@ -183,7 +183,7 @@ and `_meta.gen` records the effective values. The full table, the layout and the
 | `--preset firmware` | `--firmware` (noise off) | The firmware corpus and its header-carve truth (~10 GB at 1x, estimated; `--scale 0.01` is 0.16 GB). |
 | `--preset firmware-work` | `--firmware --fw-work --fw-families 192 --fw-pasters 20000 --fw-files 400 --fw-big-headers 1 --fw-dense-headers 0` (noise off) | The work-shaped carve at `--scale` (cross-call decoys, pass growth) plus a small fixed correctness part. |
 
-Your own knobs after a `--preset` override it (e.g. `--preset death --giant-headers 4`).
+Your own knobs after a `--preset` override it (e.g. `--preset huge --giant-headers 4`).
 
 ## Examples
 
@@ -198,6 +198,6 @@ codespawner gen --out .\_fw --preset memory
 # Density-only stressor: 1M macros in a small file (memory without the bytes).
 codespawner gen --out .\_fw --giant-headers 1 --macro-density 1000000 --max-header-mb 20
 
-# Full work-scale repo of death (tens of GB — minutes).
-codespawner gen --out D:\death --preset death
+# Full work-scale huge repo (tens of GB — minutes).
+codespawner gen --out D:\huge --preset huge
 ```

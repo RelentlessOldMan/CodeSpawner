@@ -293,7 +293,7 @@ public class ProgramTests
     }
 
     // --macro-density is a cap only when set; unset, giants fill to maxHeaderMB uncapped. Recording the 1M default
-    // made a replay cap every giant over 1M defines (a death giant came back ~56 MB instead of 1229 MB). Too big to
+    // made a replay cap every giant over 1M defines (a huge giant came back ~56 MB instead of 1229 MB). Too big to
     // replay here, so: the default is not recorded, and a set cap is recorded and replays byte-identically.
     [Fact]
     public void Gen_MetaGen_MacroDensity_RecordedOnlyWhenSet_AndCapReplays()
@@ -650,7 +650,7 @@ public class ProgramTests
     [Fact]
     public void Gen_InPlaceRegen_SameSeed_ByteIdentical_TreeAndManifest()
     {
-        // The regen-in-place guarantee the cross-machine / death-scale workflow leans on (regen big corpora in
+        // The regen-in-place guarantee the cross-machine / huge-scale workflow leans on (regen big corpora in
         // place instead of copying them over SMB): re-running gen with the same args over its OWN output —
         // CodeSpawner recognizes its .codespawner marker and overwrites without --force — reproduces every file
         // byte-for-byte AND the manifest byte-for-byte. Index-stable parallel emission must not leak into output.

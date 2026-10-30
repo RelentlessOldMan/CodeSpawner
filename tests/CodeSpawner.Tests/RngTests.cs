@@ -98,7 +98,7 @@ public class RngTests
     // xoshiro256** constants and the For() mixing in Rng.cs are load-bearing: a refactor that keeps the RNG
     // perfectly deterministic but changes the *values* (swap the two SplitMix multipliers, change Next's `>> 32`,
     // reorder the For mix) passes every other test while silently making every previously-generated corpus
-    // (death_1.0.9, the cross-machine regen-in-place workflow) unreproducible. This is the only unit test that
+    // (huge-scale corpora, the cross-machine regen-in-place workflow) unreproducible. This is the only unit test that
     // fails on such a change. If you are changing the generator ON PURPOSE, re-baseline these literals.
     [Fact]
     public void For_ProducesFrozenGoldenStream()

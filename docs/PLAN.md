@@ -62,8 +62,8 @@ later, in 1.2.0: `gen --lang cpp`, manifest v2; see cpp-profile-design.md.)
 - `codespawner gen --out <dir> [knobs…]` — **generation only** (core). Emits corpus + manifest.
   No `-Run`/`-Verify` shelling to any tool (per §8.D — core stays a pure emitter).
 - `codespawner verify --corpus <dir> [--manifest <file>]` — tool-independent self-check (§8.B / §10).
-- `codespawner gen --preset death|ci|memory …` — presets replacing the wrapper scripts
-  (`death` = ~90 GB, 12 headers >1 GB, matching `deathrepo-test.ps1`).
+- `codespawner gen --preset huge|ci|memory …` — presets replacing the wrapper scripts
+  (`huge` = ~90 GB, 12 headers >1 GB, matching the old wrapper script).
 
 **Knobs** (1:1 with the PS params, all optional + defaulted): `--scale --seed --macro-density
 --giant-headers --big-headers --med-headers --ordinary-headers --cfiles --giant-includers

@@ -14,7 +14,7 @@ public class PresetsTests
     [Fact]
     public void TryGet_KnownPreset_ReturnsTokens()
     {
-        Assert.True(Presets.TryGet("death", out var tokens));
+        Assert.True(Presets.TryGet("huge", out var tokens));
         Assert.Contains("--giant-headers", tokens);
     }
 
@@ -55,8 +55,22 @@ public class PresetsTests
     [Fact]
     public void TryGet_IsCaseInsensitive()
     {
-        Assert.True(Presets.TryGet("DEATH", out var tokens));
+        Assert.True(Presets.TryGet("HUGE", out var tokens));
         Assert.NotEmpty(tokens);
+    }
+
+    // The 1.5.4 rename keeps the old names working without advertising them.
+    [Fact]
+    public void TryGet_OldDeathNames_AreHiddenAliases()
+    {
+        Assert.True(Presets.TryGet("death", out var a));
+        Assert.True(Presets.TryGet("huge", out var b));
+        Assert.Equal(b, a);
+        Assert.True(Presets.TryGet("Death-Lite", out a));
+        Assert.True(Presets.TryGet("huge-lite", out b));
+        Assert.Equal(b, a);
+        Assert.DoesNotContain("death", Presets.Names);
+        Assert.DoesNotContain("death", Program.UsageText);
     }
 
     [Fact]

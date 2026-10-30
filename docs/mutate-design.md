@@ -67,7 +67,7 @@ codespawner mutate --corpus <dir> --target <source|headers|giant|all>
 ```
 
 - **`--target`** selects a population by file property (corpus-agnostic — works on a `gen` corpus or a
-  `--from-profile` one like `death_1.0.9`): `source` (`.c/.cc/.cpp/.cxx`), `headers` (`.h/.hpp/...`),
+  `--from-profile` one like a huge-scale profile): `source` (`.c/.cc/.cpp/.cxx`), `headers` (`.h/.hpp/...`),
   `giant` (any file ≥ `--giant-min-mb`, default 100 — the 1 GB-header case), `all`.
 - **`--files-changed N`** — how many matching files to change (default: all). The "10 vs 1,000 files" dial;
   files are chosen deterministically from `S`. In `--three-way`, each variant's delta lists up to N: a picked

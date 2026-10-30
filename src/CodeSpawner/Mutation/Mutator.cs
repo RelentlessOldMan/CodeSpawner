@@ -1971,7 +1971,7 @@ public static class Mutator
         int nShards = (int)((sorted.Count + (long)shardSize - 1) / shardSize);    // 0 modified ⇒ 0 shards, still an honest index
         var shards = new List<(string file, string first, string last, int count, string sha)>(nShards);
         // Pad the shard index to the width of the LARGEST index (min 3), so a glob + ordinal filename sort stays
-        // in shard order even past 999 shards — the death-scale case sharding exists for (D3 alone misorders there).
+        // in shard order even past 999 shards — the huge-scale case sharding exists for (D3 alone misorders there).
         int pad = Math.Max(3, (nShards - 1).ToString().Length);
 
         for (int s = 0; s < nShards; s++)
