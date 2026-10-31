@@ -12,7 +12,7 @@ public static class Presets
         ["--web-units", "3000", "--web-headers", "3000", "--web-depth", "15", "--web-window", "18-28",
          "--web-aggregators", "40", "--web-templates", "60", "--web-template-sites", "4", "--web-tail", "24"];
 
-    // huge: the huge repo — ~90 GB, ~50k files, 12 headers OVER 1 GB (the headline pathology).
+    // huge: ~90 GB, ~50k files, 12 headers OVER 1 GB (the headline pathology).
     // 12 giants * 1.2 GB = ~14.4 GB; the rest (~75 GB) is made of ~55 MB big headers.
     // Plus the include web (docs/include-web-design.md): 3000 units over 3000 register maps, deep and overlapping,
     // with 24 tail headers of 48 MB each.
@@ -20,7 +20,7 @@ public static class Presets
         ["--scale", "1.0", "--giant-headers", "12", "--max-header-mb", "1229", "--big-headers", "1375",
          .. WebCounts, "--web-header-lines", "2000", "--web-tail-mb", "48"];
 
-    // huge-lite: all of huge's shapes in ~0.5 GB, no compute gate. Source counts at 1/20, 3 giants of 32 MB, 1 big
+    // huge-lite: all of huge's shapes in ~0.5 GB, small enough for a quick run. Source counts at 1/20, 3 giants of 32 MB, 1 big
     // and 12 medium headers, and the web at huge's counts with small headers (150 lines, tails of ~8 MB).
     private static readonly string[] HugeLite =
         ["--scale", "0.05", "--giant-headers", "3", "--max-header-mb", "32", "--big-headers", "1", "--med-headers", "12",
@@ -44,7 +44,7 @@ public static class Presets
     // dense-band: N headers parked just under the stream threshold, unique idents — the OOM regression.
     private static readonly string[] DenseBand = [.. Bare, "--dense-headers", "40", "--dense-under-mb", "127"];
 
-    // broad-token: a hot token in 0.5 of a 2-8 MB carrier band (find_references expected-set + sidecar test).
+    // broad-token: a hot token in 0.5 of a 2-8 MB carrier band (find_references expected-set + block-selective reads).
     private static readonly string[] BroadToken = [.. Bare, "--broad-token-files", "200", "--hot-token-share", "0.5"];
 
     // long-lines: pathologically long single-line files (emitter alternates newline / no-newline).
@@ -67,10 +67,10 @@ public static class Presets
     // firmware: the firmware corpus (docs/firmware-design.md) beside a bare tree: big and dense headers, paste macros.
     private static readonly string[] Firmware = [.. Bare, "--firmware"];
 
-    // firmware-work: the work-shaped carve (docs/firmware-design.md "Work shape") at --scale, beside a small fixed
-    // correctness part (one big header, every kind a few times), so the size and the pass shape come from the work part.
+    // firmware-bulk: the bulk carve (docs/firmware-design.md "Bulk shape") at --scale, beside a small fixed
+    // correctness part (one big header, every kind a few times), so the size and the pass shape come from the bulk part.
     private static readonly string[] FirmwareWork =
-        [.. Bare, "--firmware", "--fw-work", "--fw-families", "192", "--fw-pasters", "20000", "--fw-files", "296",
+        [.. Bare, "--firmware", "--fw-bulk", "--fw-families", "192", "--fw-pasters", "20000", "--fw-files", "296",
          "--fw-big-headers", "1", "--fw-dense-headers", "0"];
 
     // Single source of truth: resolution (TryGet), the advertised name list (Names), and the error-message
@@ -90,12 +90,12 @@ public static class Presets
         ("pathological-symbols", PathologicalSymbols),
         ("dup-content", DupContent),
         ("firmware", Firmware),
-        ("firmware-work", FirmwareWork),
+        ("firmware-bulk", FirmwareWork),
     ];
 
-    // Old names that still resolve but aren't advertised (the 1.5.4 rename). A preset's name isn't written into the
+    // Old names that still resolve but aren't advertised (the 1.5.4 and 1.5.5 renames). A preset's name isn't written into the
     // corpus or its manifest, so an alias generates the same bytes as the name it points to.
-    private static readonly (string Alias, string Name)[] Aliases = [("death", "huge"), ("death-lite", "huge-lite")];
+    private static readonly (string Alias, string Name)[] Aliases = [("death", "huge"), ("death-lite", "huge-lite"), ("firmware-work", "firmware-bulk")];
 
     /// <summary>The advertised preset names, in registry order.</summary>
     public static readonly string[] Names = Array.ConvertAll(Registry, p => p.Name);

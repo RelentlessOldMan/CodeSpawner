@@ -4,7 +4,7 @@ using Xunit;
 namespace CodeSpawner.Tests;
 
 /// <summary>
-/// The diffTruthSha canonical form is LOCKED with CodeDiffer (code-spawner chat, 2026-10-02): a reason-flip,
+/// The diffTruthSha canonical form is FIXED (CodeDiffer reproduces it): a reason-flip,
 /// sha-flip, hunk shift, or rename change must trip it, and both tools reproduce it byte-for-byte.
 /// digest-selftest pins the golden vector inside the exe; these add the surrounding invariants — order
 /// independence, all-four-sections-always-present, and that each digested field actually moves the hash.

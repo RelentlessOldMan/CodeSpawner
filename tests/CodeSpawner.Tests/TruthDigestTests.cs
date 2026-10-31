@@ -4,7 +4,7 @@ using Xunit;
 namespace CodeSpawner.Tests;
 
 /// <summary>
-/// The truth digest byte format is LOCKED with CodeCompass (both sides reproduced the golden vector). A change
+/// The truth digest byte format is FIXED: CodeCompass reproduces it (both sides reproduce the golden vector). A change
 /// to field order, separators, sort, or the expectedMiss-absent="0" rule silently breaks delta-chain
 /// detection cross-tool. digest-selftest guards the exact vector inside the exe; these add the surrounding
 /// invariants (ordering independence, sort-normalization) that the single vector doesn't exercise.

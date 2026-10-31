@@ -11,7 +11,7 @@ namespace CodeSpawner.Generation;
 /// <c>verify</c> and a carve/soundness oracle run at the profile's cost/shape. Declared entry points land in
 /// <c>_meta.roots</c>. The spine (edges/refs) is INVARIANT to size; <c>--oracle-scale</c> only inflates
 /// function BODIES with filler that adds no edges, so reproducing realistic parse cost never perturbs
-/// reachability (CodeCarver, 2026-09-29 / 2026-09-30).
+/// reachability.
 /// </summary>
 public sealed class OracleOverlay
 {
@@ -53,7 +53,7 @@ public sealed class OracleOverlay
             indirectOf[i] = new List<IndirectEdge>();
         }
 
-        // Indirect-edge plan (phase 2): scatter fnptr/vector-table/init_array edges across the graph, spread
+        // Indirect-edge plan: scatter fnptr/vector-table/init_array edges across the graph, spread
         // over {reachable-source, dead-source} × {dispatched, not}, some resolved (in-corpus) / some external.
         var indirectBySrc = PlanIndirect(graph, out var resolvedTargets);
 
@@ -183,7 +183,7 @@ public sealed class OracleOverlay
             if (!m.Symbols.ContainsKey(root))
                 throw new InvalidOperationException($"oracle root '{root}' is not a declared symbol");
 
-        // Byte-mass total (phase 4): the denominator for a byte-based reduction assertion.
+        // Byte-mass total (--oracle-bytes): the denominator for a byte-based reduction assertion.
         if (_o.OracleBytes) m.TotalOracleBytes = m.Symbols.Values.Sum(s => s.Bytes);
 
         return m;
@@ -216,7 +216,7 @@ public sealed class OracleOverlay
             // indirection-TAX case — a REACHABLE source with a never-dispatched edge, a legitimate over-keep
             // a carver cannot drop — appear at k=1. It was previously impossible: dispatched:false was welded
             // to the dead pool (both keyed on k%2), so every undispatched edge sat in dead islands the carve
-            // drops anyway, leaving the tax untestable (CodeCarver correctness pass, 2026-09-30).
+            // drops anyway, leaving the tax untestable.
             bool wantDead = ((k >> 1) & 1) == 1;
             var pool = (wantDead && dead.Count > 0) ? dead : reach;
             int src = pool[rng.Next(pool.Count)];

@@ -92,9 +92,9 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     [InlineData("--firmware", "--fw-big-headers", "0")]
     [InlineData("--firmware", "--fw-chain-max", "1")]
     [InlineData("--firmware", "--fw-db-paths", "sideways")]
-    [InlineData("--firmware", "--fw-work-defines", "10")]                 // a work knob with the work carve off
-    [InlineData("--firmware", "--fw-work", "--fw-work-keep-pct", "50", "--fw-work-decoy-pct", "40")]   // past 100%
-    [InlineData("--firmware", "--fw-work", "--fw-work-growth", "1")]
+    [InlineData("--firmware", "--fw-bulk-defines", "10")]                 // a bulk knob with the bulk carve off
+    [InlineData("--firmware", "--fw-bulk", "--fw-bulk-keep-pct", "50", "--fw-bulk-decoy-pct", "40")]   // past 100%
+    [InlineData("--firmware", "--fw-bulk", "--fw-bulk-growth", "1")]
     public void BadKnobs_AreRefused(params string[] args) =>
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(["--out", "x", .. args]));
 
@@ -108,15 +108,15 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     }
 
     [Fact]
-    public void Preset_FirmwareWork_IsASmallFixedCorrectnessPartPlusTheScaledWork()
+    public void Preset_FirmwareBulk_IsASmallFixedCorrectnessPartPlusTheScaledBulk()
     {
-        var o = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "firmware-work"])]);
+        var o = ArgParser.ParseGen(["--out", "x", .. Presets.Expand(["--preset", "firmware-bulk"])]);
         Assert.True(o.Firmware && o.FwWork);
         Assert.Equal((1, 296, 192, 20_000, 0), (o.FwBigHeaders, o.FwFiles, o.FwFamilies, o.FwPasters, o.FwDenseHeaders));
         Assert.Equal(1, o.Eff("fw-big-headers", o.FwBigHeaders, keepOne: true));
         o.Scale = 0.1;
-        Assert.Equal((12_230_000, 500, 1_500), (o.Eff("fw-work-defines", o.FwWorkDefines), o.Eff("fw-work-pasters", o.FwWorkPasters),
-            o.Eff("fw-work-forwarders", o.FwWorkForwarders)));
+        Assert.Equal((12_230_000, 500, 1_500), (o.Eff("fw-bulk-defines", o.FwWorkDefines), o.Eff("fw-bulk-pasters", o.FwWorkPasters),
+            o.Eff("fw-bulk-forwarders", o.FwWorkForwarders)));
     }
 
     [Fact]
@@ -297,19 +297,19 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         return FwSpec.Compute(root, Path.Combine(root, "lists"), checkAlphabet: true);
     }
 
-    // ---------- the work carve ----------
+    // ---------- the bulk carve ----------
 
     [Fact]
-    public void Work_CountsAreRecountedByVerify_DecoysDrop_ExactAndMacrosKeep()
+    public void Bulk_CountsAreRecountedByVerify_DecoysDrop_ExactAndMacrosKeep()
     {
-        // the shared corpus has no work carve
+        // the shared corpus has no bulk carve
         Assert.False(Directory.Exists(Path.Combine(_c.Path, FwSpec.FwDir, FwWork.Dir)));
         Assert.False(Manifest(_c.Path)["firmware"]!.AsObject().ContainsKey("work"));
 
         using var tmp = new TempDir();
         string c = Gen(tmp.Path, "w", [
             "--firmware", "--fw-big-headers", "1", "--fw-files", "40", "--fw-families", "64", "--fw-pasters", "200",
-            "--fw-dense-headers", "0", "--fw-work", "--fw-work-defines", "40000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180", .. TreePcts, .. SmallWide]);
+            "--fw-dense-headers", "0", "--fw-bulk", "--fw-bulk-defines", "40000", "--fw-bulk-pasters", "60", "--fw-bulk-forwarders", "180", .. TreePcts, .. SmallWide]);
         var (code, err) = Verify(c);
         Assert.True(code == 0, err);
 
@@ -331,7 +331,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Equal(L("pasters"), keep.Count(n => n.StartsWith("WRP", StringComparison.Ordinal)));
         Assert.Equal(L("appliers"), keep.Count(n => n.StartsWith("WAP", StringComparison.Ordinal)));
         Assert.Equal(L("crossDecoys"), drop.Count(n => FwWork.Classify(n) == "cross"));
-        // the wide population (1.4.11): kept pasters and roots, open matches and body names, dropped near misses
+        // the wide population: kept pasters and roots, open matches and body names, dropped near misses
         long WL(string k) => wk[k]!.GetValue<long>();
         var open = List(c, "main", "openDefines");
         Assert.Equal(10, WL("patterns"));
@@ -347,7 +347,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
                 : row.Contains("open)") ? open.Contains(n) : drop.Contains(n), row);
         }
 
-        // a wrong work count fails verify
+        // a wrong firmware.work count fails verify
         var m = Manifest(c);
         m["firmware"]!["work"]!["tree"]!["crossDecoys"] = L("crossDecoys") + 1;
         string mp = Path.Combine(tmp.Path, "m.json");
@@ -526,8 +526,8 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             "#define KAP(m, a, b) m(a, b)\n#define KHX_1 1\n#define ZHX_2Z 1\n#define ZHX_1Z 1\n" +
             "#define KCP_9 1\n#define KCP_Q9 1\n#define ZCP_Z 1\n#define ZCP_9Z 1\n",
             "int a = KAP(CAT, KHX_, 1) + CAT(CA, T)(KCP_, 9);\n");
-        // the pool (a start piece and an end piece, anything between) builds KCP_Q9 and no exact build does: open
-        // since 1.4.10 (CodeCarver), though its K spelling says keep
+        // the pool (a start piece and an end piece, anything between) builds KCP_Q9 and no exact build does: open,
+        // though its K spelling says keep
         Assert.Equal(["KCP_Q9: open, alphabet says keep"], Bad(t));
         var keep = Keep(tmp);
         Assert.Contains("KHX_1", keep);
@@ -536,7 +536,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     }
 
 
-    // ---------- 1.4.8: shapes from review round 9 (each checked against gcc -E and clang -E) ----------
+    // ---------- macro-expansion shapes (each checked against gcc -E and clang -E) ----------
 
     [Fact]
     public void Uses_CommasFromAnObjectLikeExpansionResplitTheArguments_AnOpenBodyCallIsOpen()
@@ -651,7 +651,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
             $"#define LEFT {first}\n#define RIGHT {first.Replace("KP", "Q")}\n#define P3(a, b) a##_##b\n#define DO(a, b) P3(a, b)\n" +
             "#define KP0_Q0 1\n#define KP3_XQ9 1\n#define ZP3_XZ 1\n",
             "int a = DO(LEFT, RIGHT);\n");
-        // only the pool builds them: open since 1.4.10 (CodeCarver), though their K spelling says keep
+        // only the pool builds them: open, though their K spelling says keep
         Assert.Equal(["KP0_Q0: open, alphabet says keep", "KP3_XQ9: open, alphabet says keep"], Bad(t));
         var open = Lists(tmp, "open");
         Assert.Contains("KP0_Q0", open);
@@ -659,15 +659,15 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         Assert.Contains("ZP3_XZ", Lists(tmp, "mustDrop"));
     }
 
-    // ---------- review round 9 ----------
+    // ---------- verify, reference carve, lists and I/O ----------
 
     // a firmware corpus without the size of the shared one: one big header, no dense ones
     // the tree's pre-1.4.11 shares, so a small tree still has levels and decoys
-    private static readonly string[] TreePcts = ["--fw-work-keep-pct", "4", "--fw-work-decoy-pct", "16", "--fw-work-half-pct", "20"];
+    private static readonly string[] TreePcts = ["--fw-bulk-keep-pct", "4", "--fw-bulk-decoy-pct", "16", "--fw-bulk-half-pct", "20"];
     private static readonly string[] SmallWide =
     [
-        "--fw-work-patterns", "10", "--fw-work-body-pasters", "100", "--fw-work-body-forwarders", "100", "--fw-work-body-uses", "100",
-        "--fw-work-pieces", "40", "--fw-work-uncovered", "3", "--fw-work-asm", "2",
+        "--fw-bulk-patterns", "10", "--fw-bulk-body-pasters", "100", "--fw-bulk-body-forwarders", "100", "--fw-bulk-body-uses", "100",
+        "--fw-bulk-pieces", "40", "--fw-bulk-uncovered", "3", "--fw-bulk-asm", "2",
     ];
 
     private static readonly string[] SmallFw =
@@ -818,11 +818,11 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     }
 
     [Fact]
-    public void Work_MissingIsAFail_AndAppliersOnlyWithHigherOrderUses()
+    public void Bulk_MissingIsAFail_AndAppliersOnlyWithHigherOrderUses()
     {
         using var tmp = new TempDir();
         string c = Gen(tmp.Path, "w", [.. SmallFw, "--depth", "12",
-            "--fw-work", "--fw-work-defines", "3000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180", .. TreePcts, .. SmallWide]);
+            "--fw-bulk", "--fw-bulk-defines", "3000", "--fw-bulk-pasters", "60", "--fw-bulk-forwarders", "180", .. TreePcts, .. SmallWide]);
         var (code, err) = Verify(c);
         Assert.True(code == 0, err);
         var w = Manifest(c)["firmware"]!["work"]!["tree"]!;
@@ -847,16 +847,16 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     }
 
     [Fact]
-    public void Preset_FirmwareWork_CanBeSwitchedOff()
+    public void Preset_FirmwareBulk_CanBeSwitchedOff()
     {
-        var args = Presets.Expand(["--preset", "firmware-work", "--out", "x", "--firmware", "false"], out int pt);
+        var args = Presets.Expand(["--preset", "firmware-bulk", "--out", "x", "--firmware", "false"], out int pt);
         Assert.False(ArgParser.ParseGen(args, pt).Firmware);
         // a firmware knob the user typed with it off is still refused
-        args = Presets.Expand(["--preset", "firmware-work", "--out", "x", "--firmware", "false", "--fw-files", "9"], out pt);
+        args = Presets.Expand(["--preset", "firmware-bulk", "--out", "x", "--firmware", "false", "--fw-files", "9"], out pt);
         Assert.Throws<ArgException>(() => ArgParser.ParseGen(args, pt));
     }
 
-    // ---------- round 10 rulings ----------
+    // ---------- aliases, re-splits, branches and limits ----------
 
     // kcat called once, so the minis' uncalled-wildcard use never builds the fillers
     private const string Kcat = "#define kcat(a, b) a##b\n#define KQX_1 1\n";
@@ -963,10 +963,10 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     {
         var o = ArgParser.ParseGen(["--out", "x", "--firmware"]);
         o.Scale = 1e6;
-        Assert.Throws<ArgException>(() => o.Eff("fw-work-defines", 2_000_000_000));
+        Assert.Throws<ArgException>(() => o.Eff("fw-bulk-defines", 2_000_000_000));
     }
 
-    // ---------- phase 2: function truth (1.5.0) ----------
+    // ---------- function truth ----------
 
     [Fact]
     public void Functions_EveryCaseIsClassedAsSpelled_World2IsKeptInTheUnionOnly()
@@ -1020,7 +1020,7 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
         var files = List(_c.Path, "main", "mustKeepFiles");
         foreach (var f in new[] { "asm/spare.s", "ld/mem.ld", "ld/fw.icf", "ld/fw.sct", "ld/fw_ti.cmd", "lib/fwcrc.o", "lib/libfwx.a" })
             Assert.True(files.Any(x => x.EndsWith(f, StringComparison.Ordinal)), $"{f} not in mustKeepFiles");
-        // no build compiles or includes these, so an unforced carve drops them (Carver ruling, 1.5.3)
+        // no build compiles or includes these, so an unforced carve drops them
         foreach (var f in new[] { "dense/dense_60.h", "dense/dense_70.h", "src/bigsrc_0.c" })
             Assert.DoesNotContain(f, files);
     }
@@ -1130,11 +1130,11 @@ public class FirmwareTests : IClassFixture<FirmwareTests.Corpus>
     }
 
     [Fact]
-    public void Functions_WorkPresetHasNone()
+    public void Functions_BulkPresetHasNone()
     {
         using var tmp = new TempDir();
         string c = Gen(tmp.Path, "w", [.. SmallFw, "--depth", "12",
-            "--fw-work", "--fw-work-defines", "3000", "--fw-work-pasters", "60", "--fw-work-forwarders", "180", .. TreePcts, .. SmallWide]);
+            "--fw-bulk", "--fw-bulk-defines", "3000", "--fw-bulk-pasters", "60", "--fw-bulk-forwarders", "180", .. TreePcts, .. SmallWide]);
         var fw = Manifest(c)["firmware"]!.AsObject();
         Assert.False(fw.ContainsKey("roots") || fw.ContainsKey("compileDbUnion") || fw.ContainsKey("functionCases"));
         Assert.False(fw["builds"]!["main"]!.AsObject().ContainsKey("mustDropFunctions"));

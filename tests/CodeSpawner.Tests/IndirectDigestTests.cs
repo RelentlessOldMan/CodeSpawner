@@ -4,7 +4,7 @@ using Xunit;
 namespace CodeSpawner.Tests;
 
 /// <summary>
-/// The indirectTruthSha canonical form is LOCKED with CodeCarver + CodeCompass (a rewired indirect edge or a
+/// The indirectTruthSha canonical form is FIXED for consumers such as CodeCarver and CodeCompass (a rewired indirect edge or a
 /// moved root must trip it, and all three tools reproduce it byte-for-byte). digest-selftest pins the golden
 /// vector inside the exe; these add the surrounding invariants — order independence, and that each field the
 /// form includes actually changes the hash.

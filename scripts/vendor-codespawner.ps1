@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
-  Vendor the built CodeSpawner generator into a consumer repo (CodeCompass, CodeCarver, ...).
+  Vendor the built CodeSpawner generator into a consumer repo (an indexer, a carver, ...).
 
 .DESCRIPTION
-  Per the shared plan (§6.1/§10): consumers VENDOR a pinned generator, they do NOT submodule it. This
+  Consumers VENDOR a pinned generator, they do NOT submodule it. This
   copies dist\codespawner.exe + the contract docs into <Target>\tools\codespawner\ and records a
   GENERATOR_VERSION file (generator version, manifestVersion, source commit-less stamp). The real coupling
   is the manifest + delta contracts, so their docs travel with the binary and the version is asserted downstream.
 
-.PARAMETER Target   The consumer repo root to vendor into (e.g. ..\CodeCompass).
+.PARAMETER Target   The consumer repo root to vendor into (e.g. ..\MyIndexer).
 .PARAMETER Exe      Path to a prebuilt codespawner.exe (default: .\dist\codespawner.exe).
 #>
 param(
@@ -36,10 +36,9 @@ $stamp = @"
 CodeSpawner generator vendored into this repo.
 
 generatorVersion : $version
-manifestVersion  : 1
-vendoredFrom     : $root
+manifestVersion  : 1 (C corpora), 2 (gen --lang cpp)
 note             : Vendored, not a submodule. Re-run scripts\vendor-codespawner.ps1 to bump.
-                   Consumers MUST assert _meta.manifestVersion == 1 before trusting a manifest.
+                   Consumers MUST assert the _meta.manifestVersion they expect before trusting a manifest.
 "@
 Set-Content (Join-Path $destDir "GENERATOR_VERSION") $stamp -Encoding utf8
 

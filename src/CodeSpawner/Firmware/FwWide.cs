@@ -4,9 +4,9 @@ using CodeSpawner.Cli;
 namespace CodeSpawner.Firmware;
 
 /// <summary>
-/// The work carve's wide population (since 1.4.11; docs/firmware-design.md "Work shape"): the over-keep of a sound
-/// static carve at work. A few thousand paste macros <c>KWP{j}</c> with short literal pieces are named, never called,
-/// in the bodies of kept roots <c>KWT{j}</c>, so each is a wide pattern <c>pre*suf</c>. Under rule W (CodeCarver)
+/// The bulk carve's wide population (docs/firmware-design.md "Bulk shape"): the over-keep of a sound
+/// static carve on a production-sized firmware tree. A few thousand paste macros <c>KWP{j}</c> with short literal pieces are named, never called,
+/// in the bodies of kept roots <c>KWT{j}</c>, so each is a wide pattern <c>pre*suf</c>. Under the body-naming rule (docs/firmware-design.md)
 /// a name only a carved define's body names is named under max only, so what the patterns build is open, and so is
 /// everything only their bodies reach.
 /// <list type="bullet">
@@ -20,8 +20,8 @@ namespace CodeSpawner.Firmware;
 /// start with its end <c>Z{cc}{mid}{suf}</c>, or its end inside the name <c>{pre}{mid}{suf}Z</c>.</item>
 /// <item><b>Body macros.</b> Paste macros <c>Y_WP{j}_Y</c> and forwarders <c>Y_WF{j}_Y</c> that matched bodies call
 /// (open), and many more <c>ZWQP{j}Z</c> / <c>ZWQF{j}Z</c> that nothing names (dropped).</item>
-/// <item><b>Edges</b> (kept, CodeCarver): a forwarder ending in a paster's name, called with arguments, and a body
-/// calling a paster (<c>KWEQ{i} (x)</c>): both are calls, not rule W's guesses.</item>
+/// <item><b>Edges</b> (kept): a forwarder ending in a paster's name, called with arguments, and a body
+/// calling a paster (<c>KWEQ{i} (x)</c>): both are calls, not the body-naming rule's guesses.</item>
 /// </list>
 /// </summary>
 internal sealed class FwWide
@@ -38,24 +38,24 @@ internal sealed class FwWide
     public long Uses, PiecesS, PiecesE;
     public long Pieces => PiecesS + PiecesE;
 
-    /// <summary>The work defines this population writes.</summary>
+    /// <summary>The bulk-carve defines this population writes.</summary>
     public long Defines => 2 * Patterns + Matched + Named + Near + UsedPasters + UnusedPasters + UsedForwarders + UnusedForwarders + EdgeDefines;
     public const long EdgeDefines = Edges * 6;   // per edge: KWEP, KWEF, KWEA…_Q, KWEQ, KWEC, KWEB…_Q
 
     public static FwWide Plan(GenOptions o, long budget, long defines)
     {
         var w = new FwWide();
-        long patterns = Math.Max(3, o.Eff("fw-work-patterns", o.FwWorkPatterns));
+        long patterns = Math.Max(3, o.Eff("fw-bulk-patterns", o.FwWorkPatterns));
         w.Pre = patterns * 15 / 100;
         w.Suf = patterns * 15 / 100;
         w.Two = patterns - w.Pre - w.Suf;
         if (w.Two > NP2 * (long)NP2 || w.Pre > NP2 || w.Suf > NP2)
-            throw new ArgException($"--fw-work-patterns {patterns} is more than the piece sets hold");
+            throw new ArgException($"--fw-bulk-patterns {patterns} is more than the piece sets hold");
         w.Near = (long)(defines * o.FwWorkNearPct / 100);
         w.Named = (long)(defines * o.FwWorkNamedPct / 100);
-        long pasters = o.Eff("fw-work-body-pasters", o.FwWorkBodyPasters), forwarders = o.Eff("fw-work-body-forwarders", o.FwWorkBodyForwarders);
-        w.Uses = o.Eff("fw-work-body-uses", o.FwWorkBodyUses);
-        long pieces = o.Eff("fw-work-pieces", o.FwWorkPieces);
+        long pasters = o.Eff("fw-bulk-body-pasters", o.FwWorkBodyPasters), forwarders = o.Eff("fw-bulk-body-forwarders", o.FwWorkBodyForwarders);
+        w.Uses = o.Eff("fw-bulk-body-uses", o.FwWorkBodyUses);
+        long pieces = o.Eff("fw-bulk-pieces", o.FwWorkPieces);
         // the bodies' uses call a tenth of the body macros (half the uses direct, half through a forwarder); the rest
         // nothing names
         long half = (w.Uses + 1) / 2;
@@ -70,8 +70,8 @@ internal sealed class FwWide
         // holds at most one use
         long fixedDefs = 2 * w.Patterns + w.Named + w.Near + pasters + w.UsedForwarders + w.UnusedForwarders + EdgeDefines;
         if (fixedDefs + Math.Max(w.Named, w.Uses) > budget)
-            throw new ArgException($"the work carve's wide population needs {fixedDefs + Math.Max(w.Named, w.Uses):N0} defines (patterns, body macros, "
-                + $"near misses, named-only), but --fw-work-defines leaves {budget:N0}; raise it or lower --fw-work-patterns / -body-* / -near-pct / -named-pct");
+            throw new ArgException($"the bulk carve's wide population needs {fixedDefs + Math.Max(w.Named, w.Uses):N0} defines (patterns, body macros, "
+                + $"near misses, named-only), but --fw-bulk-defines leaves {budget:N0}; raise it or lower --fw-bulk-patterns / -body-* / -near-pct / -named-pct");
         w.Matched = Math.Max(Math.Max(w.Named, w.Uses), budget - fixedDefs);
         w.Matched = Math.Max(w.Matched, w.Patterns);
         return w;

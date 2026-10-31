@@ -103,7 +103,7 @@ public enum Category
     TinyFile,
     Unresolved,
     Placement,
-    // Batch 1 pathologies (appended — see docs/ROADMAP.md):
+    // pathologies (appended; see docs/knobs.md):
     DenseHeader,
     BroadToken,
     LongLine,

@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   test:
-    # Windows: the tool's home platform (Windows paths, the cross-machine regen workflow, the AOT target).
+    # Windows: the tool's home platform (Windows paths, the AOT target).
     runs-on: windows-latest
     timeout-minutes: 15
     steps:

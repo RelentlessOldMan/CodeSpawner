@@ -54,8 +54,8 @@ public sealed class DiffFile
 /// <summary>
 /// The canonical component digest of diff-delta ground truth, surfaced as <c>_meta.diffTruthSha</c>. It is
 /// DELIBERATELY separate from the primary <c>prevTruthSha</c> (same discipline as <see cref="IndirectDigest"/>):
-/// a reason-flip, sha-flip, hunk shift, or rename change trips THIS hash. The byte format is LOCKED with the
-/// CodeDiffer session (code-spawner chat, 2026-10-02); do not change it without re-agreeing. See
+/// a reason-flip, sha-flip, hunk shift, or rename change trips THIS hash. The byte format is FIXED:
+/// a diff tool such as CodeDiffer reproduces it, so any change breaks it. See
 /// docs/diff-delta-design.md.
 ///
 ///   four sections, GS(0x1D) between them, ALL always present (an empty section is zero bytes; its GS stays):
@@ -132,7 +132,7 @@ public sealed record CleanMerge(string Path, string Side, HunkOp Op, int OldStar
 /// <summary>
 /// The canonical component digest of 3-way conflict ground truth, surfaced as <c>_meta.conflictTruthSha</c> in
 /// the separate conflict artifact (kept off <c>diffTruthSha</c>, same discipline as the other component digests).
-/// Byte format LOCKED with CodeDiffer (code-spawner chat, 2026-10-02); see docs/diff-delta-design.md:
+/// Byte format FIXED (CodeDiffer reproduces it, so any change breaks it); see docs/diff-delta-design.md:
 ///
 ///   two sections, GS(0x1D) between, BOTH always present (an empty section is zero bytes; the GS stays):
 ///     1 conflicts-3way: path US baseStart US baseLines US v1Op US v1NewStart US v1NewLines

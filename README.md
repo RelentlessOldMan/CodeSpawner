@@ -97,10 +97,11 @@ binary. Run `.\scripts\vendor-codespawner.ps1 -Target <repo>` to copy the exe + 
 `GENERATOR_VERSION` stamp into `<repo>\tools\codespawner\`. Each consumer keeps a thin verify adapter and
 asserts `_meta.manifestVersion` first:
 
-- **CodeCompass** — `verify-corpus-codecompass.ps1` (index → `find_references` → assert vs manifest +
-  unresolved-include disclosure + `doctor`).
-- **CodeCarver** — `carver-groundtruth-oracle.ps1` (BFS the explicit `edges` → carve → soundness +
-  precision).
+- **An indexer's adapter** — index the corpus → `find_references` → assert vs the manifest's `refs` +
+  the unresolved-include disclosure.
+- **A carver's adapter** — BFS the explicit `edges` → carve → soundness + precision.
+
+The author's own CodeCompass (an indexer) and CodeCarver (a carver) use adapters like these.
 
 ## Docs
 
@@ -108,7 +109,7 @@ asserts `_meta.manifestVersion` first:
 - [`docs/manifest-schema.md`](docs/manifest-schema.md) — the versioned manifest contract.
 - [`docs/knobs.md`](docs/knobs.md) — the knob catalogue (each = an observed failure class) + presets.
 - [`docs/include-web-design.md`](docs/include-web-design.md) — the include web and its per-unit closure truth.
-- [`docs/PLAN.md`](docs/PLAN.md) — the build plan / design rationale.
+- [`docs/firmware-design.md`](docs/firmware-design.md) — the firmware corpus and its header-carve truth.
 
 ## Contributing
 

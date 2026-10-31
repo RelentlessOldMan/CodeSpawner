@@ -10,7 +10,7 @@ namespace CodeSpawner.Verify;
 /// describes the emitted files, with zero dependency on any indexer/carver. This is the contract's
 /// guardian in its own repo — a generator change that breaks the manifest fails here, once, instead of
 /// silently downstream. Relative paths are resolved against the supplied <c>--corpus</c> dir (NOT the
-/// manifest's recorded corpusRoot), so a copied/SMB corpus validates against the same manifest.
+/// manifest's recorded corpusRoot), so a copied or network-shared corpus validates against the same manifest.
 /// </summary>
 public static class ManifestVerifier
 {

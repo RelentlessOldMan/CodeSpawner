@@ -127,7 +127,7 @@ public class OracleOverlayTests
         // The indirection TAX: a reachable function that takes the address of a target it never dispatches is
         // a legitimate over-keep no carver can drop. This quadrant must be non-empty, else the whole
         // `dispatched` bit is untestable. Regression guard — dispatched:false used to be welded to dead
-        // sources, so no reachable source ever carried one (CodeCarver, 2026-09-30).
+        // sources, so no reachable source ever carried one.
         bool taxPresent = m.Symbols.Any(kv =>
             reachable.Contains(kv.Key) && kv.Value.IndirectEdges.Any(e => !e.Dispatched));
         Assert.True(taxPresent, "a reachable source must carry a never-dispatched indirect edge (the tax case)");

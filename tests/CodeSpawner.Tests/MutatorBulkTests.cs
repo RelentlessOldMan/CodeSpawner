@@ -539,7 +539,7 @@ public class MutatorBulkTests
         return (int)Math.Round(common * 1000.0 / Math.Max(a.Length, b.Length));
     }
 
-    // CodeDiffer's report: when sources share their lines, a decoy (a ~90% copy) out-scores a rename+edit's own
+    // When sources share their lines, a decoy (a ~90% copy) out-scores a rename+edit's own
     // `to` against its `from`, so the recorded pair isn't the best match. Every surviving decoy must now sit at
     // least RenameMarginMilli under each rename's similarity; with near-identical sources some get dropped.
     [Fact]
@@ -571,7 +571,7 @@ public class MutatorBulkTests
         }
     }
 
-    // The pinned metric rounds half-up in integers (agreed with CodeDiffer): a 16-line file in the 600 band keeps
+    // The pinned metric rounds half-up in integers (a diff tool reproduces it exactly): a 16-line file in the 600 band keeps
     // 9 of 16 lines = 562.5, recorded as 563 (C#'s default banker's rounding gave 562).
     [Fact]
     public void Rename_SimilarityMilli_RoundsHalfUp()

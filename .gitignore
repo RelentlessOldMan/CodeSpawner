@@ -16,7 +16,7 @@ TestResults/
 .corpus/
 *-manifest.json
 
-# Local agent/machine config (ComputeWarden gate, dev notes) — not for the public repo
+# Local agent/editor config — not for the public repo
 CLAUDE.md
 
 # Local MCP server config (machine-specific paths) — not for the public repo

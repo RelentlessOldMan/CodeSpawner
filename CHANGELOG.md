@@ -11,37 +11,52 @@ reads it.
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-10-30
+
+No corpus byte changes: every preset and knob makes the same tree and manifest as 1.5.4.
+
+### Changed
+- The `firmware-work` preset is renamed `firmware-bulk`, and the `--fw-work` / `--fw-work-*` knobs are renamed
+  `--fw-bulk` / `--fw-bulk-*`. The old names still work as hidden aliases. The output dir `fw/work/`, the
+  `firmware.work` manifest key, the `_meta.gen.fwWork*` names and the `work-*` case labels keep their names.
+- Docs, usage text, code comments and test names are rewritten to describe current behaviour for any user:
+  version history stays in this file, and old-manifest notes are collected in `docs/manifest-schema.md`
+  ("Reading older manifests"). `docs/PLAN.md` and `docs/ROADMAP.md` are removed; their design invariants and
+  the preset table are now in `docs/knobs.md`, which also lists every bulk-carve knob with its real default.
+- `scripts/vendor-codespawner.ps1` no longer records the local source path in the vendor stamp.
+- Two error messages say "bulk carve" and "a tree with the function truth" instead of internal terms.
+
 ## [1.5.4] - 2026-10-29
 
 ### Changed
 - The `death` and `death-lite` presets are renamed `huge` and `huge-lite`. The old names still work as hidden
   aliases (left out of the usage text and the preset list). A preset's name isn't written into the corpus or its
   manifest, so `--preset huge` makes the same bytes `--preset death` did.
-- Docs, usage text and test names use the new names, and the doc examples no longer use local paths.
+- Docs, usage text and test names use the new names, and the doc examples use placeholder paths instead of machine-specific ones.
 
 ## [1.5.3] - 2026-10-28
 
-A truth release, from review round 11 and CodeCarver's rulings (Q1–Q9). Plain firmware corpora change; the define
-lists are byte-identical to 1.5.2. Firmware-work trees do not change, apart from `mustKeepFiles` (below).
+A truth release. Plain firmware corpora change; the define lists are byte-identical to 1.5.2. Firmware-work trees
+do not change, apart from `mustKeepFiles` (below).
 
 ### Changed
 - The function truth now models the documented link: C built `-ffunction-sections -fdata-sections`, then `ld.lld
   --gc-sections -T fw/ld/fw.ld -L fw/ld`, with no `-u`/`-e`. Its nodes are input sections, and an input section is kept
   whole once any symbol in it is reached. Reach starts from exactly `firmware.roots`, plus what the link itself keeps.
-- Where the truth cannot prove what the real toolchain decides, a name is open, never drop (Carver's general rule):
-  - names in asm comments and in `#if 0` (Q1);
-  - function names in headers too big to scan (Q2);
-  - inline asm operands that are not branch or data operands (Q3);
-  - a section only a `sym = .;` bracket holds without `KEEP` (Q5);
-  - `used` alone (Q6);
-  - a destructor without a `KEEP(.fini_array*)` (Q7);
+- Where the truth cannot prove what the real toolchain decides, a name is open, never drop:
+  - names in asm comments and in `#if 0`;
+  - function names in headers too big to scan;
+  - inline asm operands that are not branch or data operands;
+  - a section only a `sym = .;` bracket holds without `KEEP`;
+  - `used` alone;
+  - a destructor without a `KEEP(.fini_array*)`;
   - a reference to a `.weak` name the object never defines.
-- `.irp`, `.irpc` and `.rept` are expanded (Q4). `used, retain` is must-keep (Q6).
-- **keep → open on the smalls.** `firmware` 0.01 and 0.1: `kfwused` (a `used` function) is open now, renamed
+- `.irp`, `.irpc` and `.rept` are expanded. `used, retain` is must-keep.
+- **keep → open at scales 0.01 and 0.1.** `firmware`: `kfwused` (a `used` function) is open now, renamed
   `YFwUsedY` so the alphabet spells its class. No other existing name changes class. The new cases below add names
-  only (Q8). Firmware-work has no function lists.
-- `mustKeepFiles` never lists a file no build compiles and nothing includes, even if it defines a must-keep name
-  (Carver ruling 2). `src/bigsrc_0.c` leaves the list in both presets. An unlisted file is open.
+  only. Firmware-work has no function lists.
+- `mustKeepFiles` never lists a file no build compiles and nothing includes, even if it defines a must-keep name.
+  `src/bigsrc_0.c` leaves the list in both presets. An unlisted file is open.
 - Verify pins `firmware.roots` to `["Reset_Handler"]`, `functionCases` to its path (and checks its rows), and each
   list's `path` to `fw-truth/<build>.<list>.txt[.gz]`. A `.gz` list that is not gzip is a FAIL line, not a crash.
 
@@ -88,7 +103,7 @@ lists are byte-identical to 1.5.2. Firmware-work trees do not change, apart from
 
 ## [1.5.0] - 2026-10-27
 
-Phase 2 of the firmware corpus, built to CodeCarver's rulings: asm, linker scripts, prebuilt objects and a function
+The firmware corpus's function truth: asm, linker scripts, prebuilt objects and a function
 truth. This is in `--preset firmware` (plain `--firmware`) only. Plain firmware corpora change: about 0.04 GB more at
 0.01, because of an oversize .s and .ld. The define lists are byte-identical to 1.4.11. Firmware-work corpora do not
 change.
@@ -119,7 +134,7 @@ change.
 
 ## [1.4.11] - 2026-10-27
 
-The work carve calibrated to a work tree's shape (CodeCarver's aggregates), plus CodeCarver's rule W. Firmware-work
+The work carve calibrated to the shape of a production-sized firmware tree, plus the body-naming rule. Firmware-work
 corpora change a lot: at 1x the work carve is 122.3M defines in about 590 headers of about 31 MB, 0.018% kept, and
 most of it is a new wide population. Plain `--preset firmware` corpora do not change (0.01 lists byte-identical to
 1.4.10).
@@ -136,7 +151,7 @@ most of it is a new wide population. Plain `--preset firmware` corpora do not ch
   piece, edge and file counts. Verify recounts each from the lists.
 
 ### Changed
-- Rule W (CodeCarver): a name that only a carved define's body names, without calling it there, is named under max
+- The body-naming rule: a name that only a carved define's body names, without calling it there, is named under max
   only, so its any-text use is open.
 - The alphabet: `Y…Z` and `Z…Y` spell must-drop too.
 - `firmware.work`'s use-tree counts moved under `firmware.work.tree`; the top level is now the whole work carve.
@@ -146,7 +161,7 @@ most of it is a new wide population. Plain `--preset firmware` corpora do not ch
 
 ## [1.4.10] - 2026-10-27
 
-CodeCarver's ruling after its T2 run on the 1.4.9 smalls. Firmware corpora change: the `param-tail-alias` kind's
+Firmware corpora change: the `param-tail-alias` kind's
 pool-built name is renamed `KPV<f>X_3Z` → `YPV<f>X_3Y` and moves from must-keep to open, so `fw/`, the lists and
 the counts differ from 1.4.9. Nothing else moves: firmware 0.01 has 227 more open names (all `YPV`), firmware-work
 0.05 has 4.
@@ -159,7 +174,7 @@ the counts differ from 1.4.9. Nothing else moves: firmware 0.01 has 227 more ope
 
 ## [1.4.9] - 2026-10-23
 
-Review round 10 of the firmware truth engine (1.4.8), with CodeCarver's rulings, checked against gcc and clang
+Fixes to the firmware truth engine (1.4.8), checked against gcc and clang
 `-E`. Firmware corpora change: 2 new family kinds (44 in all), a new hostile file and a new case, so `fw/`, the lists
 and `cases.tsv` differ from 1.4.8. With 44 kinds every unit hosts every kind, so more units use an open
 `open-body-call` name. A reference carve drops it, and compiling the carved tree fails on more units than in 1.4.8
@@ -169,7 +184,7 @@ and `cases.tsv` differ from 1.4.8. With 44 kinds every unit hosts every kind, so
 - An alias walks in from its body's end past names that may expand to nothing and past parameters: `#define F CAT
   EMPTYM` and `#define PICK2(x) CAT x` forward to `CAT` and call it. A name that need not be empty stops the walk.
 - A name before a parameter is called when the argument opens with `(`: `PICK2((KPK_, 2))` builds `KPK_2`.
-- A computed call keeps its own pool (CodeCarver's ruling). A use's exact end names, for a callee computed from it,
+- A computed call keeps its own pool. A use's exact end names, for a callee computed from it,
   are only the names it can end with.
 - An argument that can come to one token or to several is built both ways. A function-like call that may give a
   comma inside an argument is pooled under max only, so what it builds is open.
@@ -190,7 +205,7 @@ and `cases.tsv` differ from 1.4.8. With 44 kinds every unit hosts every kind, so
 
 ## [1.4.8] - 2026-10-23
 
-Firmware truth rules for the round-9 shapes, as ruled by CodeCarver and checked against gcc and clang `-E`. Firmware
+Firmware truth rules for more preprocessor shapes, checked against gcc and clang `-E`. Firmware
 corpora change: 10 new family kinds (42 in all) and 3 new hostile files, so `fw/`, the lists and `cases.tsv` differ
 from 1.4.7.
 
@@ -220,7 +235,7 @@ from 1.4.7.
 
 ## [1.4.7] - 2026-10-23
 
-Review round 9 of the firmware corpus (1.4.0–1.4.6). Firmware corpora change in one file: `fw-truth/cases.tsv`
+Fixes to the firmware corpus (1.4.0–1.4.6). Firmware corpora change in one file: `fw-truth/cases.tsv`
 (the `KDV_VAL` row's site). `fw/` and the truth lists are unchanged at default knobs.
 
 ### Fixed
@@ -259,13 +274,13 @@ Review round 9 of the firmware corpus (1.4.0–1.4.6). Firmware corpora change i
 
 ## [1.4.6] - 2026-10-23
 
-Adds the work-shaped firmware carve. Existing corpora, firmware ones included, are unchanged: the work carve is off
+Adds a firmware carve shaped like a production-sized firmware tree. Existing corpora, firmware ones included, are unchanged: the work carve is off
 unless asked for.
 
 ### Added
-- `--preset firmware-work` (asked for by CodeCarver): a carve shaped like a work tree, for measuring how a carver's
+- `--preset firmware-work`: a carve shaped like a production-sized firmware tree, for measuring how a carver's
   passes grow. A tree of paste uses (pieces ×9 from pass 1 to pass 2, then halving) through direct, forwarded and
-  higher-order calls, plus cross-call decoys that global piece pools keep and rule 3' drops (~20% kept under global
+  higher-order calls, plus cross-call decoys that global piece pools keep and per-use pairing drops (~20% kept under global
   pools against 4% exact). It sits in `fw/work/wreg_N.h`, beside a small fixed correctness part.
 - `--fw-work` and its knobs `--fw-work-defines`, `-pasters`, `-forwarders`, `-depth`, `-growth`, `-keep-pct`,
   `-decoy-pct` and `-half-pct`.
@@ -278,12 +293,12 @@ unless asked for.
 
 ## [1.4.5] - 2026-10-23
 
-The firmware corpus's bytes and truth change: pieces now pair per use (rule 3'), and six kinds are added, so every
+The firmware corpus's bytes and truth change: pieces now pair per use (per-use pairing), and six kinds are added, so every
 family after kind 25 moves. Non-firmware corpora are unchanged. No existing kind changed class; every case name
 still carries its class in its spelling.
 
 ### Changed
-- Firmware truth, rule 3' (agreed with CodeCarver): each paste-macro use builds the cross product of the slots of
+- Firmware truth, per-use pairing: each paste-macro use builds the cross product of the slots of
   every `##` chain it reaches, and pieces of different uses never pair. An argument gives its spelling and, where
   it is expanded, its expansion. An empty argument or one whose expansion can be empty gives nothing.
   `__LINE__`/`__COUNTER__` are one or more digits, and an undefined `__name` is any text. A paste macro named in
@@ -307,7 +322,7 @@ still carries its class in its spelling.
 The firmware corpus's bytes and truth change (one kind added). Non-firmware corpora are unchanged.
 
 ### Changed
-- Firmware truth, rule 1 (CodeCarver): a function-like body that holds a call forwards to every identifier in it,
+- Firmware truth, rule 1: a function-like body that holds a call forwards to every identifier in it,
   so a paste macro named without a call (`#define MYCAT(a) APPLY2(CAT, a)`) makes MYCAT a paste macro. A parameter
   passed whole to another call in such a body takes the union of the named paste macros' slots; one passed with
   other tokens gets both sides. `pasteMacros` can grow; `forwardingMacros` is unchanged.
@@ -322,7 +337,7 @@ The firmware corpus's bytes and truth change: a define is now wanted only when i
 piece. Non-firmware corpora are unchanged.
 
 ### Changed
-- Firmware truth follows CodeCarver's directional rule (TESTING.md header-carve rules 2 and 3):
+- Firmware truth follows a directional rule (TESTING.md header-carve rules 2 and 3):
   - a piece starts a pasted name, ends one, or both;
   - a carved define is wanted when its name starts with a start piece **and** ends with an end piece.
 
@@ -358,7 +373,7 @@ unchanged.
 ### Changed
 - Firmware truth: a header in a build's include dir outside the root that no build includes is maybe-kept text. A
   computed `#include MACRO` could name it, so a sound carver may keep it. It seeds under max only, so its defines
-  are open. Its case is renamed from `ZEXU0Z` (must-drop) to `YEXU0Y` (open). This is CodeCarver's rule.
+  are open. Its case is renamed from `ZEXU0Z` (must-drop) to `YEXU0Y` (open).
 
 ### Fixed
 - Firmware truth: the name table could lose a name when it grew. It probed for a slot, then grew and rebuilt the
@@ -375,7 +390,7 @@ unchanged.
 
 ### Docs
 - firmware-design.md: the truth keeps every non-carved `fw/` file whole, so a carve is checked with every file
-  forced kept (CodeCarver `forceKeepFiles = ["*"]`).
+  forced kept (`forceKeepFiles = ["*"]`).
 
 ## [1.4.1] - 2026-10-22
 
@@ -397,7 +412,7 @@ Generated trees and manifests are byte-identical to 1.3.2 without `--firmware`.
 
 ### Added
 - **Firmware corpus** (`gen --firmware`, `--preset firmware`; [docs/firmware-design.md](docs/firmware-design.md)).
-  This is phase 1 of the plan agreed with CodeCarver: a header-carve test tree with its sound-carve truth.
+  This is the define truth: a header-carve test tree with its sound-carve truth.
   - **The tree:** under `fw/`, paste-macro register headers past `maxParseBytes`, dense headers, units that reach
     their defines by 18 paste shapes, and traps and hostile files. Beside it: a compile db in `fw-build/` and
     headers outside the root in `ext/`.
@@ -468,14 +483,14 @@ Every corpus is byte-identical to 1.3.0.
 - `gen --from-profile ... --with-oracle` takes the `--web-*` knobs: the include web is written at the root beside the
   profile's tree (which stays byte-identical, as do its oracle symbols and `indirectTruthSha`), and its closures,
   instances, `_meta.includeDirs` and web knobs are added to the oracle manifest. The web without `--with-oracle` is
-  refused. This lets the real-shape death keeper carry CodeCarver's web.
+  refused. This lets a corpus made from a real tree's profile carry the web.
 
 ## [1.3.0] - 2026-10-16
 
 `--preset death` corpora change (the web is added); every other corpus is byte-identical to 1.2.3.
 
 ### Added
-- **Include web** (`gen --web-units N`, docs/include-web-design.md), for CodeCarver's include-closure slicing:
+- **Include web** (`gen --web-units N`, docs/include-web-design.md), for testing include-closure slicing:
   - a deep, overlapping graph of guarded register-map headers, aggregators, unguarded template headers expanded
     through `TNAME`, an `#include_next` vendor dir, shadow decoys, and `.c` units;
   - include traps: cycles, `#if`/`#ifdef` gates, computed and relative includes, long continued macros, comments
@@ -489,7 +504,7 @@ Every corpus is byte-identical to 1.3.0.
 - `verify` recomputes every closure with its own small preprocessor and checks each template instance both ways.
   clang `-H` agrees with the closures.
 - `--preset death` now includes the web. New `--preset death-lite` has all of death's shapes in about 0.5 GB
-  (32 MB giants, and the web at death's counts with small headers), with no compute gate needed.
+  (32 MB giants, and the web at death's counts with small headers).
 - `mutate` never edits the web's directories.
 
 ## [1.2.3] - 2026-10-15
@@ -550,7 +565,7 @@ Generated corpora are unchanged (C and C++). `verify` is stricter on hand-edited
 
 ## [1.2.1] - 2026-10-15
 
-Review round 6 of the C++ profile. **`gen --lang cpp` output changes for every seed** (program bytes and
+Fixes to the C++ profile. **`gen --lang cpp` output changes for every seed** (program bytes and
 manifest truth; the new default-seed `cppTruthSha` is pinned as `d3a38e31…`). C corpora are byte-identical.
 
 ### Fixed
@@ -594,8 +609,8 @@ manifest truth; the new default-seed `cppTruthSha` is pinned as `d3a38e31…`). 
 ## [1.2.0] - 2026-10-14
 
 ### Added
-- **C++ language profile + manifest v2** (`gen --lang cpp`; design in `docs/cpp-profile-design.md`, agreed with
-  CodeCarver and CodeCompass). It writes a self-contained C++ program with namespaces, single and multiple
+- **C++ language profile + manifest v2** (`gen --lang cpp`; design in `docs/cpp-profile-design.md`). It
+  writes a self-contained C++ program with namespaces, single and multiple
   inheritance, virtual / pure / final methods, ctors and dtors, static-storage objects, function and class
   templates, and member-function pointers. The program compiles and links with
   `clang++ -std=c++17 -Wall -Wextra -Werror`. Its manifest is `manifestVersion: 2` and adds:
@@ -617,12 +632,12 @@ manifest truth; the new default-seed `cppTruthSha` is pinned as `d3a38e31…`). 
 
 ## [1.1.13] - 2026-10-14
 
-### Corpus bytes change (regenerate and re-freeze)
+### Corpus bytes change (regenerate and update any saved copies)
 Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these ways:
 - **Every register header** (giant, big, med, dense, shrink and restream seeds) now stops one register earlier.
   The last register used to cross the byte cap by up to ~200 B. Now a header never exceeds `--max-header-mb`,
   `--dense-under-mb`, or a band's drawn size. The other files are unchanged.
-- **Block family numbers are disjoint** (agreed with CodeCompass). Each band starts past the previous band's end,
+- **Block family numbers are disjoint**. Each band starts past the previous band's end,
   so no two headers share a `HWIO_BLK{n}_*` macro family. This changes corpora with more than 100 giant headers
   or more than 900 big headers; there the big band (and everything after it) moves up. Below those counts the
   historical bases (100 / 1000 / 100000 / 200000 / 300000) stand.
@@ -632,7 +647,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   file sizes.
 
 ### Changed
-- Rename `similarityMilli` follows the metric pinned with CodeDiffer: lines are counted on the decoded text (a
+- Rename `similarityMilli` follows a pinned metric: lines are counted on the decoded text (a
   BOM honoured, so UTF-16 files score by their characters, not their bytes), CR/CRLF count as LF, and rounding is
   half-up in integers, `(1000·common + m/2) / m` (9/16 now records 563, not 562). The value is measured from the
   old and new files rather than from the planned edit count. Rename deltas whose files hit a .5 tie, or which
@@ -803,9 +818,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   base and wrote a delta that could not apply to it. `--three-way` leaves the
   tree as the base, records nothing, and can repeat; a 2-way run after it is
   allowed. Regenerating clears the record; a corpus mutated by 1.1.8 or earlier
-  has none and is treated as unmutated. Agreed with CodeCompass (strictly
-  in-order chains, regenerated each run); CodeDiffer (a fresh copy per
-  mutation) asked for the record to stay out of the tree.
+  has none and is treated as unmutated.
 - `gen --from-profile` files now end at the line boundary nearest their drawn
   size. They were written in whole units, which overshot by up to one unit:
   ~1.2 KB for generic code, so on a real profile those files came out 1.7%
@@ -834,7 +847,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   death-scale or carve corpus): different files are removed and line-shifted
   for the same seed. Linux output, and corpora with 10 or fewer siblings, are
   unchanged. Bulk/diff mode (`--target`) already sorted `/` paths and is
-  unaffected. Agreed with CodeCompass (no frozen symbol-mutate outputs).
+  unaffected. Saved Windows symbol-mutate outputs need regenerating.
 - `scan --sample` picks the same files per cluster on Windows as on Linux, for
   the same reason.
 
@@ -850,8 +863,8 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
 - `baseManifestSha` no longer depends on the `--out` folder name of a
   `--linked-roots` corpus. Its manifest paths into sibling roots are written
   `../<leaf>_rootN/...`; the leaf is now dropped before hashing, so the same
-  corpus generated under another folder name binds the same deltas. Agreed
-  with CodeCompass and CodeDiffer (neither reads the sha). Manifests without
+  corpus generated under another folder name binds the same deltas.
+  Manifests without
   linked roots hash exactly as before; record paths and every truth digest
   are unchanged.
 
@@ -1041,7 +1054,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   and BOM, only the edited lines change, and a file that is not exactly
   round-trippable text (invalid UTF-8, NUL-bearing binary, UTF-32) is left
   untouched and unrecorded by the text kinds (a pure rename under `rename`).
-  Plain UTF-8 corpora produce byte-identical output to 1.1.3. Both CodeDiffer
+  Plain UTF-8 corpora produce byte-identical output to 1.1.3. Both diff
   fixtures re-generate with the same `diffTruthSha`.
 - `mutate --target all` never selects the generator's root
   `compile_commands.json`. Its absolute paths made `diffTruthSha` depend on
@@ -1057,7 +1070,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   `binary` deltas get a new `diffTruthSha`.
 - The shard count for `--shard-size` no longer overflows near `int.MaxValue`.
 
-### Changed (artifact contract — agreed with CodeDiffer and CodeCompass)
+### Changed (artifact contract)
 - Symbol deltas now carry `"_meta.deltaKind": "symbol"`, so every delta names
   its kind (`diff`, `conflict-3way`, `symbol`). Older symbol deltas omit it.
 - `baseManifestSha` no longer depends on where the corpus lives or which OS
@@ -1123,7 +1136,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
 ### Tests
 - End-to-end regen-identity guards for `gen`: re-running with the same seed/args
   over its own output is byte-identical in both the file tree and the manifest
-  (the regen-in-place / cross-machine workflow), and two gens to different out
+  (so a corpus can be regenerated in place), and two gens to different out
   dirs differ only in the absolute `_meta.corpusRoot` — all ground truth stays
   corpus-relative.
 - Frozen determinism goldens: a fixed `Rng` stream, `Next` reduction values, and
@@ -1135,7 +1148,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
 ## [1.1.2] - 2026-10-07
 
 ### Fixed
-- Addressed the five findings from the 1.1.1 independent review:
+- Five fixes to 1.1.1:
   - Sharded-delta filenames now pad the shard index to a dynamic width, so they
     sort in shard order past 999 shards (was fixed-width `D3`).
   - Removed a dead `--from-profile` branch in the generator (profile generation
@@ -1165,7 +1178,7 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
 ### Fixed
 - Bulk `mutate` now fails at plan time with a clear, actionable `ArgException`
   when a plan needs more shrink/restream seeds than the corpus carries, instead
-  of crashing with a raw `ArgumentOutOfRangeException` (reported by CodeCompass:
+  of crashing with a raw `ArgumentOutOfRangeException` (for example
   `--edits 10` against a corpus with one shrink seed).
 
 ## [1.1.0] - 2026-10-02
@@ -1198,8 +1211,8 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
 
 ### Added
 - Oracle v1: seeded DAG call graph with `_meta.roots` and a reachable-fraction
-  dial (phase 1+3), indirect-edge ground truth with `indirectTruthSha` (phase 2),
-  and byte-mass ground truth via `--oracle-bytes` (phase 4).
+  dial, indirect-edge ground truth with `indirectTruthSha`, and byte-mass
+  ground truth via `--oracle-bytes`.
 - xUnit test suite (164 tests) and a `bench` oracle-v1 gate.
 
 ### Fixed
@@ -1211,41 +1224,41 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
 - `gen --from-profile` directory-count inflation and data-blob round-trip.
 
 ### Changed
-- `.gitignore` never commits local scan profiles of real trees (`private/`,
-  `*work-profile*.json`).
+- `.gitignore` never commits local scan profiles of real trees (`private/` and
+  a private-profile pattern).
 
 ## [1.0.6] - 2026-09-29
 
 ### Changed
-- Target `net8.0` (the fleet floor) instead of `net10.0`.
+- Target `net8.0` (the oldest supported .NET) instead of `net10.0`.
 
 ## [1.0.5] - 2026-09-29
 
 ### Added
 - `scan` / shape-profile: privacy-preserving characterize → regenerate, with a
-  design doc and CodeCarver + CodeCompass sign-off folded in.
+  design doc.
 
 ## [1.0.4] - 2026-09-27
 
 ### Added
 - mutate/churn v1 — delta manifests with the `--step` chain and `--through`
-  cumulative modes, with a design doc and CodeCompass sign-off.
+  cumulative modes, with a design doc.
 
 ## [1.0.3] - 2026-09-27
 
 ### Changed
-- Hardened the Batch 1/2 pathology presets after a review pass.
+- Hardened the pathology presets.
 
 ## [1.0.2] - 2026-09-27
 
 ### Added
-- Batch 2 pathology presets: `pathological-symbols` (expectedMiss) and
+- Pathology presets: `pathological-symbols` (expectedMiss) and
   `dup-content`.
 
 ## [1.0.1] - 2026-09-27
 
 ### Added
-- Batch 1 pathology presets and `_meta.populations`.
+- Pathology presets and `_meta.populations`.
 
 ## [1.0.0] - 2026-09-27
 
@@ -1254,10 +1267,28 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.5...HEAD
+[1.5.5]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.11...v1.5.0
+[1.4.11]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.10...v1.4.11
+[1.4.10]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.9...v1.4.10
+[1.4.9]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.8...v1.4.9
+[1.4.8]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.7...v1.4.8
+[1.4.7]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.6...v1.4.7
+[1.4.6]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.5...v1.4.6
+[1.4.5]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.4...v1.4.5
+[1.4.4]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.3...v1.4.4
+[1.4.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.3.2...v1.4.0
+[1.3.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.3.1...v1.3.2
+[1.3.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.2.0...v1.2.1

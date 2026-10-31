@@ -1,7 +1,7 @@
 namespace CodeSpawner.Profile;
 
 /// <summary>
-/// Privacy posture (docs/scan-design.md). <see cref="ClassLabeled"/> is the work-tree default: bytes are read
+/// Privacy posture (docs/scan-design.md). <see cref="ClassLabeled"/> is the default: bytes are read
 /// to assign a k-anonymized content-class ENUM per cluster, but no numeric content stats are emitted.
 /// </summary>
 public enum PrivacyPosture

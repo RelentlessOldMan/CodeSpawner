@@ -650,8 +650,8 @@ public class ProgramTests
     [Fact]
     public void Gen_InPlaceRegen_SameSeed_ByteIdentical_TreeAndManifest()
     {
-        // The regen-in-place guarantee the cross-machine / huge-scale workflow leans on (regen big corpora in
-        // place instead of copying them over SMB): re-running gen with the same args over its OWN output —
+        // The regen-in-place guarantee that lets you regenerate a big corpus elsewhere instead of copying it:
+        // re-running gen with the same args over its OWN output —
         // CodeSpawner recognizes its .codespawner marker and overwrites without --force — reproduces every file
         // byte-for-byte AND the manifest byte-for-byte. Index-stable parallel emission must not leak into output.
         using var tmp = new TempDir();
@@ -677,7 +677,7 @@ public class ProgramTests
         // Path-independence: the ground truth is corpus-relative. Two gens with identical args to DIFFERENT out
         // dirs produce byte-identical file content (keyed by relative path), and manifests that differ ONLY in the
         // absolute `_meta.corpusRoot` — every def/ref/edge/dup path is relative. Locks the invariant that nothing
-        // absolute leaks into the ground truth (what makes the cross-machine regen workflow sound).
+        // absolute leaks into the ground truth (what makes regenerating a corpus elsewhere, instead of copying it, sound).
         using var tmp = new TempDir();
         string a = Path.Combine(tmp.Path, "aaa");
         string b = Path.Combine(tmp.Path, "bbb");

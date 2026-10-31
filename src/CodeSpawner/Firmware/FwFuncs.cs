@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace CodeSpawner.Firmware;
 
-// The function truth (phase 2, docs/firmware-design.md "Functions"): C functions reached from the roots, as the
+// The function truth (docs/firmware-design.md "Function truth"): C functions reached from the roots, as the
 // documented link decides (ld.lld --gc-sections, C built -ffunction-sections -fdata-sections, no -u/-e). The graph's
 // nodes are input sections: each C function and global, each section of the assembly a build names, each section of
 // a prebuilt object. An input section is kept whole once any symbol in it is reached. min roots are firmware.roots,
@@ -85,7 +85,7 @@ internal sealed partial class FwSpec
         var union = new FnGraph();
         foreach (var u in _units.Concat(ReadWorld2())) ScanUnit(union, u);
 
-        // function names in headers too big to scan are open (Carver ruling Q2)
+        // function names in headers too big to scan are open
         var kNames = KHeaderNames(union.KHeaders, union.Nodes.Values.Where(n => n.IsFunc).Select(n => n.Name));
         foreach (var g in new[] { main, union })
         {
@@ -451,7 +451,7 @@ internal sealed partial class FwSpec
         }
     }
 
-    /// <summary>A function body's references. Inline asm (Carver ruling Q3): a name a branch or data directive
+    /// <summary>A function body's references. Inline asm: a name a branch or data directive
     /// names is a reference; any other name in the string only max follows.</summary>
     private static void Body(FnNode n, int tu, List<CTok> toks, int from, int to, Macros mac)
     {
@@ -606,9 +606,9 @@ internal sealed partial class FwSpec
                 else if (k == CK.P && s == ")") { if (--depth == 0) break; }
                 else if (k != CK.Id) continue;
                 else if (s.Trim('_') == "retain") n.Retain = true;
-                // used only stops the compiler dropping it; --gc-sections still may (Carver ruling Q6)
+                // used only stops the compiler dropping it; --gc-sections still may
                 else if (s.Trim('_') == "used") n.MaxRoot = true;
-                // a constructor's pointer sits in .init_array: kept if a script KEEPs it, else open (ruling Q7)
+                // a constructor's pointer sits in .init_array: kept if a script KEEPs it, else open
                 else if (s.Trim('_') == "constructor") { n.Sections.Add(".init_array"); n.MaxRoot = true; }
                 else if (s.Trim('_') == "destructor") { n.Sections.Add(".fini_array"); n.MaxRoot = true; }
                 else if (s.Trim('_') is "section" or "alias" && j + 2 < decl.Count && decl[j + 1].Is("(") && decl[j + 2].K == CK.Str)
@@ -923,7 +923,7 @@ internal sealed partial class FwSpec
     /// <summary>One assembled object: cpp (for .S/.sx: #if, #define, #include, comments), then gas (comments,
     /// .macro and .irp/.irpc/.rept expanded, .include followed, .if* on what it can decide). Each section is a
     /// node holding the references its statements make; each label and alias points at where it is defined. Every
-    /// name it says goes into <c>max</c>; those in comments and dead branches only there (Carver ruling Q1).</summary>
+    /// name it says goes into <c>max</c>; those in comments and dead branches only there.</summary>
     private sealed class Gas
     {
         private readonly FwSpec _s;
@@ -1305,7 +1305,7 @@ internal sealed partial class FwSpec
         }
 
         /// <summary>Labels into the graph (a .global/.weak one by name, else as obj:name); a reference to a .weak
-        /// name this object never defines does not pull anything in (Carver condition 4): max only.</summary>
+        /// name this object never defines does not pull anything in: max only.</summary>
         public void Finish()
         {
             var weakUndef = _weak.Where(w => !_labels.ContainsKey(w)).ToHashSet(StringComparer.Ordinal);
@@ -1338,7 +1338,7 @@ internal sealed partial class FwSpec
 
     /// <summary>A GNU linker script: every name it says (ENTRY, EXTERN, PROVIDE, assignments) is a root; each
     /// KEEP's section patterns keep the sections they match; patterns a <c>sym = .;</c> bracket holds without KEEP
-    /// are max roots (Carver ruling Q5).</summary>
+    /// are max roots.</summary>
     private void LdScan(int f, HashSet<string> min, List<string> keepGlobs, List<string> maxGlobs)
     {
         string s = StripBlockComments(Encoding.Latin1.GetString(File.ReadAllBytes(_files[f])));

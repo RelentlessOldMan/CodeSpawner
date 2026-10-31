@@ -23,7 +23,7 @@ public enum ContentClass
     Binary,                  // low printable ratio / high entropy
 }
 
-/// <summary>Parse-cost band a class carries, surfaced beside every archetype (CodeCarver, 2026-09-29).</summary>
+/// <summary>Parse-cost band a class carries, surfaced beside every archetype.</summary>
 public enum ParseCost
 {
     Cheap,      // skipped or trivially parsed — near-zero node minting

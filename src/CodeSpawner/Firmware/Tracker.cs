@@ -311,7 +311,7 @@ internal sealed class Tracker : ITokenSink
             if (_marks) _a.Called(id);
             if (_a.IsPaster(id, _run)) foreach (var f in _p.Frames) f.Marked = true;
         }
-        // rule W (CodeCarver, 1.4.11): a name only a carved define's body names, not called there, is named under max only
+        // the body-naming rule (docs/firmware-design.md): a name only a carved define's body names, not called there, is named under max only
         else if (_marks && _named && !(_carved && _run == 0)) _a.Named(id, _run);
     }
 

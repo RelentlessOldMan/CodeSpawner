@@ -230,7 +230,7 @@ public static class ManifestWriter
         bool fn = t.UnionMustKeepFunctions is not null;
         if (fn)
         {
-            // phase 2 (1.5.0): where execution starts, the other world's db, the function cases
+            // function truth: where execution starts, the other world's db, the function cases
             w.WriteStartArray("roots");
             foreach (var x in CodeSpawner.Firmware.FirmwareEmitter.Roots) w.WriteStringValue(x);
             w.WriteEndArray();
@@ -321,8 +321,8 @@ public static class ManifestWriter
         w.WriteEndObject();
     }
 
-    // The work carve's construction counts (docs/firmware-design.md "Work shape"): the flat fields CodeCarver asked for
-    // (1.4.11), then the use tree's in "tree". Verify recounts the class ones from the truth lists.
+    // The bulk carve's construction counts (docs/firmware-design.md "Bulk shape"), written under "work": the
+    // flat fields, then the use tree's in "tree". Verify recounts the class ones from the truth lists.
     private static void WriteWork(Utf8JsonWriter w, CodeSpawner.Firmware.FwWork k)
     {
         var wd = k.Wide;

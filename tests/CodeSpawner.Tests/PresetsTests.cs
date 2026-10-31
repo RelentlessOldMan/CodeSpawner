@@ -73,6 +73,23 @@ public class PresetsTests
         Assert.DoesNotContain("death", Program.UsageText);
     }
 
+    // The 1.5.5 rename: firmware-work is firmware-bulk, and --fw-work* parses as --fw-bulk*.
+    [Fact]
+    public void OldFirmwareWorkNames_AreHiddenAliases()
+    {
+        Assert.True(Presets.TryGet("firmware-work", out var a));
+        Assert.True(Presets.TryGet("firmware-bulk", out var b));
+        Assert.Equal(b, a);
+        Assert.DoesNotContain("firmware-work", Presets.Names);
+        Assert.DoesNotContain("fw-work", Program.UsageText);
+        var o = ArgParser.ParseGen(["--out", "x", "--firmware", "--fw-work", "--fw-work-defines", "1234", "--FW-WORK-keep-pct=2"]);
+        Assert.True(o.FwWork);
+        Assert.Equal((1234, 2.0), (o.FwWorkDefines, o.FwWorkKeepPct));
+        Assert.True(o.WasSet("fw-bulk-defines"));
+        // the old and the new spelling are the same option
+        Assert.Throws<ArgException>(() => ArgParser.ParseGen(["--out", "x", "--firmware", "--fw-bulk", "--fw-work"]));
+    }
+
     [Fact]
     public void TryGet_UnknownPreset_ReturnsFalse()
     {

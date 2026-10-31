@@ -6,7 +6,7 @@ namespace CodeSpawner.Tests;
 
 /// <summary>
 /// Manifest paths are repo-relative with forward slashes so the oracle stays valid whether the corpus is read
-/// locally (Windows) or over the SMB share. A backslash leaking into a manifest path breaks cross-host verify.
+/// locally (Windows) or over a network share. A backslash leaking into a manifest path breaks cross-host verify.
 /// </summary>
 public class PathUtilTests
 {

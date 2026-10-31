@@ -7,8 +7,8 @@ namespace CodeSpawner.Manifest;
 /// The canonical component digest of the indirect-edge ground truth + declared roots, surfaced as
 /// <c>_meta.indirectTruthSha</c>. It is DELIBERATELY separate from the frozen primary <c>prevTruthSha</c>
 /// (which stays untouched — no re-sign): a rewired indirect edge or a moved root trips THIS hash, catching
-/// silent truth-drift the primary digest can't see. The byte format is LOCKED with CodeCarver + CodeCompass
-/// (3-way chat, 2026-09-30); do not change it without re-agreeing:
+/// silent truth-drift the primary digest can't see. The byte format is FIXED: CodeCarver and
+/// CodeCompass reproduce it, so any change breaks them:
 ///
 ///   two sections, GS(0x1D) between them, both always present (empty = zero records):
 ///     indirectEdges: for each edge (dedup then ORDINAL sort):

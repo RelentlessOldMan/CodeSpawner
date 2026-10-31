@@ -13,7 +13,7 @@ namespace CodeSpawner.Generation;
 ///  - reachableFrac ∈ (0,1) → append DEAD nodes (unreachable from the root) as short dead chains until
 ///    reachable/total ≈ the target fraction → graded reduction assertions.
 ///
-/// Reachability here is the closure over direct edges from <see cref="Roots"/>; phase 2 folds indirect edges
+/// Reachability here is the closure over direct edges from <see cref="Roots"/>; the indirect-edge overlay folds indirect edges
 /// into the same closure. See docs/oracle-v1-design.md.
 /// </summary>
 public sealed class OracleGraph

@@ -314,19 +314,19 @@ public static class Program
                with a _meta.conflictTruthSha over [conflicts-3way, merged-clean]; see docs/diff-delta-design.md)
 
             PRESETS (bundled knob sets; your own knobs still override):
-              --preset huge          ~90 GB, ~50k files, 12 headers >1 GB (the huge repo) + the include web
+              --preset huge          ~90 GB, ~50k files, 12 headers >1 GB + the include web
               --preset huge-lite     all of huge's shapes in ~0.5 GB (32 MB giants; the web at huge's counts)
               --preset ci            ~1/100 counts, keeps >=1 pathology header (fast smoke)
               --preset memory        one giant header + a few includers (preprocessor-memory axis)
               --preset dense-band    dense sub-threshold headers (posting/trigram memory OOM shape)
-              --preset broad-token   hot token across a 2-8MB band (find_references + sidecar reads)
+              --preset broad-token   hot token across a 2-8MB band (find_references + block-selective reads)
               --preset long-lines    pathological long-line / no-newline files
               --preset encoding-mix  UTF-16/BOM/invalid-byte/non-ASCII encoding stress
               --preset many-tiny     tiny-file-dominated (walker / stat pressure)
               --preset pathological-symbols  token-paste (expected-miss)/long idents/deep nesting
               --preset dup-content   byte-identical groups (content-hash dedup / posting collapse)
               --preset firmware      a bare tree + the firmware corpus (big paste-macro headers, carve truth)
-              --preset firmware-work the work-shaped carve at --scale + a small correctness part
+              --preset firmware-bulk a production-sized carve at --scale + a small correctness part
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly; full table: docs/knobs.md):
               --out <dir>            output directory (required; cleared if it exists)
@@ -406,24 +406,24 @@ public static class Program
               --fw-dense-headers <n>     dense headers (1 MB..maxParseBytes, mostly defines; default 200)
               --fw-chain-max <n>         longest forwarder chain (default 40)
               --fw-db-paths <absolute|relative>   how fw-build/compile_commands.json names paths (default absolute)
-              --fw-work                  add the work-shaped carve (fw/work/wreg_N.h; counts default to the 1x shape)
-              --fw-work-defines <n>      register defines in the work headers (default 122300000)
-              --fw-work-pasters <n>      work paste macros (default 5000)
-              --fw-work-forwarders <n>   work forwarders, chains down to a paster (default 15000)
-              --fw-work-depth <n>        levels of the use tree, one a pass (default 6; not scaled)
-              --fw-work-growth <n>       pieces after pass 2 over pass 1 (default 9; not scaled)
-              --fw-work-keep-pct <p>     percent of work defines kept, fractions allowed (default 0.018)
-              --fw-work-decoy-pct <p>    percent that are cross decoys: global pools keep them, rule 3' drops (default 1)
-              --fw-work-half-pct <p>     percent that are half decoys, one piece only (default 1)
-              --fw-work-patterns <n>     wide paste macros named in kept roots' bodies, one wildcard each (default 2300)
-              --fw-work-near-pct <p>     percent that are near misses of a pattern, dropped (default 6)
-              --fw-work-named-pct <p>    percent named only by a pattern-matched body, open (default 11)
-              --fw-work-body-pasters <n> paste macros for matched bodies, a tenth used (default 2600000)
-              --fw-work-body-forwarders <n>  forwarders for matched bodies, a tenth used (default 2900000)
-              --fw-work-body-uses <n>    paste uses in matched bodies (default 1800000)
-              --fw-work-pieces <n>       distinct pieces those uses paste (default 500000)
-              --fw-work-uncovered <n>    .c files outside the compile db (default 4340)
-              --fw-work-asm <n>          .s/.asm files outside the compile db (default 21, at least 2)
+              --fw-bulk                  add the bulk carve (fw/work/wreg_N.h; counts default to the 1x shape)
+              --fw-bulk-defines <n>      register defines in the bulk headers (default 122300000)
+              --fw-bulk-pasters <n>      bulk paste macros (default 5000)
+              --fw-bulk-forwarders <n>   bulk forwarders, chains down to a paster (default 15000)
+              --fw-bulk-depth <n>        levels of the use tree, one a pass (default 6; not scaled)
+              --fw-bulk-growth <n>       pieces after pass 2 over pass 1 (default 9; not scaled)
+              --fw-bulk-keep-pct <p>     percent of bulk defines kept, fractions allowed (default 0.018)
+              --fw-bulk-decoy-pct <p>    percent that are cross decoys: tree-wide pools keep them, per-use pairing drops (default 1)
+              --fw-bulk-half-pct <p>     percent that are half decoys, one piece only (default 1)
+              --fw-bulk-patterns <n>     wide paste macros named in kept roots' bodies, one wildcard each (default 2300)
+              --fw-bulk-near-pct <p>     percent that are near misses of a pattern, dropped (default 6)
+              --fw-bulk-named-pct <p>    percent named only by a pattern-matched body, open (default 11)
+              --fw-bulk-body-pasters <n> paste macros for matched bodies, a tenth used (default 2600000)
+              --fw-bulk-body-forwarders <n>  forwarders for matched bodies, a tenth used (default 2900000)
+              --fw-bulk-body-uses <n>    paste uses in matched bodies (default 1800000)
+              --fw-bulk-pieces <n>       distinct pieces those uses paste (default 500000)
+              --fw-bulk-uncovered <n>    .c files outside the compile db (default 4340)
+              --fw-bulk-asm <n>          .s/.asm files outside the compile db (default 21, at least 2)
 
             Flags take --flag, --flag=false or --flag false; values take --knob v or --knob=v.
             '<command> --help' prints this help.

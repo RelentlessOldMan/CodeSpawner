@@ -3,8 +3,8 @@ using System.Text;
 
 namespace CodeSpawner.Firmware;
 
-// Phase 2 (1.5.0, plain firmware only): the reset path, assembly, linker scripts and prebuilt objects, so the
-// function truth (docs/firmware-design.md "Functions") has roots to reach from. Every name here is spelled by its
+// The function truth's tree (plain firmware only): the reset path, assembly, linker scripts and prebuilt objects, so the
+// function truth (docs/firmware-design.md "Function truth") has roots to reach from. Every name here is spelled by its
 // class: Z…Z must-drop, Y…Y open, anything else must-keep.
 internal static partial class FirmwareEmitter
 {
@@ -15,7 +15,7 @@ internal static partial class FirmwareEmitter
     public static readonly string[] Roots = [Reset];
     private static readonly string[] ArmCc = ["clang", "--target=arm-none-eabi", "-mcpu=cortex-m4"];
 
-    /// <summary>The C files phase 2 adds to the main build (fw-relative); world.c is also in the world-2 db.</summary>
+    /// <summary>The C files the function truth adds to the main build (fw-relative); world.c is also in the world-2 db.</summary>
     private static readonly string[] Phase2Units = ["src/main.c", "src/handlers.c", "src/fw_attr.c", "src/world.c"];
     /// <summary>The assembly the main build names (fw-relative); asm/spare.s is named by none.</summary>
     private static readonly string[] Phase2Asm = ["asm/startup.S", "asm/fw_util.s", "asm/big_0.s"];

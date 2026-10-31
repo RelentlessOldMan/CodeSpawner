@@ -16,7 +16,7 @@ public static class ArgParser
         var o = new GenOptions { Out = "" };
         var c = new Cursor(args, presetTokens);
         var given = new HashSet<string>(StringComparer.Ordinal);
-        // knobs the user typed (not a preset's own): --preset firmware-work --firmware false switches the preset's
+        // knobs the user typed (not a preset's own): --preset firmware-bulk --firmware false switches the preset's
         // firmware off without its fw-* tokens counting as stray
         var userGiven = new HashSet<string>(StringComparer.Ordinal);
         while (c.Next())
@@ -55,7 +55,7 @@ public static class ArgParser
                 case "manifest": o.Manifest = B(); break;
                 case "force": o.Force = B(); break;
                 case "io-parallelism": o.IoParallelism = I(); break;
-                // Batch 1 pathologies:
+                // pathologies:
                 case "dense-headers": o.DenseHeaders = I(); break;
                 case "dense-under-mb": o.DenseUnderMb = I(); break;
                 case "broad-token-files": o.BroadTokenFiles = I(); break;
@@ -104,24 +104,24 @@ public static class ArgParser
                 case "fw-big-mb": o.FwBigMb = I(); break;
                 case "fw-chain-max": o.FwChainMax = I(); break;
                 case "fw-db-paths": o.FwDbPaths = Val().ToLowerInvariant(); break;
-                case "fw-work": o.FwWork = B(); break;
-                case "fw-work-defines": o.FwWorkDefines = I(); break;
-                case "fw-work-pasters": o.FwWorkPasters = I(); break;
-                case "fw-work-forwarders": o.FwWorkForwarders = I(); break;
-                case "fw-work-depth": o.FwWorkDepth = I(); break;
-                case "fw-work-growth": o.FwWorkGrowth = I(); break;
-                case "fw-work-keep-pct": o.FwWorkKeepPct = D(); break;
-                case "fw-work-decoy-pct": o.FwWorkDecoyPct = D(); break;
-                case "fw-work-half-pct": o.FwWorkHalfPct = D(); break;
-                case "fw-work-patterns": o.FwWorkPatterns = I(); break;
-                case "fw-work-near-pct": o.FwWorkNearPct = D(); break;
-                case "fw-work-named-pct": o.FwWorkNamedPct = D(); break;
-                case "fw-work-body-pasters": o.FwWorkBodyPasters = I(); break;
-                case "fw-work-body-forwarders": o.FwWorkBodyForwarders = I(); break;
-                case "fw-work-body-uses": o.FwWorkBodyUses = I(); break;
-                case "fw-work-pieces": o.FwWorkPieces = I(); break;
-                case "fw-work-uncovered": o.FwWorkUncovered = I(); break;
-                case "fw-work-asm": o.FwWorkAsm = I(); break;
+                case "fw-bulk": o.FwWork = B(); break;
+                case "fw-bulk-defines": o.FwWorkDefines = I(); break;
+                case "fw-bulk-pasters": o.FwWorkPasters = I(); break;
+                case "fw-bulk-forwarders": o.FwWorkForwarders = I(); break;
+                case "fw-bulk-depth": o.FwWorkDepth = I(); break;
+                case "fw-bulk-growth": o.FwWorkGrowth = I(); break;
+                case "fw-bulk-keep-pct": o.FwWorkKeepPct = D(); break;
+                case "fw-bulk-decoy-pct": o.FwWorkDecoyPct = D(); break;
+                case "fw-bulk-half-pct": o.FwWorkHalfPct = D(); break;
+                case "fw-bulk-patterns": o.FwWorkPatterns = I(); break;
+                case "fw-bulk-near-pct": o.FwWorkNearPct = D(); break;
+                case "fw-bulk-named-pct": o.FwWorkNamedPct = D(); break;
+                case "fw-bulk-body-pasters": o.FwWorkBodyPasters = I(); break;
+                case "fw-bulk-body-forwarders": o.FwWorkBodyForwarders = I(); break;
+                case "fw-bulk-body-uses": o.FwWorkBodyUses = I(); break;
+                case "fw-bulk-pieces": o.FwWorkPieces = I(); break;
+                case "fw-bulk-uncovered": o.FwWorkUncovered = I(); break;
+                case "fw-bulk-asm": o.FwWorkAsm = I(); break;
                 // scan/shape-profile regeneration:
                 case "from-profile": o.FromProfile = Val(); break;
                 case "with-oracle": o.WithOracle = B(); break;
@@ -284,28 +284,28 @@ public static class ArgParser
             ("fw-families", o.FwFamilies, 0, 100_000_000), ("fw-pasters", o.FwPasters, 0, 1_000_000_000),
             ("fw-dense-headers", o.FwDenseHeaders, 0, 100_000), ("fw-big-mb", o.FwBigMb, 20, 2000),
             ("fw-chain-max", o.FwChainMax, 2, 10_000),
-            ("fw-work-defines", o.FwWorkDefines, 0, 1_000_000_000), ("fw-work-pasters", o.FwWorkPasters, 1, 100_000_000),
-            ("fw-work-forwarders", o.FwWorkForwarders, 0, 100_000_000), ("fw-work-depth", o.FwWorkDepth, 1, 64),
-            ("fw-work-growth", o.FwWorkGrowth, 2, 1000), ("fw-work-patterns", o.FwWorkPatterns, 0, 1_000_000),
-            ("fw-work-body-pasters", o.FwWorkBodyPasters, 0, 100_000_000), ("fw-work-body-forwarders", o.FwWorkBodyForwarders, 0, 100_000_000),
-            ("fw-work-body-uses", o.FwWorkBodyUses, 0, 100_000_000), ("fw-work-pieces", o.FwWorkPieces, 0, 100_000_000),
-            ("fw-work-uncovered", o.FwWorkUncovered, 0, 1_000_000), ("fw-work-asm", o.FwWorkAsm, 0, 100_000),
+            ("fw-bulk-defines", o.FwWorkDefines, 0, 1_000_000_000), ("fw-bulk-pasters", o.FwWorkPasters, 1, 100_000_000),
+            ("fw-bulk-forwarders", o.FwWorkForwarders, 0, 100_000_000), ("fw-bulk-depth", o.FwWorkDepth, 1, 64),
+            ("fw-bulk-growth", o.FwWorkGrowth, 2, 1000), ("fw-bulk-patterns", o.FwWorkPatterns, 0, 1_000_000),
+            ("fw-bulk-body-pasters", o.FwWorkBodyPasters, 0, 100_000_000), ("fw-bulk-body-forwarders", o.FwWorkBodyForwarders, 0, 100_000_000),
+            ("fw-bulk-body-uses", o.FwWorkBodyUses, 0, 100_000_000), ("fw-bulk-pieces", o.FwWorkPieces, 0, 100_000_000),
+            ("fw-bulk-uncovered", o.FwWorkUncovered, 0, 1_000_000), ("fw-bulk-asm", o.FwWorkAsm, 0, 100_000),
         })
             if (v < min || v > max) throw new ArgException($"--{k} must be in {min}..{max}, got {v}");
         foreach (var (k, v, min) in new (string, double, double)[]
         {
-            ("fw-work-keep-pct", o.FwWorkKeepPct, 0.000001), ("fw-work-decoy-pct", o.FwWorkDecoyPct, 0),
-            ("fw-work-half-pct", o.FwWorkHalfPct, 0), ("fw-work-near-pct", o.FwWorkNearPct, 0), ("fw-work-named-pct", o.FwWorkNamedPct, 0),
+            ("fw-bulk-keep-pct", o.FwWorkKeepPct, 0.000001), ("fw-bulk-decoy-pct", o.FwWorkDecoyPct, 0),
+            ("fw-bulk-half-pct", o.FwWorkHalfPct, 0), ("fw-bulk-near-pct", o.FwWorkNearPct, 0), ("fw-bulk-named-pct", o.FwWorkNamedPct, 0),
         })
             if (!(v >= min && v <= 100)) throw new ArgException($"--{k} must be in {min.ToString(System.Globalization.CultureInfo.InvariantCulture)}..100, got {v.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         if (o.FwDbPaths is not ("absolute" or "relative")) throw new ArgException($"--fw-db-paths must be absolute or relative, got '{o.FwDbPaths}'");
         if (!o.FwWork)
         {
-            var strayWork = given.Where(k => k.StartsWith("fw-work-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
-            if (strayWork is not null) throw new ArgException($"--{strayWork} shapes the work carve, which is off; add --fw-work");
+            var strayWork = given.Where(k => k.StartsWith("fw-bulk-", StringComparison.Ordinal)).Order(StringComparer.Ordinal).FirstOrDefault();
+            if (strayWork is not null) throw new ArgException($"--{strayWork} shapes the bulk carve, which is off; add --fw-bulk");
         }
         else if (o.FwWorkKeepPct + o.FwWorkDecoyPct + o.FwWorkHalfPct + o.FwWorkNearPct + o.FwWorkNamedPct > 100)
-            throw new ArgException("--fw-work-keep-pct + -decoy-pct + -half-pct + -near-pct + -named-pct must be at most 100");
+            throw new ArgException("--fw-bulk-keep-pct + -decoy-pct + -half-pct + -near-pct + -named-pct must be at most 100");
     }
 
     /// <summary>The include-web knobs (docs/include-web-design.md). They shape the web only, so without --web-units
@@ -451,7 +451,7 @@ public static class ArgParser
         var o = new Mutation.MutateOptions { Corpus = "" };
         var c = new Cursor(args);
         var given = new HashSet<string>(StringComparer.Ordinal);
-        // knobs the user typed (not a preset's own): --preset firmware-work --firmware false switches the preset's
+        // knobs the user typed (not a preset's own): --preset firmware-bulk --firmware false switches the preset's
         // firmware off without its fw-* tokens counting as stray
         var userGiven = new HashSet<string>(StringComparer.Ordinal);   // knobs the user typed, to refuse ones the mode ignores
         while (c.Next())
@@ -549,6 +549,8 @@ public static class ArgParser
             int eq = k.IndexOf('=');
             if (eq >= 0) { _inline = k[(eq + 1)..]; k = k[..eq]; }
             Key = k.ToLowerInvariant();
+            // The 1.5.5 rename: --fw-work* still parses as --fw-bulk*, unadvertised (it changes no corpus byte).
+            if (Key.StartsWith("fw-work", StringComparison.Ordinal)) Key = "fw-bulk" + Key["fw-work".Length..];
             // A repeated option used to be last-wins without a word. A preset's own tokens (the first userFrom
             // args) are exempt: the user overriding them is the point.
             if (_i >= userFrom && !_seen.Add(Key)) throw new ArgException($"--{Key} is given twice");

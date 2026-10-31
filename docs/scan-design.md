@@ -1,12 +1,6 @@
-# `scan` / shape-profile — design doc
+# Scan and profiles
 
-**Status:** BUILT (v1, 2026-09-29) — both consumers signed off (CodeCompass + CodeCarver), design frozen and
-implemented. `scan` + `gen --from-profile` (shape replication + `--with-oracle` + `--oracle-scale`) ship in
-`src/CodeSpawner/{Scan,Profile}` and `Generation/{ProfileGenerator,ArchetypeSynthesizer,OracleOverlay}.cs`.
-Validated: profile determinism, privacy (numbers-only, no path/identifier/content leak), round-trip
-class-distribution fidelity, and oracle `verify` PASS. See "Implementation status" at the end.
-
-Goal: a privacy-preserving **characterize → regenerate** round-trip. Run `scan`
+`scan` and `gen --from-profile` are a privacy-preserving **characterize → regenerate** round-trip. Run `scan`
 against a real (proprietary) tree, get a numbers-only **shape profile**, carry it out, and
 `gen --from-profile` rebuilds a generic look-alike that reproduces the tree's *cost and shape* — with
 **zero proprietary information** in the profile. The profile is the direct machine interchange (no
@@ -17,23 +11,25 @@ re-describing).
 - `codespawner scan <tree> --out profile.json [--structure-only] [--content-stats] [--min-cluster N] [--sample N]`
   Read-only, offline. Never writes into `<tree>`. Emits a small JSON shape profile. Files it cannot read
   (and the contents of directories it cannot list) are left out, and the run prints how many.
-- `codespawner gen --from-profile profile.json --out <dir> [--seed S] [--with-oracle]`
+- `codespawner gen --from-profile profile.json --out <dir> [--seed S] [--with-oracle] [--oracle-scale] [--oracle-chain N]`
   Synthesizes a generic corpus matching the profile. `--with-oracle` overlays the ground-truth spine.
+
+The code lives in `src/CodeSpawner/Scan/` (`Scanner`, `ContentClassifier`, `TrigramMeter`, `IncludeAggregate`),
+`src/CodeSpawner/Profile/` (model, reader, posture-gated streaming writer) and
+`src/CodeSpawner/Generation/` (`ProfileGenerator`, `ArchetypeSynthesizer`, `OracleOverlay`).
 
 ## Privacy model (the whole point — must be airtight)
 
-Three postures, resolved with CodeCompass (2026-09-29). The **class-labeled default** is the work-tree
-default: it keeps the single most cost-driving signal (the content-class enum) while emitting no derived
+Three postures. The **class-labeled default** is meant for private trees: it keeps the single most cost-driving signal (the content-class enum) while emitting no derived
 content numbers, so the profile stays eyeball-clean as "labels + counts, nothing content-derived."
 
 | Posture | Reads bytes? | Emits | Use |
 |---|---|---|---|
 | `--structure-only` | **No** | size/type/dir/structure only | max paranoia |
-| **default (class-labeled)** | yes, to classify | structure + k-anonymized content-class **enum** per cluster; **no numeric content stats** | work-tree default |
+| **default (class-labeled)** | yes, to classify | structure + k-anonymized content-class **enum** per cluster; **no numeric content stats** | default (private trees) |
 | `--content-stats` (opt in) | yes | above + numeric histograms (defineFrac, identUniqueRatio, entropy, avgLineLen, …) | trusted trees / max fidelity |
 
-This retires the old "balanced is the default." Balanced (numeric content stats) is now **opt-in**. The
-class label survives everywhere except `--structure-only` — it's content-*derived* but content-*free* (an
+Numeric content stats are **opt-in**. The class label survives everywhere except `--structure-only` — it's content-*derived* but content-*free* (an
 enum, k-anonymized per cluster), and it's the part that most changes a consumer's cost.
 
 **NEVER stored, ever (any posture):** file names, directory names, paths, identifiers, string/comment text,
@@ -47,7 +43,7 @@ Hardening:
   same way: an extension fewer than N files share is counted under `(other)`, and so is any suffix that
   isn't extension-shaped (`^\.[a-z0-9_+-]{1,16}$`), since it is part of a file name. A dotfile (`.name`, all
   name) counts as `(dotfile)`. An extension outside the common C/C++/build set must also appear in at least
-  3 directories (1.1.13): a suffix confined to fewer is more likely a person's or project's name
+  3 directories: a suffix confined to fewer is more likely a person's or project's name
   (`notes.jsmith`) than a file type, so it folds into `(other)`.
 - **Rounding / bucketing** — sizes and ratios are bucketed/rounded; no exact per-file values leak.
   Archetype p50/p90/max (each one file's size) are rounded to 3 significant digits.
@@ -69,31 +65,33 @@ Hardening:
 
 ### Cost-relevant metrics (consumer dimensions — cost, not byte size)
 
-**Two headlines, not one** (CodeCompass, 2026-09-29): `parsedSourceBytes` captures the clang/semantic
+**Two headlines, not one:** `parsedSourceBytes` captures the clang/semantic
 sub-cost, but a whole-tree indexer's total cost is driven more by total bytes + trigram density + symbol
 extraction. So the profile carries a parse headline AND an index headline.
 
 - **`parsedSourceBytes`** *(parse headline, class-decomposed)*: total bytes of parseable source = `.c/.cpp` +
   headers under the streaming cap that are NOT define-dense. Parse-time predictor (~1 MB/s). Reported as ONE
   headline **decomposed by content class**, each class carrying a `heavy`/`cheap` flag — `inline-function-heavy`
-  surfaced explicitly (CodeCarver, 2026-09-29: `#define`-dense is auto-skipped and mints no graph nodes, but
+  surfaced explicitly (to a carver, `#define`-dense is auto-skipped and mints no graph nodes, but
   inline-fn parses in full and mints real function/call nodes, so its bytes are the single most predictive
   number for the blowup; `enum-struct-table` + `template-metaprogramming` also carry `heavy`). Not a second
   free-floating scalar — a decomposition of the one headline.
 - **`symbolDensity` per archetype** *(graph-RAM axis — peak memory, not parse time)*: `functionsPerKB`,
-  `callsPerFunction`, `globalRefsPerFile`. CodeCarver's real blowup was a NODE-count explosion; peak graph RAM
+  `callsPerFunction`, `globalRefsPerFile`. A carver's typical blowup is a NODE-count explosion; peak graph RAM
   tracks symbol/edge density, so two trees with equal `parsedSourceBytes` but 10× call density cost very
   different memory. Emitted as a **coarse `low`/`med`/`high` ordinal in the class-labeled DEFAULT** (a 3-way
   ordinal leaks no more than the content-class label — no names/tokens — so it's consistent with the default
   posture and reproduces the primary failure mode on the profile people actually run); precise numerics gated
-  behind `--content-stats`. Bucket thresholds are **fixed + documented** so a coarse profile still regenerates
+  behind `--content-stats`. Bucket thresholds are **fixed** so a coarse profile still regenerates
   a tree in the right RAM ballpark, and are read off the **same single-pass heuristic** that assigns the
-  content class (density + class derived from one read).
+  content class (density + class derived from one read). `low` is below the first threshold, `high` at or
+  above the second: `functionsPerKB` 0.5 / 2.0, `callsPerFunction` 1 / 5, `globalRefsPerFile` 100 / 1000.
 - **`totalIndexedBytes`** *(index headline)*: total bytes the indexer ingests across the whole polyglot tree
   (not just parsed C/C++), so gen doesn't under-shoot index build/size.
 - **Trigram cost, per-archetype (+ global roll-up)** — reproduces index size + merge/flush cadence:
-  - `distinctTrigramEstimate` — HLL cardinality of byte 3-grams = distinct-key count. One HLL per archetype,
-    zero content stored.
+  - `distinctTrigramEstimate` — distinct byte 3-grams = distinct-key count, counted exactly with a 2 MB
+    presence bitset (one bit per possible trigram). One per archetype plus a whole-tree union, zero content
+    stored.
   - `trigramOccurrences` — total 3-gram occurrence count (≈ bytes) = posting-list length. Cardinality alone
     under-models the repetitive-blob case (few keys, millions of positions each); on-disk size ≈
     distinctTrigrams × avg-posting-length, so both numbers are required.
@@ -114,7 +112,7 @@ Each archetype = `{ label(generic), extension, count, sizeDistribution, contentM
 
 ## Content classification — reproduce *what's inside*, not just the byte count
 
-CodeCarver's trap: **matching sizes but not content**. A 10 MB header of `#define`s and a 10 MB header of
+The trap is **matching sizes but not content**. A 10 MB header of `#define`s and a 10 MB header of
 inline functions cost a carver wildly different amounts; only the latter still hurts. So every archetype
 carries a **content class**, detected with generic, content-free line/token heuristics:
 
@@ -132,30 +130,29 @@ carries a **content class**, detected with generic, content-free line/token heur
 | `data-blob-repetitive` | high-byte, low-symbol + low trigram entropy | cheap (low cardinality) |
 | `text` / `binary` | printable ratio / entropy | n/a |
 
-Two of these came from CodeCompass (2026-09-29): the `data-blob` entropy split is an index-cost axis
-orthogonal to parse cost; `minified-longline` and `template-metaprogramming` are cost paths that
-`generic-code`/`inline-function-heavy` would otherwise mask. `template-metaprogramming` is **labeled by scan
-now**; `gen --from-profile` reproduces it only once the C++ profile lands (parked) — until then it degrades
-to `inline-function-heavy` with a logged note so parse cost is at least in the right ballpark.
+The `data-blob` entropy split is an index-cost axis orthogonal to parse cost; `minified-longline` and
+`template-metaprogramming` are cost paths that `generic-code`/`inline-function-heavy` would otherwise mask.
+`template-metaprogramming` is **labeled by scan**, but `gen --from-profile` does not synthesize it: it degrades
+to `inline-function-heavy` with a logged note, so parse cost is at least in the right ballpark.
 
 Extra content features per archetype (numbers only): line count, avg/max line length, blank fraction,
 comment fraction, `#include` fraction, **identifier-uniqueness ratio** (distinct/total tokens) and **avg
 identifier length** (captures dense-unique register maps and long-ident pathologies — computed, then
 discarded), encoding, BOM, newline style.
 
-## Profile schema (sketch)
+## Profile schema (sketch, illustrative values)
 
 ```json
 {
   "_meta": { "profileVersion": 1, "scannedAt": "<date>", "minCluster": 5, "posture": "class-labeled" },
-  "totals": { "files": 51873, "bytes": 96500000000,
-              "parsedSourceBytes": 175000000, "totalIndexedBytes": 41000000000,
-              "distinctTrigramEstimate": 210000000, "trigramOccurrences": 40800000000 },
-  "sizeHistogram": [ { "bucket": "100MB-1GB", "files": 168, "bytes": 88000000000 }, … ],
-  "extensions": [ { "ext": ".h", "files": 9500, "bytes": 90000000000 }, … ],
+  "totals": { "files": 50000, "bytes": 100000000000,
+              "parsedSourceBytes": 200000000, "totalIndexedBytes": 40000000000,
+              "distinctTrigramEstimate": 200000000, "trigramOccurrences": 40000000000 },
+  "sizeHistogram": [ { "bucket": "100MB-1GB", "files": 150, "bytes": 90000000000 }, … ],
+  "extensions": [ { "ext": ".h", "files": 10000, "bytes": 90000000000 }, … ],
   "headers": {
-    "sizeBuckets": { "gt20MB": 178, "1to20MB": 2600, "lt1MB": 7400 },
-    "defineFractionHistogram_ge1MB": [ { "range": "0.9-1.0", "count": 178 }, … ]
+    "sizeBuckets": { "gt20MB": 150, "1to20MB": 2500, "lt1MB": 7500 },
+    "defineFractionHistogram_ge1MB": [ { "range": "0.9-1.0", "count": 150 }, … ]
   },
   "includes": {
     "fanoutHistogram": { "0-4": 3100, "5-16": 5200, "17-64": 1050, "65+": 150 },
@@ -165,7 +162,7 @@ discarded), encoding, BOM, newline style.
   },
   "dirs": { "count": 5700, "depthHistogram": {…}, "fanoutHistogram": {…}, "filesPerDirHistogram": {…} },
   "archetypes": [
-    { "label": "a1", "extension": ".h", "count": 178, "class": "preprocessor-dense", "parseCost": "cheap",
+    { "label": "a1", "extension": ".h", "count": 150, "class": "preprocessor-dense", "parseCost": "cheap",
       "sizeDistribution": { "p50": 115000000, "p90": 120000000, "max": 130000000 },
       "trigram": { "distinctEstimate": 4200000, "occurrences": 20800000000 },
       "symbolDensity": { "functionsPerKB": "low", "callsPerFunction": "low", "globalRefsPerFile": "high" },
@@ -190,85 +187,32 @@ synthesized to the archetype's **class + feature vector** — e.g. `preprocessor
 `#define`s at the measured density and identifier-uniqueness; `inline-function-heavy` emits generic inline
 function bodies (so parse cost matches); `tabular-data` emits csv rows; etc. Files scatter into a
 synthesized dir tree matching the depth histogram, weighted so the files-per-dir histogram comes back too
-(each directory is dealt a bucket in the measured proportions; before 1.1.11 files were spread uniformly).
-Deterministic via `--seed`. All identifiers,
-paths, and content are generic and fake.
+(each directory is dealt a bucket in the measured proportions). Per-class synthesizers emit content that
+re-classifies to the same class (round-trip stable), each file ending at the line boundary nearest its drawn
+size, never below the least that still re-classifies (66 bytes for generic code, 119 for inline-heavy).
+Deterministic via `--seed`. A scan of the same tree gives the same profile apart from `scannedAt`. All
+identifiers, paths, and content are generic and fake.
 
 ### Fidelity modes
 - **Shape replication (default):** reproduces size/type/dir/content-class/cost. Generic content, no answer
   key. Answers "does my tool handle a tree shaped like this?"
 - **`--with-oracle` (shape + oracle overlay):** also injects the ground-truth spine (`func_i` call chain,
-  `hot_shared`, `vendor_gated`, `expectedMiss`) with a manifest, so `verify` and CodeCarver's
-  soundness+precision oracle run *at the real tree's cost/shape*. Lets a carver catch correctness
-  regressions that only appear at realistic scale/content — the high-value mode for CodeCarver/CodeCompass.
-  **Spine size (CodeCarver, 2026-09-29):** default **COMPACT** — small correctness-focused files, so the
+  `hot_shared`, `vendor_gated`, `expectedMiss`) with a manifest, so `verify` and a carver's
+  soundness+precision oracle (CodeCarver's, for example) run *at the real tree's cost/shape*. Lets a carver or
+  indexer catch correctness regressions that only appear at realistic scale/content.
+  **Spine size:** default **COMPACT** — small correctness-focused files, so the
   constantly-run correctness tier stays fast. An opt-in **size knob** drives the call-graph archetype's file
-  size from the SAME measured `.c` distribution from scan (not an arbitrary N) for periodic scale runs. **Hard
+  size from the SAME measured `.c` distribution from scan (not an arbitrary N) for periodic scale runs; that knob
+  is `--oracle-scale`. **Hard
   constraint:** the size knob inflates function BODIES ONLY (more intra-fn statements / generic filler carrying
   the measured `symbolDensity`) and adds ZERO call edges / defs / refs — the `func_i` spine + `expectedMiss`
   stay invariant to size, so the reachability the oracle exists to check is never perturbed. Size and spine are
   orthogonal by construction.
 
-## Open questions for the consumers
+## Limitations
 
-**CodeCompass — RESOLVED 2026-09-29 (via `claudes-chatroom`):**
-- Q3 (shape vocabulary): no frozen schema to copy, but scan mirrors doctor/probe names where they measure the
-  same thing — `candidateTUs`/`parsedTUs`/`unresolvedIncludes`/`memoryStopped`, `filesOverCap`/
-  `filesSymbolSkipped`, sidecar boundary at 8 MB, probe's `peakRSS`/tail-slope/semantic-vs-lexical/
-  determinism.
-- Q4 (missing classes): added `data-blob` entropy split, `minified-longline`, `template-metaprogramming`;
-  include fan-out promoted to a first-class stat.
-- Q5 (privacy): three postures, **class-labeled is the work-tree default**; numeric content stats are opt-in
-  (`--content-stats`).
-- Also folded in: two headlines (`parsedSourceBytes` + `totalIndexedBytes`), per-archetype trigram pair
-  (`distinctEstimate` + `occurrences`), 2-hop include fan-out with `unresolvedIncludeRate` +
-  `duplicateBasenameAmbiguity`.
-
-**CodeCarver — RESOLVED 2026-09-29 (via `claudes-chatroom`), thumbs UP:**
-- Q1: keep `parsedSourceBytes` as THE headline, **decomposed by content class** with a per-class
-  `heavy`/`cheap` flag and `inline-function-heavy` surfaced — not a second scalar.
-- Q2: `--with-oracle` spine defaults **compact**; opt-in size knob from the measured `.c` distribution
-  inflates function BODIES only, spine + `expectedMiss` invariant.
-- Gap CodeCarver caught: peak graph RAM tracks **symbol/edge density**, not bytes. Added `symbolDensity`
-  (`functionsPerKB`/`callsPerFunction`/`globalRefsPerFile`) — **coarse low/med/high in the class-labeled
-  default** (so the profile people actually run reproduces the primary failure mode), precise numerics under
-  `--content-stats`, with fixed+documented bucket thresholds read off the same single-pass content-class
-  heuristic.
-
-## Scope
-
-- **v1:** `scan` (3 postures), profile schema, `gen --from-profile` shape replication with the content-class
-  synthesizer, `--with-oracle` overlay, determinism.
-- **Later:** richer per-include graph modeling; C++-specific content classes; profile "diff" (compare two
-  trees / drift over time).
-
-## Implementation status (v1, 2026-09-29)
-
-Built and validated on the JIT path (full AOT bench pending a free machine — gated behind Overwatch):
-
-- **`scan <tree> --out profile.json`** — read-only walk; `--structure-only` / default class-labeled /
-  `--content-stats`; `--min-cluster` (k-anonymity fold into `other`); `--sample` (per-cluster cap).
-  `src/CodeSpawner/Scan/{Scanner,ContentClassifier,TrigramMeter,IncludeAggregate}.cs`.
-- **Profile** (`profileVersion 1`) — `src/CodeSpawner/Profile/{ProfileModel,ContentClass,ProfileWriter,
-  ProfileReader}.cs`. Streaming `Utf8JsonWriter`, posture-gated. Two headlines, per-archetype trigram pair,
-  class-decomposed `parsedSourceByClass`, include fan-out (2-hop) with `unresolvedIncludeRate` +
-  `duplicateBasenameAmbiguity`, coarse `symbolDensity` bands (exact under `--content-stats`).
-- **`gen --from-profile <p> --out <dir> [--with-oracle] [--oracle-scale] [--oracle-chain N]`** —
-  `Generation/{ProfileGenerator,ArchetypeSynthesizer,OracleOverlay}.cs`. Per-class synthesizers emit content
-  that re-classifies to the same class (round-trip stable), each file ending at the line boundary nearest its
-  drawn size (since 1.1.9; before, whole units overshot it by up to ~1.2 KB), never below the least that
-  still re-classifies (66 bytes for generic code, 119 for inline-heavy). `template-metaprogramming` degrades to
-  `inline-function-heavy` with a logged note. Oracle spine is compact by default; `--oracle-scale` inflates
-  function BODIES only (spine + `expectedMiss` invariant). Deterministic via `--seed`.
-- **Content classes:** the taxonomy above, plus a byte-value-entropy split for `data-blob-*`. Trigram
-  cardinality via a 2 MB presence bitset (exact distinct-count, content-free).
-- **Verified:** scan determinism (byte-identical bar `scannedAt`); privacy (profile contains no absolute
-  path, generated identifier, or content token); round-trip class-distribution fidelity; `gen --from-profile`
-  determinism; oracle `verify` PASS (compact + `--oracle-scale`). Bench gate added in `scripts/bench.ps1`.
-
-### Known v1 simplifications (documented, not bugs)
-- Clusters are `(ext, size-band)` with the modal sampled class; per-class sub-splitting of a mixed cluster is
-  "later." Counts stay exact.
+- Clusters are `(ext, size-band)` with the modal sampled class; a mixed cluster is not split per class.
+  Counts stay exact.
 - `distinctTrigramEstimate` is measured on the sampled prefixes (≤4 MB/file); `occurrences` is exact from
   full byte counts. 2-hop include fan-out expands only over sampled files' include maps (one-hop +
-  `unresolvedIncludeRate` is the floor for unsampled targets), exactly as agreed.
+  `unresolvedIncludeRate` is the floor for unsampled targets).

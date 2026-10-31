@@ -14,7 +14,7 @@ internal interface ITokenSink
 
 /// <summary>
 /// The firmware analyzer's text layer: logical lines (with <c>\</c> continuations spliced), directive and define
-/// recognition, a C token lexer in two modes, the raw identifier scan, and Carver's binary and density probes. It
+/// recognition, a C token lexer in two modes, the raw identifier scan, and binary and density probes that mirror CodeCarver's. It
 /// works on bytes; a file is read whole (a UTF-8 BOM is skipped, UTF-16/32 text is decoded first).
 /// </summary>
 internal static class FwLexer
@@ -135,7 +135,7 @@ internal static class FwLexer
         }
     }
 
-    /// <summary>Mirror of CodeCarver HeaderCarver.LooksBinary: a NUL in the first 8192 bytes, unless a UTF-16/32 BOM
+    /// <summary>Mirrors CodeCarver's HeaderCarver.LooksBinary: a NUL in the first 8192 bytes, unless a UTF-16/32 BOM
     /// leads; an unreadable file counts as binary.</summary>
     public static bool LooksBinary(string path)
     {
@@ -169,12 +169,12 @@ internal static class FwLexer
         return raw;
     }
 
-    // ---- density: a copy of CodeCarver MacroDensity (same reads, same counting) ----
+    // ---- density: mirrors CodeCarver's MacroDensity (same reads, same counting) ----
 
     public const long DenseMinBytes = 1_000_000;
     public const int DensePrefixChars = 256 * 1024;
 
-    /// <summary>Carver's verdict, plus whether a one-line change flips it (<c>edge</c>).</summary>
+    /// <summary>The density verdict, plus whether a one-line change flips it (<c>edge</c>).</summary>
     public static (bool Dense, bool Edge) Density(string path)
     {
         // an unreadable file is not "not dense": the truth would be silently wrong, so the error goes to the caller

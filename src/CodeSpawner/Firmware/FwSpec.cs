@@ -8,7 +8,7 @@ namespace CodeSpawner.Firmware;
 /// <summary>One truth list: where it was written (null when only hashed), its sha256 and line count.</summary>
 internal sealed record FwList(string? Path, string Sha256, long Count);
 
-/// <summary>A dense header and whether a one-line change flips Carver's verdict.</summary>
+/// <summary>A dense header and whether a one-line change flips a carver's density verdict.</summary>
 internal sealed record FwDense(string Path, bool Edge);
 
 /// <summary>The corpus's compile db cannot be read as one, or does not describe this corpus.</summary>
@@ -25,7 +25,7 @@ internal sealed class FwTruth
     public List<string> Carved = new();
     public List<FwDense> Dense = new();
     public FwList MustKeepDefines = null!, MustDropDefines = null!, OpenDefines = null!, MustKeepFunctions = null!, MustKeepFiles = null!;
-    /// <summary>Phase 2 only (null in phase 1, where the union lists are copies of main's and only an empty mustKeepFunctions is written).</summary>
+    /// <summary>Function truth only (null with the define truth alone, where the union lists are copies of main's and only an empty mustKeepFunctions is written).</summary>
     public FwList? MustDropFunctions, OpenFunctions, UnionMustKeepFunctions, UnionMustDropFunctions, UnionOpenFunctions;
     /// <summary>Generator check: C names whose class disagrees with the alphabet (Z…Z, Y…Z and Z…Y drop, Y…Y open, else keep).</summary>
     public List<string> AlphabetErrors = new();
@@ -55,7 +55,7 @@ internal sealed partial class FwSpec
 
     public readonly NameTable Names = new(1 << 16);
     private readonly string _root, _fwRoot;
-    /// <summary>firmware.roots: non-null turns on the function truth (phase 2).</summary>
+    /// <summary>firmware.roots: non-null turns on the function truth.</summary>
     private IReadOnlyList<string>? _roots;
 
     // files: fw files (sorted, fw-relative) then ext closure files
@@ -846,7 +846,7 @@ internal sealed partial class FwSpec
         t.OpenDefines = openW.Finish();
 
         // files: defining a must-keep name, the fw units, and their closures. A file no build compiles and nothing
-        // includes is never one (Carver ruling, 1.5.3): its own lines seed its names (a header guard, bigsrc_0.c's CAT
+        // includes is never one: its own lines seed its names (a header guard, bigsrc_0.c's CAT
         // use), but an unforced carve rightly drops the file. Those names stay must-keep defines only because defines
         // are graded in the forced carve.
         var files = new SortedSet<string>(StringComparer.Ordinal);
@@ -888,7 +888,7 @@ internal sealed class ListWriter : IDisposable
     public long Count { get; private set; }
     private static readonly byte[] Lf = { (byte)'\n' };
 
-    /// <param name="side">"main" or "union" to write only that side's list (phase 2's function lists differ); null writes main and copies it to union.</param>
+    /// <param name="side">"main" or "union" to write only that side's list (the function truth's lists differ); null writes main and copies it to union.</param>
     public ListWriter(string? dir, string name, string? side = null)
     {
         _dir = dir;
@@ -918,7 +918,7 @@ internal sealed class ListWriter : IDisposable
         string rel;
         if (_bytes > GzipPast)
         {
-            // compressed once; the union (one build in phase 1) is a copy
+            // compressed once; the union (one build with the define truth alone) is a copy
             using (var src = File.OpenRead(_tmp!))
             using (var dst = File.Create(main + ".gz"))
             using (var gz = new System.IO.Compression.GZipStream(dst, System.IO.Compression.CompressionLevel.Fastest))

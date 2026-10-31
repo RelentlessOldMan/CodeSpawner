@@ -3,11 +3,25 @@
 Each knob maps to an **observed failure class**. Dial ONE knob against a fixed baseline and a regression
 bisect names the subsystem, instead of "something broke in a 90 GB blob."
 
+## Design invariants
+
+These hold for every knob and preset below:
+
+- **Determinism**: same `--seed` → byte-identical corpus + manifest, regardless of which knobs are set or the
+  core count. Each population draws from its own RNG stream (`Hash(seed, category, index)`).
+- **Knobs first, presets are pure bundles.** Every pathology is a set of knobs; a named preset just expands to
+  those knob tokens, and your own knobs after a preset still override it.
+- **Manifest versioning rule**: *additive optional fields never bump `manifestVersion`; renames, removals or
+  semantic changes do.* New optional fields ship at the current version. `manifestVersion` 2 applies only to
+  `gen --lang cpp`; C corpora are v1. A consumer should assert `_meta.manifestVersion` before trusting a manifest.
+
+## Gen knobs
+
 Counts default to full-repo targets and are multiplied by `--scale` — UNLESS you pass the knob
 explicitly, in which case it is taken literally (a one-off run means what it says). Per-file **sizes are
 never scaled**: the multi-GB headers are the pathology; even `--scale 0.001` keeps at least one giant.
 
-Out-of-range values are refused (exit 2) rather than clamped or ignored (since 1.1.11): `--scale` must be in
+Out-of-range values are refused (exit 2) rather than clamped or ignored: `--scale` must be in
 (0, 1000]; counts must be ≥ 0; `--max-header-mb`, `--dense-under-mb`, `--max-line-bytes`, `--dirs`,
 `--linked-roots` and `--io-parallelism` ≥ 1; `--dup-copies` ≥ 2; `--depth` 1..12; `--hot-token-share` in
 [0, 1]. Giving the same knob twice is refused too (a knob after a `--preset` overrides the preset's value).
@@ -36,13 +50,13 @@ Out-of-range values are refused (exit 2) rather than clamped or ignored (since 1
 | `--manifest true\|false` | `true` | Emit the ground-truth manifest. |
 | `--force` | off | Overwrite `--out` even if it exists and was not created by CodeSpawner. Without it, a non-empty directory CodeSpawner didn't create is protected from deletion. Never honoured for a drive/share root, the cwd or home dir (or a parent), a git checkout, or a well-known user/system folder. |
 
-### Batch 1 pathology knobs (all OFF by default; see [ROADMAP.md](ROADMAP.md))
+### Pathology knobs (all OFF by default; the failure axes are [below](#pathology-presets-and-the-failure-axis-each-exercises))
 
 | Knob | Default | Property it stresses |
 |---|---|---|
 | `--dense-headers <n>` | `0` | Count of dense sub-threshold headers — maximally-unique idents, sized just under `--dense-under-mb`. Posting/trigram memory explosion under parallelism (the OOM shape). |
-| `--dense-under-mb <m>` | `127` | Byte ceiling each dense header sits just under (aim just below the indexer's stream threshold, e.g. 128 MB → 127). |
-| `--broad-token-files <n>` | `0` | Count of 2–8 MB carrier files for the hot token. Result capping/ranking + block-selective (sidecar) reads. |
+| `--dense-under-mb <m>` | `127` | Byte ceiling each dense header sits just under (aim just below your indexer's stream threshold, e.g. 128 MB → 127). |
+| `--broad-token-files <n>` | `0` | Count of 2–8 MB carrier files for the hot token. Result capping/ranking + block-selective reads. |
 | `--hot-token-share <f>` | `0.5` | Fraction of carriers that actually contain the hot token (rest are same-size controls). Token seeded at deterministic offsets incl. near-EOF; every site recorded under `broad_hot`. |
 | `--long-line-files <n>` | `0` | Count of pathological single-long-line files (minified-JS shaped). Line-aligned block building / >2 GB string-materialization guard. |
 | `--max-line-bytes <m>` | `8388608` | Bytes in the single giant line of each long-line file. |
@@ -51,8 +65,23 @@ Out-of-range values are refused (exit 2) rather than clamped or ignored (since 1
 | `--pathological-symbols <n>` | `0` | Count of files with pathological symbol shapes: token-paste macros (`handler_##id` → **expectedMiss** honest-miss symbols), extreme-length identifiers, deep scope nesting. Symbol-extractor cost + honest-miss correctness. |
 | `--dup-groups <n>` | `0` | Count of duplicate-content groups (byte-identical copies scattered across dirs + a near-identical control each). Content-hash dedup / segment-merge posting collapse. Recorded under top-level `dupGroups`. |
 | `--dup-copies <n>` | `4` | Byte-identical copies per dup group (the set that must collapse). |
-| `--shrink-seeds <n>` | `0` | Emit n ~9 MB sidecar-straddle headers (`mut_shrink_*.h`) — targets for `mutate` **4-shrink** (sidecar DELETE). |
-| `--restream-seeds <n>` | `0` | Emit n ~129 MB headers (`mut_restream_*.h`) — targets for `mutate` **4-restream** (sidecar REWRITE). |
+| `--shrink-seeds <n>` | `0` | Emit n ~9 MB headers that straddle a positional-index cutoff (`mut_shrink_*.h`) — targets for `mutate` **4-shrink** (positional index DELETE). |
+| `--restream-seeds <n>` | `0` | Emit n ~129 MB headers (`mut_restream_*.h`) — targets for `mutate` **4-restream** (positional index REWRITE). |
+
+### Pathology presets and the failure axis each exercises
+
+| Preset | Knobs | Failure axis it exercises |
+|---|---|---|
+| `dense-band` | `--dense-headers 40 --dense-under-mb 127` | Posting/trigram memory explosion: headers parked *just under* an indexer's stream threshold (for an indexer that streams files ≥ 128 MB) with maximally-unique identifiers, so the whole-file (non-streaming) path runs N-wide and blows a single-alloc heap ceiling (~5 GB corpus). |
+| `broad-token` | `--broad-token-files <n> --hot-token-share 0.5` | Result capping/ranking + block-selective reads. A hot shared token seeded into 0.5 of a **2–8 MB** carrier band (for an indexer whose block-selective reads start at 2 MB), a few times per file at deterministic offsets incl. near-EOF; every ref site is recorded → a `find_references` expected-set AND a read-amplification test. |
+| `long-lines` | `--long-line-files <n> --max-line-bytes <m>` [`--no-newline`] | Line-aligned block building; guards against >2 GB string materialization (minified JS, single-line JSON, blobs with no newline). |
+| `encoding-mix` | `--encoding-mix <n>` | Trigram extraction on multibyte + BOM handling: UTF-16LE/BE, UTF-8-BOM, mixed/invalid byte runs, non-ASCII identifiers. |
+| `many-tiny` | `--tiny-files 500000`, rest off | Walker throughput / per-file overhead / SMB stat pressure. |
+| `pathological-symbols` | `--pathological-symbols <n>` | Token-paste macros (`CS_MK_HANDLER(k)` → `patho{i}_handler_{k}`, flagged `expectedMiss`), extreme-length identifiers, deep scope nesting: symbol-extractor cost + honest-miss correctness (`expectedMiss` is the honest-miss dual of `unreachableRefs`). |
+| `dup-content` | `--dup-groups <n> --dup-copies <n>` | N groups of byte-identical copies scattered across dirs + a near-identical control each. Top-level `dupGroups` records each group's `sha256` + `paths` (must collapse) + `nearVariants` (must not). |
+
+Every pathology corpus records a `_meta.populations` stat block, `{ "<population>": {fileCount, totalBytes, identCount} }`,
+so a consumer's verify adapter can assert the corpus has the intended *shape* before trusting any pass/fail.
 
 ## `mutate` (incremental / watcher oracle)
 
@@ -88,11 +117,11 @@ Generate the base with `--shrink-seeds`/`--restream-seeds` to enable the thresho
 
 See [scan-design.md](scan-design.md) and [oracle-v1-design.md](oracle-v1-design.md).
 
-`--from-profile` reads only `--out`, `--seed`, `--force`, the knobs below and the `--web-*` knobs (since 1.3.1; the
+`--from-profile` reads only `--out`, `--seed`, `--force`, the knobs below and the `--web-*` knobs (the
 web needs `--with-oracle`, since its truth is in the manifest); any other knob (a preset's included) would be
 ignored, so it is refused. The `--oracle-*` knobs need `--with-oracle`, and on a plain
 `gen` (no profile) a non-default oracle knob is refused, since plain gen never runs the overlay. At its
-default value one is accepted, because a `_meta.gen` replay passes every recorded knob back (since 1.1.11).
+default value one is accepted, because a `_meta.gen` replay passes every recorded knob back.
 `--oracle-chain` must be ≥ 2, the other counts ≥ 0, and `--oracle-reachable-frac` 0 or in [0.01, 1].
 
 | Knob | Default | What it does |
@@ -157,31 +186,55 @@ and `_meta.gen` records the effective values. The full table, the layout and the
   `--fw-pasters` (6,000,000) and `--fw-dense-headers` (200).
 - **Not scaled:** `--fw-big-mb` (24, 20–2000), `--fw-chain-max` (40, 2–10,000) and `--fw-db-paths` (`absolute` or
   `relative`).
-- **The work carve** (`--fw-work`): `--fw-work-defines` (18,900,000, 0–1e9), `--fw-work-pasters` (5,000, 1–1e8)
-  and `--fw-work-forwarders` (15,000, 0–1e8) scale; `--fw-work-depth` (6, 1–64), `--fw-work-growth` (9, 2–1000),
-  `--fw-work-keep-pct` (4, 1–100), `--fw-work-decoy-pct` (16, 0–100) and `--fw-work-half-pct` (20, 0–100) do not. The
-  three percents add up to at most 100. Each `--fw-work-*` knob is refused without `--fw-work`.
-- A knob the preset set doesn't count as given: `--preset firmware-work --firmware false` switches the firmware off.
+- A knob the preset set doesn't count as given: `--preset firmware-bulk --firmware false` switches the firmware off.
   A `--fw-*` knob you type yourself is still refused with it off.
 - A `--scale` that makes a count past 2,147,483,647 is refused (give the knob outright).
+
+### The bulk carve (`--fw-bulk`)
+
+`--fw-bulk` adds the bulk carve: `fw/work/wreg_N.h` headers shaped like a production-sized firmware tree (its counts
+default to the 1x shape). The output dir and the manifest key keep the older name `work` (`fw/work/`,
+`firmware.work`). Each `--fw-bulk-*` knob is refused without `--fw-bulk`, and the five percents
+(`keep`, `decoy`, `half`, `near`, `named`) add up to at most 100. The shape is described in
+[firmware-design.md](firmware-design.md) "Bulk shape".
+
+| Knob | Default | Range | Scaled | What it sets |
+|---|---|---|---|---|
+| `--fw-bulk-defines <n>` | `122300000` | 0–1e9 | yes | Register defines in the bulk headers. |
+| `--fw-bulk-pasters <n>` | `5000` | 1–1e8 | yes, never below 1 | Bulk paste macros. |
+| `--fw-bulk-forwarders <n>` | `15000` | 0–1e8 | yes | Bulk forwarders, each a chain down to a paster. |
+| `--fw-bulk-depth <n>` | `6` | 1–64 | no | Levels of the use tree, one a pass. |
+| `--fw-bulk-growth <n>` | `9` | 2–1000 | no | Pieces after pass 2 over pieces after pass 1. |
+| `--fw-bulk-keep-pct <p>` | `0.018` | >0–100 | no | Percent of bulk defines kept (fractions allowed). |
+| `--fw-bulk-decoy-pct <p>` | `1` | 0–100 | no | Percent that are cross decoys: tree-wide pools keep them, per-use pairing drops them. |
+| `--fw-bulk-half-pct <p>` | `1` | 0–100 | no | Percent that are half decoys, one piece only. |
+| `--fw-bulk-patterns <n>` | `2300` | 0–1e6 | yes | Wide paste macros named in kept roots' bodies, one wildcard each. |
+| `--fw-bulk-near-pct <p>` | `6` | 0–100 | no | Percent that are near misses of a pattern (dropped). |
+| `--fw-bulk-named-pct <p>` | `11` | 0–100 | no | Percent named only by a pattern-matched body (open). |
+| `--fw-bulk-body-pasters <n>` | `2600000` | 0–1e8 | yes | Paste macros for matched bodies, a tenth used. |
+| `--fw-bulk-body-forwarders <n>` | `2900000` | 0–1e8 | yes | Forwarders for matched bodies, a tenth used. |
+| `--fw-bulk-body-uses <n>` | `1800000` | 0–1e8 | yes | Paste uses in matched bodies. |
+| `--fw-bulk-pieces <n>` | `500000` | 0–1e8 | yes | Distinct pieces those uses paste. |
+| `--fw-bulk-uncovered <n>` | `4340` | 0–1e6 | yes | `.c` files outside the compile db. |
+| `--fw-bulk-asm <n>` | `21` | 0–100,000 | yes, never below 2 | `.s`/`.asm` files outside the compile db. |
 
 ## Presets
 
 | Preset | Expands to | Use |
 |---|---|---|
-| `--preset huge` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` + the include web (`--web-units 3000 --web-headers 3000 --web-depth 15 --web-window 18-28 --web-aggregators 40 --web-templates 60 --web-template-sites 4 --web-tail 24 --web-header-lines 2000 --web-tail-mb 48`) | ~90 GB, ~50k files, 12 headers >1 GB — the full work-scale huge repo. |
-| `--preset huge-lite` | `--scale 0.05 --giant-headers 3 --max-header-mb 32 --big-headers 1 --med-headers 12` + the web at huge's counts with `--web-header-lines 150 --web-tail-mb 8` | All of huge's shapes in ~0.5 GB; no compute gate needed. |
+| `--preset huge` | `--scale 1.0 --giant-headers 12 --max-header-mb 1229 --big-headers 1375` + the include web (`--web-units 3000 --web-headers 3000 --web-depth 15 --web-window 18-28 --web-aggregators 40 --web-templates 60 --web-template-sites 4 --web-tail 24 --web-header-lines 2000 --web-tail-mb 48`) | ~90 GB, ~50k files, 12 headers >1 GB — the full-scale huge repo. |
+| `--preset huge-lite` | `--scale 0.05 --giant-headers 3 --max-header-mb 32 --big-headers 1 --med-headers 12` + the web at huge's counts with `--web-header-lines 150 --web-tail-mb 8` | All of huge's shapes in ~0.5 GB. |
 | `--preset ci` | `--scale 0.01` | Fast smoke tier; keeps ≥1 pathology header. |
 | `--preset memory` | one giant header, 5 `.c` files of which 3 include it (`--giant-includers` default), everything else off, 1M macro density | Pure preprocessor-memory repro. |
 | `--preset dense-band` | `--dense-headers 40 --dense-under-mb 127` (noise off) | Posting/trigram memory explosion — the OOM regression (~5 GB). |
-| `--preset broad-token` | `--broad-token-files 200 --hot-token-share 0.5` (noise off) | `find_references`-at-scale + sidecar read amplification (~1 GB). |
+| `--preset broad-token` | `--broad-token-files 200 --hot-token-share 0.5` (noise off) | `find_references`-at-scale + block-selective read amplification (~1 GB). |
 | `--preset long-lines` | `--long-line-files 8 --max-line-bytes 8388608` (noise off) | Long-line / no-newline block-building stress. |
 | `--preset encoding-mix` | `--encoding-mix 40` (noise off) | Multibyte / BOM / invalid-byte extraction. |
 | `--preset many-tiny` | `--tiny-files 500000` (noise off) | Walker throughput / per-file & SMB stat pressure. |
 | `--preset pathological-symbols` | `--pathological-symbols 50` (noise off) | Symbol-extractor cost + honest-miss (`expectedMiss`) correctness. |
 | `--preset dup-content` | `--dup-groups 200 --dup-copies 4` (noise off) | Content-hash dedup / posting-collapse (`dupGroups`). |
-| `--preset firmware` | `--firmware` (noise off) | The firmware corpus and its header-carve truth (~10 GB at 1x, estimated; `--scale 0.01` is 0.16 GB). |
-| `--preset firmware-work` | `--firmware --fw-work --fw-families 192 --fw-pasters 20000 --fw-files 400 --fw-big-headers 1 --fw-dense-headers 0` (noise off) | The work-shaped carve at `--scale` (cross-call decoys, pass growth) plus a small fixed correctness part. |
+| `--preset firmware` | `--firmware` (noise off) | The firmware corpus and its header-carve truth (~10 GB at 1x; `--scale 0.01` is 0.16 GB). |
+| `--preset firmware-bulk` | `--firmware --fw-bulk --fw-families 192 --fw-pasters 20000 --fw-files 296 --fw-big-headers 1 --fw-dense-headers 0` (noise off) | The bulk carve at `--scale`, shaped like a production-sized firmware tree (cross-call decoys, pass growth), plus a small fixed correctness part. |
 
 Your own knobs after a `--preset` override it (e.g. `--preset huge --giant-headers 4`).
 
@@ -198,6 +251,6 @@ codespawner gen --out .\_fw --preset memory
 # Density-only stressor: 1M macros in a small file (memory without the bytes).
 codespawner gen --out .\_fw --giant-headers 1 --macro-density 1000000 --max-header-mb 20
 
-# Full work-scale huge repo (tens of GB — minutes).
+# Full-scale huge repo (tens of GB — minutes).
 codespawner gen --out D:\huge --preset huge
 ```

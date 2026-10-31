@@ -5,9 +5,9 @@ namespace CodeSpawner.Manifest;
 
 /// <summary>
 /// The canonical digest of a composed symbol-truth, used as <c>_meta.prevTruthSha</c> in delta manifests so
-/// a consumer can detect an out-of-order / misapplied / skipped delta mid-chain. The byte format is LOCKED
-/// with CodeCompass (both sides reproduced the golden vector); do not change it without bumping the delta
-/// format and re-agreeing:
+/// a consumer can detect an out-of-order / misapplied / skipped delta mid-chain. The byte format is FIXED:
+/// CodeCompass reproduces it (both sides reproduce the golden vector), so do not change it without bumping the
+/// delta format:
 ///
 ///   sha256( for each symbol in ASCENDING ORDINAL name order:
 ///     name US def US refsSortedOrdinalJoined"," US edgesSortedOrdinalJoined"," US (expectedMiss?"1":"0") RS )

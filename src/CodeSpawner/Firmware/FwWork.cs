@@ -4,16 +4,16 @@ using CodeSpawner.Cli;
 namespace CodeSpawner.Firmware;
 
 /// <summary>
-/// The work-shaped header carve (<c>--fw-work</c>, <c>--preset firmware-work</c>; docs/firmware-design.md "Work
+/// The bulk header carve (<c>--fw-bulk</c>, <c>--preset firmware-bulk</c>; docs/firmware-design.md "Bulk
 /// shape"): big headers <c>fw/work/wreg_N.h</c> of register defines whose names line up across paste uses, so
-/// tree-wide start and end pools keep many names that rule 3' drops. The shape follows from the knobs alone, so the
+/// tree-wide start and end pools keep many names that per-use pairing (rule 3) drops. The shape follows from the knobs alone, so the
 /// construction counts in the manifest are exact, and verify recounts the kept and dropped ones from the truth lists.
 /// <list type="bullet">
 /// <item>An <b>exact</b> name is built by one use, <c>ZRA{id}W_R{id}</c> (A) or <c>KRB{id}W_Q{id}Z</c> (B), and is
 /// kept. The uses form trees: the units call level 0, and each level's defines hold the next level's uses in their
 /// bodies, so the pieces appear pass by pass.</item>
 /// <item>A <b>cross decoy</b> <c>ZRA{a}W_Q{b}Z</c> has an A use's start piece and a B use's end piece. Global pools
-/// keep it; rule 3' drops it.</item>
+/// keep it; per-use pairing (rule 3) drops it.</item>
 /// <item>A <b>half decoy</b> has one side only, <c>ZRA{a}W_T{n}Z</c> or <c>ZQH{n}W_Q{b}Z</c>, and is dropped either
 /// way.</item>
 /// <item><b>Filler</b> <c>ZWF{h}N{i}Z</c> matches no piece.</item>
@@ -25,8 +25,8 @@ namespace CodeSpawner.Firmware;
 internal sealed class FwWork
 {
     public const string Dir = "work";
-    private const long HeaderBytes = 30L << 20;   // ~31 MB (CodeCarver's work headers)
-    /// <summary>Every work header is padded past this, so each is big.</summary>
+    private const long HeaderBytes = 30L << 20;   // ~31 MB (production-sized register headers)
+    /// <summary>Every bulk-carve header is padded past this, so each is big.</summary>
     public const long MinHeaderBytes = FwSpec.MaxParseBytes + 1_000_000;
 
     public long Defines, Pasters, Forwarders;
@@ -36,9 +36,9 @@ internal sealed class FwWork
     /// <summary>Longest forwarder chain (--fw-chain-max).</summary>
     public int ChainMax;
     public long Exact, CrossDecoys, HalfDecoys, Filler;
-    /// <summary>The wide population (since 1.4.11).</summary>
+    /// <summary>The wide population.</summary>
     public FwWide Wide = null!;
-    /// <summary>.c files outside the compile db, and assembly files (since 1.4.11).</summary>
+    /// <summary>.c files outside the compile db, and assembly files.</summary>
     public int Uncovered, Asm;
     public long UsesDirect, UsesForwarded, UsesHigherOrder;
     /// <summary>Filler written past the plan to bring a header over maxParseBytes.</summary>
@@ -60,9 +60,9 @@ internal sealed class FwWork
         if (!o.FwWork) return null;
         var w = new FwWork
         {
-            Defines = o.Eff("fw-work-defines", o.FwWorkDefines),
-            Pasters = o.Eff("fw-work-pasters", o.FwWorkPasters, keepOne: true),
-            Forwarders = o.Eff("fw-work-forwarders", o.FwWorkForwarders),
+            Defines = o.Eff("fw-bulk-defines", o.FwWorkDefines),
+            Pasters = o.Eff("fw-bulk-pasters", o.FwWorkPasters, keepOne: true),
+            Forwarders = o.Eff("fw-bulk-forwarders", o.FwWorkForwarders),
             Growth = o.FwWorkGrowth,
             Depth = o.FwWorkDepth,
             ChainMax = o.FwChainMax,
@@ -71,8 +71,8 @@ internal sealed class FwWork
         w.CrossDecoys = (long)(w.Defines * o.FwWorkDecoyPct / 100);
         w.HalfDecoys = (long)(w.Defines * o.FwWorkHalfPct / 100);
         w.Wide = FwWide.Plan(o, w.Defines - exact - w.CrossDecoys - w.HalfDecoys, w.Defines);
-        w.Uncovered = o.Eff("fw-work-uncovered", o.FwWorkUncovered);
-        w.Asm = Math.Max(2, o.Eff("fw-work-asm", o.FwWorkAsm));
+        w.Uncovered = o.Eff("fw-bulk-uncovered", o.FwWorkUncovered);
+        w.Asm = Math.Max(2, o.Eff("fw-bulk-asm", o.FwWorkAsm));
         var wd = w.Wide;
 
         // ~80 bytes an exact define (its body holds its children's uses), ~40 a decoy, ~100 filler, ~150 a matched
@@ -210,7 +210,7 @@ internal sealed class FwWork
         return $"ZQH{i}W{EndPiece(hb, kb, lb)}";
     }
 
-    /// <summary>What a work name is, by its spelling: exact, cross, half, filler, or null (not a work name).</summary>
+    /// <summary>What a bulk-carve name is, by its spelling: exact, cross, half, filler, or null (not a bulk-carve name).</summary>
     public static string? Classify(string name)
     {
         if (name.StartsWith("KRB", StringComparison.Ordinal)) return name.Contains("W_Q", StringComparison.Ordinal) ? "exact" : null;
@@ -224,7 +224,7 @@ internal sealed class FwWork
 
     public static string HeaderFile(int h) => $"wreg_{h}.h";
 
-    /// <summary>The work headers unit <paramref name="u"/> calls into: with at least as many units as headers,
+    /// <summary>The bulk-carve headers unit <paramref name="u"/> calls into: with at least as many units as headers,
     /// header <c>u % Headers</c>; otherwise every header whose number is <paramref name="u"/> mod the unit count.</summary>
     public IEnumerable<int> HeadersOfUnit(int u, int units)
     {

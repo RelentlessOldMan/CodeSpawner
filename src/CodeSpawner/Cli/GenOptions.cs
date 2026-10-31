@@ -38,7 +38,7 @@ public sealed class GenOptions
     /// line-similar: rename fixtures then can't tell a rename from a near-copy of another file.</summary>
     public bool VariedSourceBodies { get; set; }
 
-    // --- Batch 1 pathologies (all OFF by default; see docs/ROADMAP.md). ---
+    // --- Pathologies (all OFF by default; see docs/knobs.md). ---
 
     /// <summary>Count of dense sub-threshold headers (unique idents, sized just under DenseUnderMb).</summary>
     public int DenseHeaders { get; set; } = 0;
@@ -72,7 +72,7 @@ public sealed class GenOptions
 
     // --- mutate/churn seed files (targets for mutate's threshold-crossing edits; OFF by default). ---
 
-    /// <summary>~9 MB sidecar-straddle headers (mut_shrink_*.h) — mutate 4-shrink truncates them below the cutoff.</summary>
+    /// <summary>~9 MB size-straddle headers (mut_shrink_*.h) — mutate 4-shrink truncates them below the cutoff.</summary>
     public int ShrinkSeeds { get; set; } = 0;
     /// <summary>~129 MB headers (mut_restream_*.h) — mutate 4-restream shrinks them for the streamed→whole-file rewrite.</summary>
     public int RestreamSeeds { get; set; } = 0;
@@ -149,10 +149,10 @@ public sealed class GenOptions
     public int FwChainMax { get; set; } = 40;
     /// <summary>"absolute" or "relative": how fw-build/compile_commands.json writes its directory and paths.</summary>
     public string FwDbPaths { get; set; } = "absolute";
-    /// <summary>Adds the work-shaped carve (fw/work/wreg_N.h; docs/firmware-design.md "Work shape"). Its count knobs
-    /// default to the 1x work shape and scale.</summary>
+    /// <summary>Adds the bulk carve (fw/work/wreg_N.h; docs/firmware-design.md "Bulk shape"). Its count knobs
+    /// default to the 1x bulk shape and scale.</summary>
     public bool FwWork { get; set; } = false;
-    /// <summary>Register defines in the work headers (exact, decoys and filler). Scaled.</summary>
+    /// <summary>Register defines in the bulk headers (exact, decoys and filler). Scaled.</summary>
     public int FwWorkDefines { get; set; } = 122_300_000;
     /// <summary>Work paste macros WRP{j}. Scaled, never below 1.</summary>
     public int FwWorkPasters { get; set; } = 5_000;
@@ -162,15 +162,15 @@ public sealed class GenOptions
     public int FwWorkDepth { get; set; } = 6;
     /// <summary>Pieces after pass 2 over pieces after pass 1.</summary>
     public int FwWorkGrowth { get; set; } = 9;
-    /// <summary>Percent of the work defines that are exact (kept) names.</summary>
+    /// <summary>Percent of the bulk defines that are exact (kept) names.</summary>
     public double FwWorkKeepPct { get; set; } = 0.018;
-    /// <summary>Percent that are cross decoys (kept by global pools, dropped by rule 3').</summary>
+    /// <summary>Percent that are cross decoys (kept by tree-wide pools, dropped by per-use pairing).</summary>
     public double FwWorkDecoyPct { get; set; } = 1;
     /// <summary>Percent that are half decoys (one side only).</summary>
     public double FwWorkHalfPct { get; set; } = 1;
     /// <summary>Wide paste macros KWP{j}, one a pattern (since 1.4.11; 70% two-sided, 15% each one-sided). Scaled.</summary>
     public int FwWorkPatterns { get; set; } = 2_300;
-    /// <summary>Percent of the work defines that are near misses (a pattern's start or end only; dropped).</summary>
+    /// <summary>Percent of the bulk defines that are near misses (a pattern's start or end only; dropped).</summary>
     public double FwWorkNearPct { get; set; } = 6;
     /// <summary>Percent named only by a matched define's body (open).</summary>
     public double FwWorkNamedPct { get; set; } = 11;

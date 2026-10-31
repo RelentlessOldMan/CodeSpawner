@@ -2,7 +2,7 @@ using System.Text;
 
 namespace CodeSpawner.Generation;
 
-/// <summary>Tiny ~1 KB CSV files — the file-COUNT / per-file-overhead / SMB stat-pressure axis.</summary>
+/// <summary>Tiny ~1 KB CSV files — the file-COUNT / per-file-overhead / network-share stat-pressure axis.</summary>
 public static class TinyFileEmitter
 {
     public static void Write(string dir, int i, ref Rng rng)

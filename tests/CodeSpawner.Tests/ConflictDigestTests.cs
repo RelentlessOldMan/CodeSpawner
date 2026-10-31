@@ -4,7 +4,7 @@ using Xunit;
 namespace CodeSpawner.Tests;
 
 /// <summary>
-/// conflictTruthSha is the 3-way component digest, LOCKED with CodeDiffer (code-spawner chat, 2026-10-02).
+/// conflictTruthSha is the 3-way component digest, FIXED because a diff tool such as CodeDiffer reproduces it.
 /// digest-selftest pins the golden vector in the exe; these add the canonical-form invariants: order
 /// independence, both-sections-always-present, and that each digested field (side, ops, coords) moves the hash.
 /// </summary>

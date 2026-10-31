@@ -5,7 +5,7 @@ public static class PathUtil
     /// <summary>
     /// Repo-relative path (forward slashes) of <paramref name="absPath"/> rooted at
     /// <paramref name="corpusRoot"/>. Forward slashes keep the manifest portable across OSes and
-    /// stable whether the corpus is read locally or over an SMB share.
+    /// stable whether the corpus is read locally or over a network share.
     /// </summary>
     public static string Rel(string corpusRoot, string absPath)
     {

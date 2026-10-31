@@ -45,8 +45,8 @@ public static class Mutator
     [ThreadStatic] internal static long? InMemoryTextMaxOverride;
     // Size targets for the grow/shrink/restream edits. Tests shrink them through the overrides to avoid multi-MB
     // writes; production never sets them.
-    internal static long GrowTargetBytes => GrowTargetOverride ?? 9L * 1024 * 1024;       // cross the 8 MB sidecar cutoff
-    internal static long ShrinkTargetBytes => ShrinkTargetOverride ?? 1L * 1024 * 1024;   // below the 2 MB network cutoff
+    internal static long GrowTargetBytes => GrowTargetOverride ?? 9L * 1024 * 1024;       // cross an 8 MB block-selective cutoff (one indexer's setting)
+    internal static long ShrinkTargetBytes => ShrinkTargetOverride ?? 1L * 1024 * 1024;   // below a 2 MB network cutoff (one indexer's setting)
     internal static long RestreamTargetBytes => RestreamTargetOverride ?? 100L * 1024 * 1024;
     // Per thread, like InMemoryTextMaxOverride, so a test shrinking them can't leak into a parallel test class.
     [ThreadStatic] internal static long? GrowTargetOverride, ShrinkTargetOverride, RestreamTargetOverride;

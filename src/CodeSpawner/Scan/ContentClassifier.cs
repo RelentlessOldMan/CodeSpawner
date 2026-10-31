@@ -22,7 +22,7 @@ public sealed class FileStats
 /// Content-free heuristics that assign a content class from a byte prefix. Pure (no IO): the scanner reads
 /// each sampled file once and hands the span here, so classification, density, and trigram metering all run
 /// off a single read. Thresholds are FIXED + documented so a coarse profile still regenerates in the right
-/// ballpark (CodeCarver, 2026-09-29). Density and class are derived from this one pass.
+/// ballpark. Density and class are derived from this one pass.
 /// </summary>
 public static class ContentClassifier
 {

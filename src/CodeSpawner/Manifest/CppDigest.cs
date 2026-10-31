@@ -3,8 +3,8 @@ namespace CodeSpawner.Manifest;
 /// <summary>
 /// The canonical component digest of the C++ (manifest v2) ground truth, surfaced as <c>_meta.cppTruthSha</c>
 /// (docs/cpp-profile-design.md D7). Built like <see cref="IndirectDigest"/>; <c>prevTruthSha</c> and
-/// <c>indirectTruthSha</c> keep their exact definitions. Byte format (LOCKED; do not change without re-agreeing
-/// with CodeCarver + CodeCompass):
+/// <c>indirectTruthSha</c> keep their exact definitions. Byte format (FIXED: consumers such as
+/// CodeCarver and CodeCompass reproduce it, so any change breaks them):
 ///
 ///   five sections, GS(0x1D) between them, all always present (empty = zero records); each section's records
 ///   are deduplicated then ORDINAL-sorted, and each record is followed by RS:

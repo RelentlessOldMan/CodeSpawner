@@ -4,7 +4,7 @@ using CodeSpawner.Profile;
 namespace CodeSpawner.Scan;
 
 /// <summary>
-/// Builds the include fan-out / unresolved-include-risk stats (CodeCompass, 2026-09-29). Resolution is
+/// Builds the include fan-out / unresolved-include-risk stats. Resolution is
 /// within-tree by BASENAME only — the signal that matters is system/vendor headers genuinely outside the
 /// tree (the false-zero driver). Fan-out is a bounded 2-hop expansion over the sampled files' include maps
 /// (one-hop + unresolved-rate is the guaranteed floor for unsampled targets). No names/paths are emitted —

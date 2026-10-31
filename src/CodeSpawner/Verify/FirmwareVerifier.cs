@@ -26,7 +26,7 @@ internal static class FirmwareVerifier
     {
         if (fw.ValueKind != JsonValueKind.Object) { err.WriteLine("FAIL firmware: not an object"); return 1; }
         FwTruth t;
-        // phase 2: firmware.roots turns on the function truth
+        // firmware.roots turns on the function truth
         List<string>? roots = null;
         if (fw.TryGetProperty("roots", out var rootsEl))
         {
@@ -120,7 +120,7 @@ internal static class FirmwareVerifier
             else okCount[0]++;
         }
         else if (File.Exists(Path.Combine(corpus, FirmwareEmitter.DbWorld2Path)))
-        { err.WriteLine($"FAIL firmware roots: missing, but {FirmwareEmitter.DbWorld2Path} exists (a phase-2 tree)"); fail++; }
+        { err.WriteLine($"FAIL firmware roots: missing, but {FirmwareEmitter.DbWorld2Path} exists (a tree with the function truth)"); fail++; }
         if (Obj(fw, "hostile") is { ValueKind: JsonValueKind.Array } hostile)
             foreach (var h in hostile.EnumerateArray())
             {
@@ -156,7 +156,7 @@ internal static class FirmwareVerifier
             }
         }
 
-        // the work carve: its class counts, recounted from the main build's lists by the names' spelling
+        // the bulk carve: its class counts, recounted from the main build's lists by the names' spelling
         bool workDir = Directory.Exists(Path.Combine(corpus, FwSpec.FwDir, FwWork.Dir));
         if (Obj(fw, "work") is not { ValueKind: JsonValueKind.Object } && (wantWork || workDir))
         { err.WriteLine($"FAIL firmware work: missing, but {(wantWork ? "_meta.gen.fwWork is true" : $"{FwSpec.FwDir}/{FwWork.Dir}/ exists")}"); fail++; }
@@ -184,7 +184,7 @@ internal static class FirmwareVerifier
                 Eq("work.tree.filler", Num(tree, "filler"), dc.Filler.ToString());
                 Eq("work: tree decoys and filler kept or open", "0", (kc.Cross + kc.Half + kc.Filler + oc.Cross + oc.Half + oc.Filler).ToString());
                 Eq("work: tree exact names not kept", "0", (dc.Exact + oc.Exact).ToString());
-                // the wide population (1.4.11): each kind in its one class
+                // the wide population: each kind in its one class
                 long W(WorkCount c, string k) => c.Wide.GetValueOrDefault(k);
                 Eq("work.exactUsed", Num(work, "exactUsed"),
                     (kc.Exact + kc.Pasters + kc.Forwarders + kc.Appliers + W(kc, "widePaster") + W(kc, "root") + W(kc, "edge")).ToString());
@@ -290,7 +290,7 @@ internal static class FirmwareVerifier
         return int.Parse(n.AsSpan(k, kk - k));
     }
 
-    /// <summary>The work object's own arithmetic and its headers on disk (the class counts are recounted from the
+    /// <summary>The firmware.work object's own arithmetic and its headers on disk (the class counts are recounted from the
     /// lists in <c>Core</c>).</summary>
     private static int CheckWorkShape(string corpus, JsonElement work, TextWriter err, int[] okCount)
     {
@@ -308,7 +308,7 @@ internal static class FirmwareVerifier
         string full = Path.Combine(corpus, FwSpec.FwDir, FwWork.Dir);
         long headers = Directory.Exists(full) ? Directory.EnumerateFiles(full, "wreg_*.h").LongCount() : 0;
         Is("headers", N(work, "headers"), headers);
-        // the flat counts (1.4.11)
+        // the flat counts
         long? Files(string sub, params string[] exts)
         {
             string d = Path.Combine(corpus, FwSpec.FwDir, sub);

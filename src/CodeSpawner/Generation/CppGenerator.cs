@@ -926,7 +926,7 @@ internal sealed class CppTruth
     /// A class symbol's refs are every line, other than its def, where its name appears as a whole word outside
     /// strings: forward declarations, base lists, pointer and member declarations, <c>Cls::</c> qualifiers, ctor and
     /// dtor declarations and bodies, constructions, member-pointer types. That is exactly what a name search returns,
-    /// which is the truth CodeCompass grades a class name against (agreed 2026-10-14).
+    /// which is the truth an indexer's name search is graded against.
     /// </summary>
     private void ClassRefs()
     {

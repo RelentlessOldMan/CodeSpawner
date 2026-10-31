@@ -13,8 +13,8 @@ public sealed class BroadTokenEmitResult
 /// <summary>
 /// The <c>broad-token</c> pathology: a hot shared symbol (<c>broad_hot</c>) seeded into a fraction of a
 /// 2-8 MB carrier band, a few times per file at deterministic byte offsets (including near-EOF). Exercises
-/// result capping/ranking and a network block-selective ("sidecar") read path — 2 MB is the sidecar cutoff,
-/// so 2-8 MB carriers with a near-EOF hit force block-selective reads instead of whole-file reads. Every
+/// result capping/ranking and a network block-selective read path — for an indexer whose block-selective cutoff
+/// is 2 MB, 2-8 MB carriers with a near-EOF hit force block-selective reads instead of whole-file reads. Every
 /// call site is recorded, so the manifest carries the exact <c>find_references</c> expected-set.
 /// </summary>
 public static class BroadTokenEmitter

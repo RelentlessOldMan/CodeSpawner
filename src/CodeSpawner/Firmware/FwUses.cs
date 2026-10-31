@@ -818,7 +818,7 @@ internal sealed partial class FwSpec
     /// <summary>A call's arguments, one split for each way its expanded names can come out: a name whose object-like
     /// body (through other names) has a top-level comma splits the call there (`PORT(PIN_LED)` with <c>PIN_LED</c> =
     /// <c>A, 5</c>), each of its definitions a way. A function-like call among them that may give a comma is pooled
-    /// under max (open: Carver pools those).</summary>
+    /// under max (open: a carver may pool those).</summary>
     private List<XTok>[][] ArgAlts(List<XTok> inner)
     {
         bool saved = _fnComma;
@@ -1371,7 +1371,7 @@ internal sealed partial class FwSpec
     {
         if (!_poolOn) return;
         _poolOn = false;
-        if (_run == 0) return;   // a name only a pool builds is open (CodeCarver, 1.4.10): min wants only exact builds
+        if (_run == 0) return;   // a name only a pool builds is open: min wants only exact builds
         bool anyEnd = _poolAnyE || _poolDigitsE || _poolE.Count > 0;
         if ((!_poolAnyS && _poolS.Count == 0) || !anyEnd) return;
         var eLens = new HashSet<int>();

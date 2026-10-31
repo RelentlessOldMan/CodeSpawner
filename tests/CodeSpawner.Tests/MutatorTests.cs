@@ -501,7 +501,7 @@ public class MutatorTests
         });
 
         // --edits 10 puts Shrink at edit 5 and edit 10 ⇒ demands 2 shrink seeds; only 1 exists. Must be a clear
-        // plan-time ArgException, NOT the raw ArgumentOutOfRangeException CodeCompass hit in 1.0.4.
+        // plan-time ArgException, NOT a raw ArgumentOutOfRangeException.
         var ex = Assert.Throws<ArgException>(() => Mutator.Run(new MutateOptions { Corpus = corpus, Edits = 10, Seed = 7 }));
         Assert.Contains("2 shrink seed", ex.Message);
         Assert.Contains("--shrink-seeds", ex.Message);

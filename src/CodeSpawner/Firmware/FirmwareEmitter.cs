@@ -16,7 +16,7 @@ internal sealed class FirmwareResult
     public long Families { get; set; }
     public long Traps { get; set; }
     public long Cases { get; set; }
-    /// <summary>The work-shaped carve, when <c>--fw-work</c> is on.</summary>
+    /// <summary>The bulk carve, when <c>--fw-bulk</c> is on.</summary>
     public FwWork? Work { get; set; }
 }
 
@@ -583,7 +583,7 @@ internal static partial class FirmwareEmitter
         w.L($"/* regs_{h}.h: generated register map */");
         if (!headless) { w.L($"#ifndef FW_REGS_{h}_H"); w.L($"#define FW_REGS_{h}_H"); }
         w.L($"#define KDV_VAL 9");
-        // phase 2: a function name in a header too big to scan is open (cases.functions.tsv)
+        // function truth: a function name in a header too big to scan is open (cases.functions.tsv)
         if (h == 0 && p.Work is null) w.L("/* the fault path (YFwBigHY) reads this map */");
 
         long blockBytes = blocks.Sum(b => (long)b.Length) * (crlf ? 2 : 1);
@@ -609,7 +609,7 @@ internal static partial class FirmwareEmitter
             throw new InvalidOperationException($"firmware: regs_0.h content passes {BoundaryBig:N0} bytes; lower --fw-families or --fw-pasters, or raise --fw-big-headers");
     }
 
-    // A work header (docs/firmware-design.md "Work shape"); FwWork lays it out.
+    // A bulk-carve header (docs/firmware-design.md "Bulk shape"); FwWork lays it out.
     private static void WriteWork(Plan p, FwWork wk, int h)
     {
         var rng = Rng.For(p.O.Seed, Category.Firmware, (1L << 40) + h);
@@ -640,7 +640,7 @@ internal static partial class FirmwareEmitter
 
     // The density fixtures: 0.70 (dense), exactly 0.60 (dense, edge), 0.5999 (not dense, edge), 0.50, and a file of
     // nothing but defines one byte under the dense floor. The counted prefix is followed by a // line running past
-    // the 262,144-char window, so what Carver counts is exactly the lines written here.
+    // the 262,144-char window, so what a carver's density probe counts is exactly the lines written here.
     private static void WriteDenseFixtures(Plan p)
     {
         Fixture(p, "dense_70", 70, 100, carved: true);
@@ -730,7 +730,7 @@ internal static partial class FirmwareEmitter
         }
         var scope = new StringBuilder();
         var fn = new StringBuilder();
-        // phase 2 (plain firmware): fu<u> comes last and calls the unit's functions, so the reset path reaches them
+        // function truth (plain firmware): fu<u> comes last and calls the unit's functions, so the reset path reaches them
         var calls = p.Work is null ? new List<string>() : null;
         if (calls is null) fn.Append($"int fu{u}(void)\n{{\n\treturn {u % 7};\n}}\n");
         for (long f = u; f < p.Families; f += p.Units)
@@ -849,7 +849,7 @@ internal static partial class FirmwareEmitter
     }
 
 
-    // The work tree's files outside the compile db (since 1.4.11): .c files no command compiles and assembly
+    // The bulk carve's files outside the compile db: .c files no command compiles and assembly
     // sources. Both are kept whole and seed under min, so they name no define; and fw_cfg.h, which unit 0 includes
     // through -DFW_HDR="fw_cfg.h" and unit 1 by name.
     private static void WriteWorkExtras(Plan p, FwWork wk)
@@ -878,7 +878,7 @@ internal static partial class FirmwareEmitter
         using var fs = File.Create(Path.Combine(p.Root, FwSpec.DbPath));
         using var w = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
         w.WriteStartArray();
-        // phase 2 (plain firmware) builds for a Cortex-M with clang; work keeps the generic cc
+        // the function truth (plain firmware) builds for a Cortex-M with clang; the bulk carve keeps the generic cc
         bool arm = p.Work is null;
         void Entry(Utf8JsonWriter w, string file, string? world = null)
         {

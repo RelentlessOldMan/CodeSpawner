@@ -52,7 +52,7 @@ codespawner verify --corpus .\_fw
 # One giant header + the .c files that include it (the memory-axis repro).
 codespawner gen --out .\_mem --preset memory
 
-# Full work-scale huge repo: ~90 GB, 12 headers over 1 GB.
+# Full-scale huge repo: ~90 GB, 12 headers over 1 GB.
 codespawner gen --out D:\huge --preset huge
 ```
 
@@ -73,8 +73,7 @@ existing corpus first removes everything the old one left beside it: its manifes
 symlink, which is left alone) and its linked roots (`_rootN`).
 The marker is deleted last, so an interrupted regen still leaves a directory CodeSpawner recognises. A
 non-empty `<out>_rootN` that the new corpus would write into is refused unless you pass `--force`, when it
-isn't part of the CodeSpawner corpus at `--out` (for an `--out` from 1.1.5 or earlier, whose marker records
-no count, the `_rootN` its manifest names are its own; without that manifest none are).
+isn't part of the CodeSpawner corpus at `--out`.
 
 Output:
 - the corpus tree under `<out>/`,
@@ -121,7 +120,7 @@ codespawner verify --corpus C:\corpora\web
 ### `gen --firmware --out <dir> [--fw-* knobs…]`
 Adds a **firmware corpus** beside the C corpus, for testing a header carve. The tree has:
 
-- paste-macro register headers past `maxParseBytes` (20,000,000 bytes);
+- paste-macro register headers past `maxParseBytes` (a carver's parse-size limit, 20,000,000 bytes);
 - dense headers;
 - units reaching those headers' defines by every paste shape;
 - trap files and hostile files;
@@ -149,7 +148,7 @@ the same manifest). Exit 0 = pass, 1 = fail, 2 = bad input. Manifest defaults to
 sibling. A manifest path that goes through a junction or symlink inside the corpus fails as escaping it, and
 a corpus holding a `.codespawner-mutating` journal (an interrupted mutate, below) fails outright. A manifest
 with no `_meta` or `symbols` object, or one that declares nothing to check (no symbol sites, dup groups or
-indirect edges), is bad input (exit 2); before 1.1.11 the latter passed. A `manifestVersion` other than 1 or
+indirect edges), is bad input (exit 2). A `manifestVersion` other than 1 or
 2 is bad input (exit 2), as is a duplicate key anywhere in the manifest or a `_meta` value of the wrong JSON
 type (`seed` not an integer, `generatorVersion` not a string). A v2 (C++) manifest of the wrong shape (a field
 of the wrong JSON type, a symbol with no `def`, a v1-only field) is bad input too; otherwise it is checked
@@ -171,10 +170,10 @@ whose db names its base fails, and a db naming another tree (a moved corpus) pri
 ### `mutate --corpus <dir> [--seed n] [--edits n] [--step k | --through] [--restream]`
 Deterministically edits an existing corpus **in place** (guarded by the `.codespawner` marker) and emits a
 **delta manifest** that composes with the base: `truth = base ⊕ delta`. The incremental-index / watcher /
-reconcile / sidecar-orphan oracle. `--step k` applies one edit and emits `<corpus>-delta-{k}.json` (the
+reconcile / positional-index-orphan oracle. `--step k` applies one edit and emits `<corpus>-delta-{k}.json` (the
 chain driver — the consumer runs its incremental `update` and asserts between steps); `--through` applies
-all N and emits one cumulative delta. Edits: remove, line-shift modify, add, 4-grow (sidecar CREATE),
-4-shrink (sidecar DELETE), opt-in 4-restream (REWRITE). Generate the base with
+all N and emits one cumulative delta. Edits: remove, line-shift modify, add, 4-grow (positional index CREATE),
+4-shrink (positional index DELETE), opt-in 4-restream (REWRITE). Generate the base with
 `--shrink-seeds N [--restream-seeds N]` so the threshold edits have targets. See
 [mutate-design.md](mutate-design.md) for the delta schema, composition rule, and `prevTruthSha` chain guard.
 
@@ -194,7 +193,7 @@ mutate refuses it except for the next `--step` of the same chain: `--step k` nee
 with the same `--seed`, `--edits` and `--restream`, and anything else (a repeated or skipped step, another
 default, `--through` or bulk run) is refused until you regenerate. A `--three-way` run leaves the tree as the
 base and records nothing for it, but records each `_v1`/`_v2` variant, so a variant is not mutated again.
-Regenerating clears the record, the variants' included; a corpus mutated by 1.1.8 or earlier has none.
+Regenerating clears the record, the variants' included.
 
 ### `digest-selftest`
 Recomputes the five golden digest vectors (`prevTruthSha`, `indirectTruthSha`, `diffTruthSha`,
@@ -238,9 +237,9 @@ Scale tiers: `--preset ci` (≈1/100, keeps a giant), `--preset memory` (one gia
 else), `--preset huge` (~90 GB, 12 headers >1 GB, plus the include web), `--preset huge-lite` (all of
 huge's shapes in ~0.5 GB: `--scale 0.05`, 32 MB giants, the web at huge's counts with small headers).
 
-Pathology presets (each isolates one failure axis — see [ROADMAP.md](ROADMAP.md)):
+Pathology presets (each isolates one failure axis — see [knobs.md](knobs.md#presets)):
 `--preset dense-band` (posting/trigram memory OOM), `--preset broad-token` (`find_references` at scale +
-sidecar reads), `--preset long-lines` (long-line / no-newline), `--preset encoding-mix` (UTF-16/BOM/
+block-selective reads), `--preset long-lines` (long-line / no-newline), `--preset encoding-mix` (UTF-16/BOM/
 invalid bytes / non-ASCII idents), `--preset many-tiny` (walker / stat pressure),
 `--preset pathological-symbols` (symbol-extractor cost + `expectedMiss` honest-miss),
 `--preset dup-content` (content-hash dedup / posting collapse), `--preset firmware` (the firmware corpus and its
@@ -311,7 +310,7 @@ reports actual size.
 
 `--linked-roots N` adds sibling trees `<out>_root1 … _root{N-1}`; their files appear in the manifest with
 `../<out-leaf>_rootN/`-prefixed relative paths (consumers key on the symbol/basename, which is unaffected).
-The folder name in those paths is left out of `baseManifestSha` (since 1.1.7), so deltas bind the same base
+The folder name in those paths is left out of `baseManifestSha`, so deltas bind the same base
 whatever `--out` folder name the corpus was generated under. Truth digests still hash the paths as written.
 
 ---
@@ -323,8 +322,8 @@ contract, versioned in [`manifest-schema.md`](manifest-schema.md)).
 
 ```powershell
 # From the CodeSpawner repo, after building:
-.\scripts\vendor-codespawner.ps1 -Target ..\CodeCompass
-.\scripts\vendor-codespawner.ps1 -Target ..\CodeCarver
+.\scripts\vendor-codespawner.ps1 -Target ..\MyIndexer
+.\scripts\vendor-codespawner.ps1 -Target ..\MyCarver
 ```
 
 This copies `codespawner.exe` and the contract docs (`manifest-schema.md`, `mutate-design.md`,
@@ -333,10 +332,10 @@ writes a `GENERATOR_VERSION` stamp. Each consumer keeps its own thin verify adap
 `_meta.manifestVersion`** before trusting a manifest (`1` for a C corpus; a consumer that reads C++ corpora
 adds a separate `2` path):
 
-- **CodeCompass** — `verify-corpus-codecompass.ps1`: indexes the corpus, runs `find_references`, and
-  asserts against the manifest's `refs` + the unresolved-include disclosure + `doctor`'s scan.
-- **CodeCarver** — `carver-groundtruth-oracle.ps1`: reads the explicit `edges`, BFS's the reachable set
-  from a root, carves, and asserts kept ⊇ reachable (soundness) + measures over-keep (precision).
+- **An indexer's adapter** indexes the corpus, runs `find_references`, and asserts against the manifest's
+  `refs` + the unresolved-include disclosure.
+- **A carver's adapter** reads the explicit `edges`, BFS's the reachable set from a root, carves, and
+  asserts kept ⊇ reachable (soundness) + measures over-keep (precision).
 
 When you change the generator, re-run `build.ps1` then `vendor-codespawner.ps1` to bump each consumer.
 
@@ -355,7 +354,7 @@ codespawner gen --out .\_more --scale 0.05 --macro-density 4000000   # only the 
 # Pure >1 GB single-file path (a few GB, fast): 2 giant headers over 1 GB.
 codespawner gen --out D:\big --giant-headers 2 --max-header-mb 1229 --big-headers 0 --med-headers 0 --cfiles 5
 
-# Full work-scale over SMB: generate local, stage to a share, index THAT.
+# Full-scale over a network share: generate local, stage to the share, index THAT.
 codespawner gen --out D:\huge --preset huge
 robocopy D:\huge \\SERVER\share\huge /E /MT:16 /R:1 /W:1
 # (then run your tool against \\SERVER\share\huge)
