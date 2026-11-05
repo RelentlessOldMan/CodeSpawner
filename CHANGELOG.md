@@ -11,6 +11,19 @@ reads it.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-04
+
+No corpus byte changes for existing presets and knobs: they make the same tree and manifest as 1.5.5.
+
+### Added
+- `--preset firmware-multi` and `--fw-targets <2|3>`: the plain firmware tree built for two or three targets
+  (`ta`, `tb`, `tc`), each with its own `-DFW_TARGET`/feature `-D`, `startup.S`, board file, link script, compile db
+  and a plain-text build log with the real `ar` and `ld.lld --gc-sections` lines. The truth is per target (its own
+  compile closure with `#if` evaluated on its `-D`s, and its own link line) plus the union, in
+  `firmware.builds.<t>` and `firmware.builds.union`, with `firmware.targets` and file-qualified roots. Function
+  names defined in more than one file are file-qualified. Verify recomputes every build. See
+  docs/firmware-design.md "Multi-target".
+
 ## [1.5.5] - 2026-10-30
 
 No corpus byte changes: every preset and knob makes the same tree and manifest as 1.5.4.

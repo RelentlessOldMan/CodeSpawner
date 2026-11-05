@@ -416,6 +416,75 @@ Measured on 1.5.3 (`--preset firmware-bulk`):
 | 0.05 | 1.0 GB | 27 | 6,115,549 | 3,629 / 1,162,804 / 5,376,995 | 126 s | 125 s | ~1.4 GB |
 | 0.1 | 2.0 GB | 55 | 12,231,103 | 5,546 / 1,899,500 / 10,753,964 | 296 s | 249 s | ~2.4 GB |
 
+## Multi-target (`--fw-targets`, `--preset firmware-multi`)
+
+`--fw-targets 3` (or `2`) builds the plain-preset tree for several targets, each with its own `-D`s, startup file,
+link script and build log, and gives a truth per target plus their union. `--preset firmware-multi` is
+`--preset firmware` with `--fw-targets 3`. Without the knob the tree is the plain one, byte for byte. It is refused
+with `--fw-bulk`.
+
+- **Targets.** `ta`, `tb` and `tc` (the first two with `--fw-targets 2`). Target *n* (1-based) adds
+  `-DFW_TARGET=n -DFW_FEAT_A` (`_B` for tb, `_C` for tc) to every compile. Nothing in the tree defines `FW_TARGET`.
+- **Per target:**
+  - `fw/targets/<t>/startup.S` (the vector table and `Reset_Handler`) and `fw/targets/<t>/board.c` (`kboard`);
+  - `fw/include/board_<t>.h`, which `fw/include/board.h` picks by `#if FW_TARGET == n`;
+  - `fw/ld/<t>.ld`, which `INCLUDE`s the shared `mem.ld` and `big_0.ld`; `tc.ld` also `KEEP`s a `.fwtc` section;
+  - `fw-build/<t>/compile_commands.json` and `fw-build/<t>/build.log`. The log is plain text: one `clang … -c <file>
+    -o fw-build/<t>/obj/<file>.o` line per entry, `ar rcs fw-build/<t>/libboard_<t>.a` (the board object), then
+    `ld.lld --gc-sections -T fw/ld/<t>.ld -L fw/ld <objects> fw-build/<t>/libboard_<t>.a fw/lib/fwcrc.o
+    fw/lib/libfwx.a -o fw-build/<t>/<t>.elf`. Only tb's link adds `fw/lib/tb_obj.o`. Paths are relative to the
+    corpus root. `fw-build/compile_commands.json` holds every target's entries.
+- **Shared code.** Every target compiles the units, `main.c`, `handlers.c`, `fw_attr.c`, `src/multi.c`,
+  `asm/fw_util.s`, `asm/big_0.s` and `ext/app/host.c`. `src/multi.c` holds the closed-world `#if` cases: text under
+  `#if 0`, under `#ifdef` of a name nothing defines, under `#ifdef FW_FEAT_B`, under `#if` of a name an earlier
+  header defines, and an `#if FW_TARGET` / `#elif` / `#else` chain.
+- **Left out** (their truth depends on a `#if` the closed world decides differently): the traps, `fw_q3.h`,
+  `world.c` and the world-2 db, `asm/startup.S`, `ld/fw.ld`, and the kinds that branch on `FW_ALT` or another
+  build's `-D` (they are written as plain kind-0 families). The names in hostile files no target compiles are
+  spelled open (`Y…Y`), and `src/bigsrc_0.c`'s case is `YBS0Y`. Filler names in files no target compiles keep
+  their plain spelling but are union-open.
+
+**Truth per target.** Each target is graded alone, on its own db and link line:
+
+- **Defines.** The world is the target's compile closure, with `#if`/`#elif` evaluated on its `-D`s. A name nothing
+  in the tree defines is 0, and a name the tree defines (or `#undef`s), header guards excepted, is undecided. A line
+  live in the build is must-keep; dead by `#if 0`, by the `-D`s, or by a name nothing defines is must-drop; dead only
+  through a name the tree defines is open. A file in no target's closure is open, and so are its names: no target
+  grades them.
+- **Functions.** Reach follows the target's link line, archive members included, from its own `Reset_Handler`. An
+  object its log doesn't compile and its link doesn't take is not in the image.
+- **Other targets' files** (their units, `startup.S`, `.ld`, objects) are ignored: a target's lists name only what
+  is in its closure or image.
+- **Qualified function names.** A function defined in more than one file of `fw/` is written
+  `<fw-relative path>:<name>` in every function list (`src/handlers.c:kfwdup`, `targets/ta/board.c:kboard`).
+  Single-file names are bare, and define lists are always bare.
+
+**The union** (`builds.union`) votes over the targets that grade a name: must-keep if any target keeps it, must-drop
+if every one drops it, open otherwise, and open if no target grades it. The union image is the union of the links.
+
+**Spelling.** A name ending in `__` plus one letter per target spells its class in each target: `K` keep, `D` drop,
+`O` open (`KMT_2__DKD` is kept only in tb). Any other name follows the plain spelling in every target that grades
+it. Gen and verify check it per target and on the union. The designed cases:
+
+- `KMT_n__…` (the `FW_TARGET` chain), `KMFB_1__DKD` (under `FW_FEAT_B`), `KBRD_n__…` (each board header);
+- `kfwtbneed__DKD`, defined in shared code and called only by `lib/tb_obj.o`, which only tb links;
+- `kfwtckeep__DDK`, an uncalled function in the `.fwtc` section only `tc.ld` keeps (3 targets only);
+- `src/handlers.c:kfwdup` and `src/fw_attr.c:kfwdup` (a static in two units, one reached), and the shadowing pair
+  `src/fw_attr.c:kfwshd` / `src/handlers.c:kfwshd`.
+
+**Manifest.** `firmware.targets` lists the targets. `roots` are qualified,
+`["targets/ta/startup.S:Reset_Handler", …]`. There is no `compileDbUnion` and no `builds.main`: `builds.<t>` gives
+`compileDb`, `buildLog`, `roots`, `counts` (`mustKeep`, `mustDrop`, `open` and the carve bounds) and the seven lists
+(`fw-truth/<t>.<list>.txt`); `builds.union` gives `counts` and the lists. The top-level `counts` are the tree's and
+the union's, without the carve bounds. `verify --reference-carve` is refused (each target carves on its own).
+
+Every target's log was run as written with clang and ld.lld at scale 0.01: each image defines every must-keep
+function of its target and no must-drop one.
+
+| Scale | Size | Files | Union mustKeep / mustDrop / open | Gen | Verify |
+|---|---|---|---|---|---|
+| 0.01 | 0.22 GB | 492 | 19,186 / 980,178 / 219,978 | 37 s | ~35 s |
+
 ## Verify
 
 `verify` recomputes the truth from the tree with the same engine gen used, and FAILs on any difference. That makes
@@ -432,6 +501,7 @@ wrong, gen and verify both get wrong. It checks:
 - `work` (the bulk carve), when `_meta.gen.fwWork` is true or `fw/work/` exists: its counts add up, and its
   per-level uses and live cross decoys are recounted from the lists.
 - with `roots`: `compileDbUnion`, that `functionCases` is a file, and the main and union function lists.
+- with `targets`: each target's db, log and roots, its counts and lists, and the union's (see "Multi-target").
 
 A compile db it cannot read (malformed, or with absolute paths from where the corpus was before it moved) is a
 `FAIL firmware compileDb`, not a crash. Regenerate a moved corpus, or generate it with `--fw-db-paths relative`.
@@ -462,6 +532,7 @@ All counts scale with `--scale` (an explicit knob is used as given). `_meta.gen`
 | `--fw-dense-headers` | 200 | Dense headers `dense/dx_N.h`, besides the fixtures. |
 | `--fw-chain-max` | 40 | The long forwarder chains' length (2–10,000; not scaled). |
 | `--fw-db-paths` | `absolute` | `absolute` or `relative`: how the compile db names paths (not scaled). |
+| `--fw-targets` | off | `2` or `3`: build for that many targets (see "Multi-target"; not scaled). |
 | `--fw-bulk` | off | The bulk carve (see "Bulk shape"). Every `--fw-bulk-*` knob is refused without it. |
 | `--fw-bulk-defines` | 122,300,000 | Bulk defines: the use tree, the wide population and filler. |
 | `--fw-bulk-pasters` | 5,000 | Paste macros, split across the levels. |

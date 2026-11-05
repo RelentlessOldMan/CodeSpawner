@@ -62,10 +62,18 @@ internal static partial class FirmwareEmitter
         public long Families, Pasters;
         public long BigBytes;
         public FwWork? Work;
+        public int Targets;                            // --fw-targets (0: one build)
+        public bool Multi => Targets > 0;
+        public int TrapCount => Multi ? 0 : Traps;
         public readonly List<int> UnitFile = new();   // unit -> file index
         public string Fw(string rel) => Path.Combine(Root, FwSpec.FwDir, rel);
 
-        public int Kind(long f) => (int)(f % Kinds);
+        // a multi-target tree leaves out the kinds whose truth does not depend on the build's #ifs
+        public int Kind(long f) { int k = (int)(f % Kinds); return Multi && IfAgnostic(k) ? 0 : k; }
+        /// <summary>A hostile file's seed: open in a multi-target tree, where no build names its file.</summary>
+        public string N(string plain) => Multi && MultiNames.TryGetValue(plain, out var m) ? m : plain;
+        /// <summary>A per-target suffix: <paramref name="c"/> of each target, in order (K keep, D drop, O open).</summary>
+        public string Sfx(Func<int, char> c) => new(Enumerable.Range(0, Targets).Select(c).ToArray());
         public int UnitOf(long f) => (int)(f % Units);
         public int BigOf(int u) => u % Big;
         public int DxOf(int u) => Dx > 0 ? u % Dx : -1;
@@ -83,12 +91,21 @@ internal static partial class FirmwareEmitter
         public int TrapUnit(int t) => t % Units;
     }
 
+    private static bool IfAgnostic(int kind) => kind is 11 or 14 or 27 or 36 or 37 or 38;
+
+    private static readonly Dictionary<string, string> MultiNames = new()
+    {
+        ["KBM0X"] = "YBM0Y", ["KL1N0X"] = "YL1N0Y", ["KUNT0X"] = "YUNT0Y", ["KCRL0X"] = "YCRL0Y", ["KLCR0X"] = "YLCR0Y",
+        ["KHID0X"] = "YHID0Y", ["KU16V0X"] = "YU16V0Y", ["KBIN0X"] = "YBIN0Y",
+    };
+
     public static FirmwareResult Emit(GenOptions o, string root, ParallelOptions par)
     {
         var p = new Plan
         {
             O = o,
             Root = root,
+            Targets = o.FwTargets,
             Big = o.Eff("fw-big-headers", o.FwBigHeaders, keepOne: true),
             Files = Math.Max(4, o.Eff("fw-files", o.FwFiles)),
             Dx = o.Eff("fw-dense-headers", o.FwDenseHeaders),
@@ -106,7 +123,8 @@ internal static partial class FirmwareEmitter
             string full = Path.Combine(root, d);
             if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
         }
-        foreach (var d in new[] { "include", "big", "dense", "src/traps", "misc" }) Directory.CreateDirectory(p.Fw(d));
+        foreach (var d in new[] { "include", "big", "dense", "misc" }) Directory.CreateDirectory(p.Fw(d));
+        if (!p.Multi) Directory.CreateDirectory(p.Fw("src/traps"));
         if (p.Work is not null) Directory.CreateDirectory(p.Fw(FwWork.Dir));
         for (int d = 0; d <= p.DirOf(p.Files - 1); d++) Directory.CreateDirectory(p.Fw($"src/m{d}"));
         Directory.CreateDirectory(Path.Combine(root, ExtDir, "include"));
@@ -125,7 +143,7 @@ internal static partial class FirmwareEmitter
             if (p.IsHeaderFile(i)) WriteKeptHeader(p, i);
         });
         Parallel.For(0, p.Units, par, u => WriteUnit(p, u));
-        for (int t = 0; t < Traps; t++) WriteTrap(p, t);
+        for (int t = 0; t < p.TrapCount; t++) WriteTrap(p, t);
         WriteBigSrc(p);
         WriteTable(p);
         WriteExt(p);
@@ -137,9 +155,10 @@ internal static partial class FirmwareEmitter
         if (p.Work is null) WriteFunctionCases(p);
         r.Units = p.Units;
         r.Families = p.Families;
-        r.Traps = Traps;
+        r.Traps = p.TrapCount;
 
-        var truth = FwSpec.Compute(root, Path.Combine(root, TruthDir), checkAlphabet: true, p.Work is null ? Roots : null);
+        var truth = p.Multi ? FwMulti.Compute(root, Path.Combine(root, TruthDir), checkAlphabet: true, p.Targets)
+            : FwSpec.Compute(root, Path.Combine(root, TruthDir), checkAlphabet: true, p.Work is null ? Roots : null);
         if (truth.AlphabetErrors.Count > 0)
             throw new InvalidOperationException("firmware: names whose class disagrees with their spelling (a generator bug):\n  "
                 + string.Join("\n  ", truth.AlphabetErrors));
@@ -552,6 +571,14 @@ internal static partial class FirmwareEmitter
 
         """;
 
+    private static string Regs0(Plan p)
+    {
+        if (!p.Multi) return Regs0Extras;
+        var s = Regs0Extras;
+        foreach (var (k, v) in MultiNames) s = s.Replace($"#define {k} 1\n", $"#define {v} 1\n");
+        return s + MultiHosts(p);
+    }
+
     // ---------------- big headers ----------------
 
     private static void WriteBig(Plan p, int h)
@@ -566,14 +593,14 @@ internal static partial class FirmwareEmitter
                 HostText(p, f, dense: false, sb);
                 if (sb.Length > 0) blocks.Add(sb.ToString());
             }
-        for (int t = 0; t < Traps; t++)
+        for (int t = 0; t < p.TrapCount; t++)
             if (p.BigOf(p.TrapUnit(t)) == h)
             {
                 sb.Clear();
                 TrapHostText(t, sb);
                 blocks.Add(sb.ToString());
             }
-        if (h == 0) blocks.Add(Regs0Extras);
+        if (h == 0) blocks.Add(Regs0(p));
         long p0 = p.Pasters * h / p.Big, p1 = p.Pasters * (h + 1) / p.Big;
 
         long target = h == 0 ? BoundaryBig : p.BigBytes;
@@ -721,7 +748,7 @@ internal static partial class FirmwareEmitter
         w.L("#include <fw_os.h>");
         int hdr = p.HeaderOfDir(p.DirOf(file));
         if (hdr >= 0) w.L($"#include \"k{hdr}.h\"");
-        if (u == 0) w.L("#include \"fw_q3.h\"");
+        if (u == 0 && !p.Multi) w.L("#include \"fw_q3.h\"");
         if (p.Work is { } wk)
         {
             foreach (int h in wk.HeadersOfUnit(u, p.Units)) w.L($"#include \"{FwWork.HeaderFile(h)}\"");
@@ -738,13 +765,13 @@ internal static partial class FirmwareEmitter
             if (UseText(p, f, scope, fn)) calls?.Add($"ff{f}()");
             if (scope.Length + fn.Length > 1 << 16) { w.Text(scope.ToString()); w.Text(fn.ToString()); scope.Clear(); fn.Clear(); }
         }
-        for (int t = 0; t < Traps; t++) if (p.TrapUnit(t) == u) { TrapUseText(t, fn); calls?.AddRange([$"tj64_{t}()", $"tj65_{t}()", $"tp8_{t}()"]); }
+        for (int t = 0; t < p.TrapCount; t++) if (p.TrapUnit(t) == u) { TrapUseText(t, fn); calls?.AddRange([$"tj64_{t}()", $"tj65_{t}()", $"tp8_{t}()"]); }
         p.Work?.UnitText(u, p.Units, scope, fn);
         if (p.Work is not null && u is 0 or 1) fn.Append($"int fwcfg{u}(void)\n{{\n\treturn KCFG0X;\n}}\n");
         if (u == 0) fn.Append("int fdv(void)\n{\n\treturn KDV_9 + KD_7 + KHWP(Z, Z) + CAT(KDE0X_, KDE_N) + KPORT(KSRC0X);\n}\n");
         if (calls is not null)
         {
-            if (u == 0) calls.AddRange(["fdv()", "fw_q3isp(0)"]);
+            if (u == 0) calls.AddRange(p.Multi ? ["fdv()"] : ["fdv()", "fw_q3isp(0)"]);
             FuText(p, u, calls, fn);
         }
         w.Text(scope.ToString());
@@ -757,8 +784,9 @@ internal static partial class FirmwareEmitter
         using var w = new FwWriter(p.Fw("src/bigsrc_0.c"));
         w.L("/* bigsrc_0.c: a generated source past maxParseBytes */");
         w.L("#include \"fwpaste.h\"");
-        w.L("#define KBS0X_5 5");
-        w.L("int fw_bigsrc = CAT(KBS0X_, 5);");
+        // no target compiles it, so in a multi-target tree its names are open
+        w.L(p.Multi ? "#define YBS0Y 5" : "#define KBS0X_5 5");
+        w.L(p.Multi ? "int fw_bigsrc = CAT(YBS0, Y);" : "int fw_bigsrc = CAT(KBS0X_, 5);");
         var rng = Rng.For(p.O.Seed, Category.Firmware, 4_000_000L);
         long i = 0;
         while (w.Bytes + FillerMax + 300 < BigSrcBytes) Filler(w, "ZBS", i++, ref rng);
@@ -812,31 +840,34 @@ internal static partial class FirmwareEmitter
         byte[] A(string s) => Encoding.ASCII.GetBytes(s);
 
         Put("misc/empty.h", [], "empty");
-        Put("misc/bom.h", [0xEF, 0xBB, 0xBF, .. A("/* utf-8 bom */\nint fw_bom = KBM0X;\n")], "utf8-bom");
-        Put("misc/latin1.c", [.. A("/* caf"), 0xE9, .. A(" */\nint fw_l1 = KL1N0X;\n")], "latin1");
-        Put("misc/unterminated.h", A("int fw_ut = KUNT0X;\n/* this comment never ends\n"), "unterminated-comment");
-        Put("misc/crlf.h", A("/* crlf */\r\nint fw_cr = KCRL0X;\r\n"), "crlf");
+        Put("misc/bom.h", [0xEF, 0xBB, 0xBF, .. A($"/* utf-8 bom */\nint fw_bom = {p.N("KBM0X")};\n")], "utf8-bom");
+        Put("misc/latin1.c", [.. A("/* caf"), 0xE9, .. A($" */\nint fw_l1 = {p.N("KL1N0X")};\n")], "latin1");
+        Put("misc/unterminated.h", A($"int fw_ut = {p.N("KUNT0X")};\n/* this comment never ends\n"), "unterminated-comment");
+        Put("misc/crlf.h", A($"/* crlf */\r\nint fw_cr = {p.N("KCRL0X")};\r\n"), "crlf");
         Put("misc/hash_comment.h", A("/* lead */ #define KHCA0X 1\n# /* c */ define KHCB0X 2\nint fw_hc = KHCA0X + KHCB0X;\n"),
             "comment-around-hash");
         Put("misc/splice_space.h", A("#define KSPS0X \\ \n\t3\nint fw_sps = KSPS0X;\n"), "backslash-space-splice");
-        Put("misc/lone_cr.h", A("/* lone cr */\rint fw_lcr = KLCR0X;\n"), "lone-cr");
+        Put("misc/lone_cr.h", A($"/* lone cr */\rint fw_lcr = {p.N("KLCR0X")};\n"), "lone-cr");
         // compiled (unit 0 includes it): a ( in a comment and in a char literal that a paren count must not see,
         // before many #if blocks (its self-referential comma macro KSRC0X is graded, so it lives in regs_0.h)
-        var q3 = new StringBuilder("#ifndef FW_Q3_H\n#define FW_Q3_H\n");
-        q3.Append("/* see the note (below */\nint fw_q3isp(int c);\nint fw_q3isp(int c) { if (c == '(') return 1; return 0; }\n");
-        for (int i = 0; i < 2000; i++) q3.Append($"#if FW_Q3C{i}\nint fw_q3a{i} = 0;\n#else\nint fw_q3b{i} = {i};\n#endif\n");
-        Put("include/fw_q3.h", A(q3.Append("#endif\n").ToString()), "comment-and-char-paren");
+        if (!p.Multi)
+        {
+            var q3 = new StringBuilder("#ifndef FW_Q3_H\n#define FW_Q3_H\n");
+            q3.Append("/* see the note (below */\nint fw_q3isp(int c);\nint fw_q3isp(int c) { if (c == '(') return 1; return 0; }\n");
+            for (int i = 0; i < 2000; i++) q3.Append($"#if FW_Q3C{i}\nint fw_q3a{i} = 0;\n#else\nint fw_q3b{i} = {i};\n#endif\n");
+            Put("include/fw_q3.h", A(q3.Append("#endif\n").ToString()), "comment-and-char-paren");
+        }
         var blob = new byte[4096];
         A("blob ZBIN0Z").CopyTo(blob, 100);   // NUL bytes from offset 0: binary, never read
         Put("misc/blob.bin", blob, "nul-early");
         var late = new byte[9000];
         Array.Fill(late, (byte)'-');
-        A(" KBIN0X ").CopyTo(late, 10);
+        A($" {p.N("KBIN0X")} ").CopyTo(late, 10);
         late[8500] = 0;                       // a NUL past the 8 KB probe: text
         Put("misc/late.bin", late, "nul-late");
-        Put("misc/notes_u16.txt", [0xFF, 0xFE, .. Encoding.Unicode.GetBytes("notes: uses KU16V0X\n")], "utf16");
+        Put("misc/notes_u16.txt", [0xFF, 0xFE, .. Encoding.Unicode.GetBytes($"notes: uses {p.N("KU16V0X")}\n")], "utf16");
         string hidden = p.Fw("misc/.fwhidden");
-        Put("misc/.fwhidden", A("KHID0X\n"), "hidden");
+        Put("misc/.fwhidden", A($"{p.N("KHID0X")}\n"), "hidden");
         File.SetAttributes(hidden, File.GetAttributes(hidden) | FileAttributes.Hidden);
 
         hostile.Add(new FwHostile($"{ExtDir}/include/fw_osh.h", "hidden (outside the root)"));
@@ -871,6 +902,7 @@ internal static partial class FirmwareEmitter
 
     private static void WriteDb(Plan p)
     {
+        if (p.Multi) { WriteMultiBuild(p); return; }
         bool rel = p.O.FwDbPaths == "relative";
         string P(string corpusRel) => rel ? corpusRel : Path.GetFullPath(Path.Combine(p.Root, corpusRel));
         string[] inc = p.Work is null ? ["fw/include", "fw/big", "fw/dense", "ext/include"]
@@ -923,7 +955,7 @@ internal static partial class FirmwareEmitter
         long n = 0;
         void Row(string name, string kase, string site) { sb.Append(name).Append('\t').Append(kase).Append('\t').Append(site).Append('\n'); n++; }
 
-        for (int t = 0; t < Traps; t++)
+        for (int t = 0; t < p.TrapCount; t++)
         {
             string trap = $"src/traps/trap_{t}.h", unit = p.UnitRel(p.TrapUnit(t));
             Row($"ZNB{t}Q_1Z", "non-alias-call", trap);
@@ -948,13 +980,13 @@ internal static partial class FirmwareEmitter
         foreach (var (name, kase, site) in new[]
         {
             ("__KRS0", "reserved", "big/regs_0.h"), ("_KRS0", "reserved", "big/regs_0.h"), ("NOMINMAX", "reserved", "big/regs_0.h"),
-            ("KDV_VAL", "define-arg", "../" + FwSpec.DbPath), ("KBIN0X", "late-nul-text", "misc/late.bin"),
-            ("ZBIN0Z", "binary-not-read", "misc/blob.bin"), ("KU16V0X", "utf16-text", "misc/notes_u16.txt"),
-            ("KHID0X", "hidden-file", "misc/.fwhidden"), ("KBM0X", "utf8-bom", "misc/bom.h"), ("KL1N0X", "latin1", "misc/latin1.c"),
-            ("KUNT0X", "unterminated-comment", "misc/unterminated.h"), ("KCRL0X", "crlf", "misc/crlf.h"),
+            ("KDV_VAL", "define-arg", "../" + FwSpec.DbPath), (p.N("KBIN0X"), "late-nul-text", "misc/late.bin"),
+            ("ZBIN0Z", "binary-not-read", "misc/blob.bin"), (p.N("KU16V0X"), "utf16-text", "misc/notes_u16.txt"),
+            (p.N("KHID0X"), "hidden-file", "misc/.fwhidden"), (p.N("KBM0X"), "utf8-bom", "misc/bom.h"), (p.N("KL1N0X"), "latin1", "misc/latin1.c"),
+            (p.N("KUNT0X"), "unterminated-comment", "misc/unterminated.h"), (p.N("KCRL0X"), "crlf", "misc/crlf.h"),
             ("YEXU0Y", "outside-not-included", $"../{ExtDir}/include/unused_os.h"), ("KOS0X_VAL", "outside-included", $"../{ExtDir}/include/fw_os.h"),
             ("KOSH0X_VAL", "outside-included-hidden", $"../{ExtDir}/include/fw_osh.h"),
-            ("KBS0X_5", "big-source", "src/bigsrc_0.c"),
+            (p.Multi ? "YBS0Y" : "KBS0X_5", "big-source", "src/bigsrc_0.c"),
             ("KHWB_Z_rZ_VAL", "interior-letter", p.UnitRel(0)), ("ZIL0Z", "interior-letter", "big/regs_0.h"),
             ("KDE0X_4", "define-arg-value", p.UnitRel(0)),
             ("KSRC0X_1", "self-comma", p.UnitRel(0)),
@@ -962,6 +994,7 @@ internal static partial class FirmwareEmitter
             Row(name, kase, site);
 
         var seen = new int[Kinds];
+        if (p.Multi) for (int k = 0; k < Kinds; k++) if (IfAgnostic(k)) seen[k] = CasesPerKind;
         for (long f = 0; f < p.Families && seen.Any(c => c < CasesPerKind); f++)
         {
             int k = p.Kind(f);
@@ -972,6 +1005,7 @@ internal static partial class FirmwareEmitter
             if (Decoy(p, f) is { } d) Row(d, kase + " decoy", site);
         }
         if (p.Work is { } wk) foreach (var (name, kase, site) in wk.Cases()) Row(name, kase, site);
+        if (p.Multi) foreach (var (name, kase, site) in MultiCases(p)) Row(name, kase, site);
         File.WriteAllText(Path.Combine(p.Root, CasesPath), sb.ToString());
         return n;
     }

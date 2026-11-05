@@ -30,6 +30,11 @@ internal sealed class FwTruth
     /// <summary>Generator check: C names whose class disagrees with the alphabet (Z…Z, Y…Z and Z…Y drop, Y…Y open, else keep).</summary>
     public List<string> AlphabetErrors = new();
     public long MustKeepCount, MustDropCount, OpenCount;
+    /// <summary>One target of a multi-target corpus: its functions by (fw-relative file, name), and its must-keep files.</summary>
+    public Dictionary<(string File, string Name), int>? FnCls;
+    public SortedSet<string>? KeepFiles;
+    /// <summary>A multi-target corpus: each target's truth (lists named &lt;t&gt;.*); this one's lists are the union's.</summary>
+    public List<(string Name, FwTruth Truth)>? Builds;
 }
 
 /// <summary>
@@ -57,6 +62,10 @@ internal sealed partial class FwSpec
     private readonly string _root, _fwRoot;
     /// <summary>firmware.roots: non-null turns on the function truth.</summary>
     private IReadOnlyList<string>? _roots;
+    /// <summary>One target of a multi-target corpus (null: the one build).</summary>
+    private FwScope? _scope;
+    private FwCond? _eval;
+    private readonly IntList _cdMask = new();   // scope only: the runs each C def counts for
 
     // files: fw files (sorted, fw-relative) then ext closure files
     private readonly List<string> _files = new();        // full paths
@@ -110,9 +119,9 @@ internal sealed partial class FwSpec
 
     /// <summary>Computes the truth of the corpus at <paramref name="root"/>. With <paramref name="listDir"/> the lists
     /// are written there (main.* and union.*); without, they are only hashed.</summary>
-    public static FwTruth Compute(string root, string? listDir, bool checkAlphabet, IReadOnlyList<string>? roots = null)
+    public static FwTruth Compute(string root, string? listDir, bool checkAlphabet, IReadOnlyList<string>? roots = null, FwScope? scope = null)
     {
-        var s = new FwSpec(root) { _roots = roots };
+        var s = new FwSpec(root) { _roots = roots, _scope = scope, _eval = scope is null ? null : new FwCond(scope) };
         try { return s.Run(listDir, checkAlphabet); }
         finally { foreach (var h in s._handles.Values) h.Dispose(); }
     }
@@ -123,6 +132,7 @@ internal sealed partial class FwSpec
         EnumerateFw();
         t.TreeSha = TreeSha();
         ReadDb();
+        if (_scope is not null) ScopeDefines();
         ClassifyFiles(t);
         Closure();
         _maybe = MaybeKept();
@@ -205,13 +215,33 @@ internal sealed partial class FwSpec
 
     private void ReadDb()
     {
-        string db = Path.Combine(_root, DbPath);
+        string dbPath = _scope?.DbPath ?? DbPath;
+        string db = Path.Combine(_root, dbPath);
+        if (_scope is not null && !File.Exists(db)) throw new FwDbException($"{dbPath} is missing");
         byte[] bytes = File.ReadAllBytes(db);
         // a db that is not an array of { directory, file, arguments | command } is a bad corpus, not a crash
-        try { ReadDb(bytes, DbPath); }
+        try { ReadDb(bytes, dbPath); }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or NullReferenceException)
-        { throw new FwDbException($"{DbPath} is not a compile db this generator writes ({ex.Message})"); }
+        { throw new FwDbException($"{dbPath} is not a compile db this generator writes ({ex.Message})"); }
     }
+
+    // a target's -Ds: the value its units agree on, else unknown
+    private void ScopeDefines()
+    {
+        var all = _units.Select(Defs).ToList();
+        foreach (var d in all)
+            foreach (var (k, v) in d)
+            {
+                if (!_scope!.Defines.TryGetValue(k, out var was)) _scope.Defines[k] = v;
+                else if (was != v) _scope.Defines[k] = null;
+            }
+        foreach (var k in _scope!.Defines.Keys) if (all.Any(d => !d.ContainsKey(k))) _scope.Partial.Add(k);
+    }
+
+    /// <summary>A file only other targets use: this target never reads it.</summary>
+    private bool Ignored(int f) => _scope is not null && f < _fwCount && _scope.Ignore.Contains(_rel[f]);
+
+    private FwCond? Tracker() => _scope is null ? null : new FwCond(_scope);
 
     private void ReadDb(byte[] bytes, string name)
     {
@@ -277,8 +307,10 @@ internal sealed partial class FwSpec
         byte[] raw = File.ReadAllBytes(_files[f]);
         var text = FwLexer.TextBytes(raw, out int st);
         var w = new LineWalker(text, st);
+        var tr = Tracker();
         while (w.Next())
         {
+            if (tr is not null && tr.Line(w.Kind, w.Spliced) == LineState.Dead) continue;
             if (w.Kind != LineKind.OtherDirective) continue;
             var s = w.Spliced;
             int i = FwLexer.DirectiveStart(s);
@@ -367,7 +399,9 @@ internal sealed partial class FwSpec
     private void Pass1()
     {
         var d = new DefineParse();
-        foreach (int f in Enumerable.Range(0, _fwCount).Where(i => IsCExt(_files[i]) && !_binary[i]).Concat(ExtClosure())) DefFile(f, d, 3);
+        // a target's file no build of it includes counts under max only
+        foreach (int f in Enumerable.Range(0, _fwCount).Where(i => IsCExt(_files[i]) && !_binary[i] && !Ignored(i)).Concat(ExtClosure()))
+            DefFile(f, d, _scope is null || _closure.Contains(f) ? 3 : 2);
         foreach (int f in _maybe) if (!FwLexer.LooksBinary(_files[f])) DefFile(f, d, 2);
         // -DN=v is `#define N v`, -DN is `#define N 1`
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -401,13 +435,17 @@ internal sealed partial class FwSpec
         long cbase = _cBytes;
         if (isC) { _cBase.Add(cbase); _cBaseFile.Add(f); _cBytes += raw.Length; }
         var w = new LineWalker(text, st);
+        var tr = Tracker();
         while (w.Next())
         {
-            if (w.Kind != LineKind.Define || !d.Parse(w.Spliced)) continue;
+            var ls = tr?.Line(w.Kind, w.Spliced) ?? LineState.Live;
+            if (w.Kind != LineKind.Define || ls == LineState.Dead || !d.Parse(w.Spliced)) continue;
+            int m = ls == LineState.Unknown ? mask & 2 : mask;
             int name = Names.GetOrAdd(w.Spliced.Slice(d.NameStart, d.NameLen));
-            RecordDef(d, w.Spliced, name, mask, keepText: !isC);
+            RecordDef(d, w.Spliced, name, m, keepText: !isC);
             if (isC)
             {
+                if (_scope is not null) _cdMask.Add(m);
                 Names.Set(name, NameTable.CName);
                 int k = _cdName.Count;
                 _cdName.Add(name);
@@ -642,22 +680,30 @@ internal sealed partial class FwSpec
     {
         var main = new Streams(this, 3);
         var body = new Streams(this, 3);
+        // a target's lines a define in the tree decides, and its files no build of it includes: max only
+        Streams? xMain = _scope is null ? null : new Streams(this, 2), xBody = _scope is null ? null : new Streams(this, 2);
         var d = new DefineParse();
         var kept = new List<int>();
+        var outside = new List<int>();
         for (int f = 0; f < _fwCount; f++)
         {
-            if (_binary[f]) continue;
+            if (_binary[f] || Ignored(f)) continue;
             if (!IsCExt(_files[f]))
             {
+                // a target's text no build of it names seeds max only
                 var text = FwLexer.TextBytes(File.ReadAllBytes(_files[f]), out int st);
+                _seedFlag = _scope is null ? NameTable.Seed : SeedMax;
                 SeedText(text.AsSpan(st));
+                _seedFlag = NameTable.Seed;
                 continue;
             }
-            if (_isC[f]) CarvedStream(f, main);
-            else kept.Add(f);
+            bool inside = _scope is null || _closure.Contains(f);
+            if (_isC[f]) CarvedStream(f, inside ? main : xMain!, xMain, !inside);
+            else (inside ? kept : outside).Add(f);
         }
         kept.AddRange(ExtClosure());
-        foreach (int f in kept) KeptFile(f, main, body, d);
+        foreach (int f in kept) KeptFile(f, main, body, d, xMain: xMain, xBody: xBody);
+        foreach (int f in outside) KeptFile(f, xMain!, xBody!, d, maybe: true);
         foreach (var line in _dashDefines)
         {
             if (!d.Parse(line)) continue;
@@ -672,44 +718,71 @@ internal sealed partial class FwSpec
 
     /// <summary>A kept file: all of it seeds; its non-define lines are one stream and each define body its own. A
     /// <paramref name="maybe"/> file (see <see cref="MaybeKept"/>) seeds and gives pieces under max only.</summary>
-    private void KeptFile(int f, Streams main, Streams body, DefineParse d, bool maybe = false)
+    private void KeptFile(int f, Streams main, Streams body, DefineParse d, bool maybe = false, Streams? xMain = null, Streams? xBody = null)
     {
         if (maybe && FwLexer.LooksBinary(_files[f])) return;
         var text = FwLexer.TextBytes(File.ReadAllBytes(_files[f]), out int st);
-        _seedFlag = maybe ? SeedMax : NameTable.Seed;
-        SeedText(text.AsSpan(st));
-        _seedFlag = NameTable.Seed;
+        var tr = Tracker();
+        if (tr is null)
+        {
+            _seedFlag = maybe ? SeedMax : NameTable.Seed;
+            SeedText(text.AsSpan(st));
+            _seedFlag = NameTable.Seed;
+        }
         main.Begin(null);
+        if (xMain is not null && xMain != main) xMain.Begin(null);
         var w = new LineWalker(text, st);
         while (w.Next())
         {
+            var m = main;
+            var b = body;
+            if (tr is not null)
+            {
+                // a target's dead lines are not in its build; a line the tree's defines decide only max sees
+                var ls = tr.Line(w.Kind, w.Spliced);
+                if (ls == LineState.Dead) continue;
+                if (ls == LineState.Unknown && xMain is not null) { m = xMain; b = xBody!; }
+                _seedFlag = maybe || ls == LineState.Unknown ? SeedMax : NameTable.Seed;
+                SeedText(w.Raw);
+                _seedFlag = NameTable.Seed;
+            }
             if (w.Kind == LineKind.Define && d.Parse(w.Spliced))
             {
-                main.Directive(LineKind.Define);
-                body.Begin(d);
-                body.Lex(w.Spliced[d.BodyStart..], false);
-                body.End();
+                m.Directive(LineKind.Define);
+                b.Begin(d);
+                b.Lex(w.Spliced[d.BodyStart..], false);
+                b.End();
                 continue;
             }
-            StreamLine(ref w, main);
+            StreamLine(ref w, m);
         }
         main.End();
+        if (xMain is not null && xMain != main) xMain.End();
     }
 
     /// <summary>A carved file: its non-define lines seed and are one stream; its defines were recorded in pass 1.</summary>
-    private void CarvedStream(int f, Streams main)
+    private void CarvedStream(int f, Streams main, Streams? xMain = null, bool maxOnly = false)
     {
         byte[] text = File.ReadAllBytes(_files[f]);
         int st = text.Length >= 3 && text[0] == 0xEF && text[1] == 0xBB && text[2] == 0xBF ? 3 : 0;
+        var tr = Tracker();
         main.Begin(null);
+        if (xMain is not null && xMain != main) xMain.Begin(null);
         var w = new LineWalker(text, st);
         while (w.Next())
         {
-            if (w.Kind == LineKind.Define && IsNamedDefine(w.Spliced)) { main.Directive(LineKind.Define); continue; }
+            var m = main;
+            var ls = tr?.Line(w.Kind, w.Spliced) ?? LineState.Live;
+            if (ls == LineState.Dead) continue;
+            if (ls == LineState.Unknown && xMain is not null) m = xMain;
+            if (w.Kind == LineKind.Define && IsNamedDefine(w.Spliced)) { m.Directive(LineKind.Define); continue; }
+            if (tr is not null) _seedFlag = maxOnly || ls == LineState.Unknown ? SeedMax : NameTable.Seed;
             SeedText(w.Raw);
-            StreamLine(ref w, main);
+            _seedFlag = NameTable.Seed;
+            StreamLine(ref w, m);
         }
         main.End();
+        if (xMain is not null && xMain != main) xMain.End();
     }
 
     private readonly DefineParse _probe = new();
@@ -755,6 +828,7 @@ internal sealed partial class FwSpec
             int name = wq[wi++];
             for (int k = _cHead[name]; k >= 0; k = _cdNext[k])
             {
+                if (_scope is not null && (_cdMask[k] & (1 << run)) == 0) continue;   // a def only max sees
                 int len = _cdLen[k];
                 int cf = CFile(k, out long off);
                 if (buf.Length < len) buf = new byte[Math.Max(len, buf.Length * 2)];
@@ -795,10 +869,18 @@ internal sealed partial class FwSpec
 
     private void Results(FwTruth t, string? listDir, bool checkAlphabet)
     {
+        // a target grades the names a carved file of its closure defines
+        bool[]? graded = null;
+        if (_scope is not null)
+        {
+            graded = new bool[Names.Count];
+            for (int k = 0; k < _cdName.Count; k++) if (_closure.Contains(CFile(k, out _))) graded[_cdName[k]] = true;
+        }
         // per-def counts
         for (int k = 0; k < _cdName.Count; k++)
         {
             int n = _cdName[k];
+            if (graded is not null && !_closure.Contains(CFile(k, out _))) continue;
             bool keep = Names.Has(n, NameTable.WantMin), drop = !Names.Has(n, NameTable.WantMax);
             t.TotalDefineLines++;
             if (drop) t.DefinesDroppedMin++;
@@ -807,30 +889,35 @@ internal sealed partial class FwSpec
             if (!keep) t.BytesAfterMin += len;
             if (drop) t.BytesAfterMax += len - _cdTerm[k];
         }
-        for (int f = 0; f < _fwCount; f++) if (_isC[f]) t.BytesBefore += new FileInfo(_files[f]).Length;
+        for (int f = 0; f < _fwCount; f++) if (_isC[f] && (graded is null || _closure.Contains(f))) t.BytesBefore += new FileInfo(_files[f]).Length;
         t.BytesAfterMin = t.BytesBefore - t.BytesAfterMin;
         t.BytesAfterMax = t.BytesBefore - t.BytesAfterMax;
 
-        using var keepW = new ListWriter(listDir, "mustKeepDefines");
-        using var dropW = new ListWriter(listDir, "mustDropDefines");
-        using var openW = new ListWriter(listDir, "openDefines");
+        string? side = _scope?.Name;
+        using var keepW = new ListWriter(listDir, "mustKeepDefines", side);
+        using var dropW = new ListWriter(listDir, "mustDropDefines", side);
+        using var openW = new ListWriter(listDir, "openDefines", side);
+        // a target's every carved name and its class (9: not graded), in list order, for the union
+        using var clsW = _scope is null ? null : new StreamWriter(_scope.ClsPath!, false, Encoding.Latin1, 1 << 16) { NewLine = "\n" };
         foreach (int n in _sortedFwd)
         {
+            var s = Names.Get(n);
+            if (graded is not null && !graded[n]) { clsW!.WriteLine(Encoding.Latin1.GetString(s) + "\t9"); continue; }
             if (Names.Has(n, NameTable.Paster)) t.PasteMacros++;
             if (Names.Has(n, FwdC)) t.ForwardingMacros++;
-            var s = Names.Get(n);
             int cls = Names.Has(n, NameTable.WantMin) ? 0 : Names.Has(n, NameTable.WantMax) ? 2 : 1;
             (cls == 0 ? keepW : cls == 1 ? dropW : openW).Add(s);
+            clsW?.WriteLine(Encoding.Latin1.GetString(s) + "\t" + cls);
             if (checkAlphabet)
             {
-                int want = s.Length < 2 ? 0 : (s[0] == 'Z' || s[0] == 'Y') && s[^1] == 'Z' || s[0] == 'Z' && s[^1] == 'Y' ? 1 : s[0] == 'Y' && s[^1] == 'Y' ? 2 : 0;
+                int want = _scope is null ? Alphabet(s) : FwMulti.Expected(Encoding.Latin1.GetString(s), _scope.Index, _scope.Targets);
                 if (want != cls && t.AlphabetErrors.Count < 50)
-                    t.AlphabetErrors.Add($"{Encoding.ASCII.GetString(s)}: {ClassName(cls)}, alphabet says {ClassName(want)}");
+                    t.AlphabetErrors.Add($"{side}{(side is null ? "" : ": ")}{Encoding.ASCII.GetString(s)}: {ClassName(cls)}, alphabet says {ClassName(want)}");
             }
         }
         // every case row names a graded define (a row for a name the tree never defines, or defines only outside the
-        // carved files, would test nothing)
-        if (checkAlphabet && listDir is not null && File.Exists(Path.Combine(listDir, "cases.tsv")))
+        // carved files, would test nothing); a multi-target corpus checks its rows over every target
+        if (checkAlphabet && _scope is null && listDir is not null && File.Exists(Path.Combine(listDir, "cases.tsv")))
             foreach (var line in File.ReadLines(Path.Combine(listDir, "cases.tsv")).Skip(1))
             {
                 var name = line.Split('\t')[0];
@@ -856,18 +943,25 @@ internal sealed partial class FwSpec
             int f = CFile(k, out _);
             if (_closure.Contains(f)) files.Add(_rel[f]);
         }
-        for (int k = 0; k < _fwDefName.Count; k++) if (Names.Has(_fwDefName[k], NameTable.WantMin)) files.Add(_rel[_fwDefFile[k]]);
+        for (int k = 0; k < _fwDefName.Count; k++)
+            if (Names.Has(_fwDefName[k], NameTable.WantMin) && (_scope is null || _closure.Contains(_fwDefFile[k]))) files.Add(_rel[_fwDefFile[k]]);
         foreach (int f in _closure) if (f < _fwCount) files.Add(_rel[f]);
-        if (_roots is null) { using var fnW = new ListWriter(listDir, "mustKeepFunctions"); t.MustKeepFunctions = fnW.Finish(); }
+        if (_scope is not null) ScopedFunctions(t, files);
+        else if (_roots is null) { using var fnW = new ListWriter(listDir, "mustKeepFunctions"); t.MustKeepFunctions = fnW.Finish(); }
         else Functions(t, listDir, checkAlphabet, files);
-        using (var fw = new ListWriter(listDir, "mustKeepFiles"))
+        t.KeepFiles = _scope is null ? null : files;
+        using (var fw = new ListWriter(listDir, "mustKeepFiles", side))
         {
             foreach (var p in files) fw.Add(Encoding.UTF8.GetBytes(p));
             t.MustKeepFiles = fw.Finish();
         }
     }
 
-    private static string ClassName(int c) => c == 0 ? "keep" : c == 1 ? "drop" : "open";
+    /// <summary>The class a name's spelling means: Z…Z, Y…Z and Z…Y drop, Y…Y open, else keep.</summary>
+    internal static int Alphabet(ReadOnlySpan<byte> s) =>
+        s.Length < 2 ? 0 : (s[0] == 'Z' || s[0] == 'Y') && s[^1] == 'Z' || s[0] == 'Z' && s[^1] == 'Y' ? 1 : s[0] == 'Y' && s[^1] == 'Y' ? 2 : 0;
+
+    internal static string ClassName(int c) => c == 0 ? "keep" : c == 1 ? "drop" : "open";
 }
 
 /// <summary>

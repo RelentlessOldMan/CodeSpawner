@@ -332,6 +332,7 @@ public sealed class CorpusGenerator
         g.Add(GenKnob.Of("fwBigMb", (long)o.FwBigMb));
         g.Add(GenKnob.Of("fwChainMax", (long)o.FwChainMax));
         g.Add(GenKnob.Of("fwDbPaths", o.FwDbPaths));
+        if (o.FwTargets > 0) g.Add(GenKnob.Of("fwTargets", (long)o.FwTargets));
         if (!o.FwWork) return;
         g.Add(GenKnob.Of("fwWork", true));
         g.Add(GenKnob.Of("fwWorkDefines", (long)o.Eff("fw-bulk-defines", o.FwWorkDefines)));

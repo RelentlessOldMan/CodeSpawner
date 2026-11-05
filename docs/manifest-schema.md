@@ -378,6 +378,18 @@ root.
     any symbol in it is reached.** See firmware-design.md "Function truth";
   - `compileDbUnion` is a second compile db (world.c at `-DFW_WORLD=2`) that only the union build compiles;
   - `functionCases` is a `name`, `case`, `site` TSV of the designed function cases.
+- **`targets`** (with `--fw-targets`): the build targets, `["ta", "tb", "tc"]` or `["ta", "tb"]`. Then `roots` are
+  file-qualified (`"targets/ta/startup.S:Reset_Handler"`), there is no `compileDbUnion`, and `builds` holds one build
+  per target plus `union` (no `main`):
+  - `builds.<t>` has `compileDb` (`fw-build/<t>/compile_commands.json`), `buildLog` (`fw-build/<t>/build.log`, whose
+    `ld.lld` line is the target's link), `roots`, `counts` (`mustKeep`, `mustDrop`, `open` and the four carve bounds)
+    and the seven lists, as `fw-truth/<t>.<list>.txt`;
+  - `builds.union` has `counts` (`mustKeep`, `mustDrop`, `open`) and the lists: keep in any target, drop in every
+    target that grades the name, otherwise open;
+  - a function defined in more than one file of `root` is `<root-relative path>:<name>` in every function list;
+  - the top-level `counts` leave out the carve bounds, and their `mustKeep`/`mustDrop`/`open` are the union's.
+
+  See firmware-design.md "Multi-target".
 - **`treeSha256`** is a sha256 over every file under `root`, in ordinal order of its root-relative path (`/`
   separators): the path, `\n`, the decimal byte length, `\n`, then the bytes. Check it before carving.
 - **`bigHeaders`** are the files longer than `maxParseBytes`; `.c` files count too.

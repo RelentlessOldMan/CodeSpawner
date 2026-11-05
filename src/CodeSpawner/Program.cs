@@ -327,6 +327,7 @@ public static class Program
               --preset dup-content   byte-identical groups (content-hash dedup / posting collapse)
               --preset firmware      a bare tree + the firmware corpus (big paste-macro headers, carve truth)
               --preset firmware-bulk a production-sized carve at --scale + a small correctness part
+              --preset firmware-multi  plain firmware built for 3 targets (truth per target + union)
 
             COMMON KNOBS (all optional; counts scale by --scale unless set explicitly; full table: docs/knobs.md):
               --out <dir>            output directory (required; cleared if it exists)
@@ -406,6 +407,7 @@ public static class Program
               --fw-dense-headers <n>     dense headers (1 MB..maxParseBytes, mostly defines; default 200)
               --fw-chain-max <n>         longest forwarder chain (default 40)
               --fw-db-paths <absolute|relative>   how fw-build/compile_commands.json names paths (default absolute)
+              --fw-targets <2|3>         build plain firmware for 2 or 3 targets, truth per target + union (default off)
               --fw-bulk                  add the bulk carve (fw/work/wreg_N.h; counts default to the 1x shape)
               --fw-bulk-defines <n>      register defines in the bulk headers (default 122300000)
               --fw-bulk-pasters <n>      bulk paste macros (default 5000)

@@ -57,7 +57,10 @@ internal static partial class FirmwareEmitter
         h.Append("""
             int kfz1(void);
             int kfz2(void);
-            int kworld(void);
+
+            """);
+        h.Append(p.Multi ? "int kboard(void);\nint fw_tbobj(void);\nint kcat(int, int);\nint kfst(int, int);\n" : "int kworld(void);\n");
+        h.Append("""
             int fw_asm_crc(int);
             int fw_objfn(void);
             int fw_big_s(void);
@@ -79,6 +82,10 @@ internal static partial class FirmwareEmitter
             /* main.c: Reset_Handler's bl main lands here */
             #include "fw_init.h"
             #include "fw_inl.h"
+
+            """);
+        if (p.Multi) m.Append("#include \"board.h\"\n");
+        m.Append("""
             typedef int (*fwfp)(void);
             const fwfp fw_tbl[] = { kfz1, kfz2 };
             int main(void)
@@ -89,7 +96,10 @@ internal static partial class FirmwareEmitter
         for (int d = 0; d < mods; d++) m.Append($"\tm{d}_init();\n");
         m.Append("""
             	for (unsigned i = 0; i < sizeof fw_tbl / sizeof fw_tbl[0]; i++) r += fw_tbl[i]();
-            	r += kworld();
+
+            """);
+        m.Append(p.Multi ? "\tr += kboard() + kcat(1, 2) + kfst(3, 4);\n#ifdef FW_FEAT_B\n\tr += fw_tbobj();\n#endif\n" : "\tr += kworld();\n");
+        m.Append("""
             	r += fw_asm_crc(r);
             	r += fw_objfn();
             	r += fw_big_s();
@@ -100,7 +110,7 @@ internal static partial class FirmwareEmitter
             """);
         File.WriteAllText(p.Fw("src/main.c"), m.ToString());
 
-        File.WriteAllText(p.Fw("src/handlers.c"), """
+        File.WriteAllText(p.Fw("src/handlers.c"), (p.Multi ? $"/* needed only by the prebuilt object on tb's link line */\nint kfwtbneed__{p.Sfx(i => i == 1 ? 'K' : 'D')}(void) {{ return 40; }}\n" : "") + """
             /* handlers.c: functions the vector table, the assembly, the linker scripts and the prebuilt objects reach */
             typedef int (*fwfp)(void);
             void Default_Handler(void)
@@ -211,9 +221,9 @@ internal static partial class FirmwareEmitter
             __attribute__((section(".fwtab_arm"))) int YFwArmY(void) { return 7; }
             __attribute__((section(".fwnokeep"))) int ZFwNoKeepZ(void) { return 8; }
 
-            """);
+            """ + (p.Targets == 3 ? "__attribute__((section(\".fwtc\"))) int kfwtckeep__DDK(void) { return 15; }\n" : ""));
 
-        File.WriteAllText(p.Fw("src/world.c"), """
+        if (!p.Multi) File.WriteAllText(p.Fw("src/world.c"), """
             /* world.c: compiled once per world (FW_WORLD=1 in the main db, 2 in the world-2 db) */
             int kworld1(void) { return 1; }
             int kworld2(void) { return 2; }
@@ -240,7 +250,7 @@ internal static partial class FirmwareEmitter
             #define FW_ANG_FN kfwang
 
             """);
-        File.WriteAllText(p.Fw("asm/startup.S"), $$"""
+        string startup = $$"""
             /* startup.S: the vector table and the reset path; this comment names YFwCmtSY */
             #include "fw_asm.h"
             #include <fw_ang.h>
@@ -301,7 +311,14 @@ internal static partial class FirmwareEmitter
             	.thumb_set TIM2_IRQHandler, fw_default
             	def_irq TIM3_IRQHandler
 
-            """);
+            """;
+        if (!p.Multi) File.WriteAllText(p.Fw("asm/startup.S"), startup);
+        else
+            foreach (var t in FwMulti.Names[..p.Targets])
+            {
+                Directory.CreateDirectory(p.Fw($"targets/{t}"));
+                File.WriteAllText(p.Fw($"targets/{t}/startup.S"), startup);
+            }
         File.WriteAllText(p.Fw("asm/fw_vec.inc"), """
             @ fw_vec.inc: vectors startup.S .includes
             	.word KTIM5_IRQHandlerZ
@@ -382,8 +399,8 @@ internal static partial class FirmwareEmitter
             if (!w.PadTo(BoundaryBig)) throw new InvalidOperationException("firmware: big_0.s overran its size");
         }
 
-        File.WriteAllText(p.Fw("ld/fw.ld"), $$"""
-            /* fw.ld: the link script (ld -T fw.ld -L fw/ld) */
+        string Ld(string name, string extra) => $$"""
+            /* {{name}}: the link script (ld -T {{name}} -L fw/ld) */
             ENTRY({{Reset}})
             EXTERN(kfwextern fw_arfn)
             PROVIDE(fw_hook = kfwprovide);
@@ -399,12 +416,16 @@ internal static partial class FirmwareEmitter
             	.fini_array : { KEEP(*(.fini_array*)) } > FLASH
             	.data : { *(.data*) } > RAM AT > FLASH
             	.bss : { *(.bss*) *(COMMON) } > RAM
-            }
+            {{extra}}
             INCLUDE mem.ld
             INCLUDE big_0.ld
             _estack = ORIGIN(RAM) + LENGTH(RAM);
 
-            """);
+            """;
+        if (!p.Multi) File.WriteAllText(p.Fw("ld/fw.ld"), Ld("fw.ld", "}"));
+        else
+            foreach (var t in FwMulti.Names[..p.Targets])
+                File.WriteAllText(p.Fw($"ld/{t}.ld"), Ld($"{t}.ld", t == "tc" ? "\t.fwtc : { KEEP(*(.fwtc)) } > FLASH\n}" : "}"));
         File.WriteAllText(p.Fw("ld/mem.ld"), """
             /* mem.ld: the memory map, INCLUDEd by fw.ld */
             MEMORY
@@ -473,6 +494,11 @@ internal static partial class FirmwareEmitter
 
         File.WriteAllBytes(p.Fw("lib/fwcrc.o"), ArmObject("fw_objfn", "kfwobj"));
         File.WriteAllBytes(p.Fw("lib/libfwx.a"), Archive("fwx.o", ArmObject("fw_arfn", "kfwar"), "fw_arfn"));
+        if (p.Multi)
+        {
+            File.WriteAllBytes(p.Fw("lib/tb_obj.o"), ArmObject("fw_tbobj", $"kfwtbneed__{p.Sfx(i => i == 1 ? 'K' : 'D')}"));
+            WriteMultiTree(p);
+        }
     }
 
     /// <summary>A minimal ELF32 ARM relocatable: .text holds Thumb <c>push {r7, lr}; bl need; pop {r7, pc}</c> as
@@ -568,7 +594,7 @@ internal static partial class FirmwareEmitter
         return [.. a];
     }
 
-    private static void AsmEntry(System.Text.Json.Utf8JsonWriter w, bool rel, Func<string, string> P, string file)
+    private static void AsmEntry(System.Text.Json.Utf8JsonWriter w, bool rel, Func<string, string> P, string file, string[]? defs = null)
     {
         w.WriteStartObject();
         w.WriteString("directory", rel ? "." : P("."));
@@ -576,6 +602,7 @@ internal static partial class FirmwareEmitter
         foreach (var a in ArmCc) w.WriteStringValue(a);
         w.WriteStringValue("-I");
         w.WriteStringValue(P($"{FwSpec.FwDir}/asm"));
+        foreach (var d in defs ?? []) w.WriteStringValue(d);
         w.WriteStringValue("-c");
         w.WriteStringValue(P($"{FwSpec.FwDir}/{file}"));
         w.WriteEndArray();
@@ -587,7 +614,8 @@ internal static partial class FirmwareEmitter
     private static void WriteFunctionCases(Plan p)
     {
         var sb = new StringBuilder("name\tcase\tsite\n");
-        foreach (var (name, kase, site) in Phase2Cases()) sb.Append(name).Append('\t').Append(kase).Append('\t').Append(site).Append('\n');
+        foreach (var (name, kase, site) in p.Multi ? MultiFunctionCases(p) : Phase2Cases())
+            sb.Append(name).Append('\t').Append(kase).Append('\t').Append(site).Append('\n');
         File.WriteAllText(Path.Combine(p.Root, FunctionCasesPath), sb.ToString());
     }
 

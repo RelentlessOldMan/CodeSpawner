@@ -19,6 +19,7 @@ internal sealed partial class FwSpec
     {
         public required string Name;
         public required int Tu;              // the unit or object whose names it resolves in (-1: none)
+        public string File = "";             // C: the fw-relative file defining it
         public bool IsFunc, Retain, MaxRoot, ArMember;
         public readonly HashSet<(int Tu, string Name)> Refs = new();
         public readonly HashSet<(int Tu, string Name)> MaxRefs = new();   // followed only under max
@@ -35,6 +36,7 @@ internal sealed partial class FwSpec
         public readonly HashSet<(int Start, string Sig)> Units = new();
         public readonly HashSet<string> MaxNames = new(StringComparer.Ordinal);
         public readonly HashSet<int> KHeaders = new();
+        public string CurFile = "";          // the file Decls is reading
 
         public void Label(string name, string key)
         {
@@ -115,6 +117,71 @@ internal sealed partial class FwSpec
                 var name = line.Split('\t')[0];
                 if (!unionCls.ContainsKey(name) && t.AlphabetErrors.Count < 50) t.AlphabetErrors.Add($"{name}: a function case row, but no graded function");
             }
+    }
+
+    /// <summary>One target's functions (docs/firmware-design.md "Multi-target"): its units, the assembly its db
+    /// names, its link line's script (with its INCLUDEs) and objects. Other targets' files are not read; the rest of
+    /// the tree's assembly, scripts and objects only max reaches. Classes by (file, name): the caller names them.</summary>
+    private void ScopedFunctions(FwTruth t, SortedSet<string> files)
+    {
+        var sc = _scope!;
+        // a root is file-qualified (targets/ta/startup.S:Reset_Handler): the name is what the link resolves
+        var min = new HashSet<string>(_roots!.Select(r => r[(r.LastIndexOf(':') + 1)..]), StringComparer.Ordinal);
+        var max = new HashSet<string>(StringComparer.Ordinal);
+        var keepGlobs = new List<string>();
+        var maxGlobs = new List<string>();
+        var bin = new FnGraph();
+        var asmUnits = new Dictionary<int, Unit>();
+        foreach (var u in _units)
+            if (IsAsm(u.File) && IsUnder(u.File, _fwRoot) && FileIndex(u.File) is int a and >= 0) asmUnits.TryAdd(a, u);
+        for (int f = 0; f < _fwCount; f++)
+        {
+            if (Ignored(f)) continue;
+            string p = _files[f];
+            if (IsAsm(p))
+            {
+                bool linked = asmUnits.TryGetValue(f, out var u);
+                var gas = new Gas(this, linked ? bin : new FnGraph(), f, max, files, u?.IncDirs ?? new(), u is null ? new() : Defs(u));
+                gas.File(f, IsCppAsm(p));
+                gas.Finish();
+                files.Add(_rel[f]);
+            }
+            else if (IsLd(p))
+            {
+                // a script the link does not read: what it says only max follows
+                if (sc.ScriptClosure.Contains(_rel[f])) LdScan(f, min, keepGlobs, maxGlobs);
+                else LdScan(f, max, maxGlobs, maxGlobs);
+                files.Add(_rel[f]);
+            }
+            else if (IsLinkInfra(p)) { InfraGlobs(f, maxGlobs); files.Add(_rel[f]); }
+            else if (IsObj(p))
+            {
+                ObjNodes(sc.Objects.Contains(_rel[f]) ? bin : new FnGraph(), f, File.ReadAllBytes(p), max);
+                files.Add(_rel[f]);
+            }
+            else if (Path.GetExtension(p).Equals(".inc", StringComparison.OrdinalIgnoreCase)) files.Add(_rel[f]);
+        }
+        max.UnionWith(min);
+        var g = new FnGraph();
+        foreach (var u in _units) ScanUnit(g, u);
+        var kNames = KHeaderNames(g.KHeaders, g.Nodes.Values.Where(n => n.IsFunc).Select(n => n.Name));
+        foreach (var (k, n) in bin.Nodes) g.Nodes[k] = n;
+        foreach (var (name, l) in bin.Labels) foreach (var k in l) g.Label(name, k);
+        foreach (int h in g.KHeaders) if (kNames.TryGetValue(h, out var s)) g.MaxNames.UnionWith(s);
+        GroupSections(g);
+        static bool In(FnNode n, List<string> globs) => n.Sections.Any(s => globs.Any(x => Glob(x, s)));
+        var rMin = Reach(g, min, false, n => n.Retain || !n.ArMember && In(n, keepGlobs));
+        var rMax = Reach(g, max.Concat(g.MaxNames), true, n => n.Retain || n.MaxRoot || In(n, keepGlobs) || In(n, maxGlobs));
+        var cls = new Dictionary<(string, string), int>();
+        foreach (var (key, n) in g.Nodes)
+        {
+            if (!n.IsFunc) continue;
+            int c = rMin.Contains(key) ? 0 : rMax.Contains(key) ? 2 : 1;
+            // one file's static in several units (a header's static inline): the most kept wins
+            if (!cls.TryGetValue((n.File, n.Name), out int was) || Rank(c) < Rank(was)) cls[(n.File, n.Name)] = c;
+        }
+        t.FnCls = cls;
+        static int Rank(int c) => c == 0 ? 0 : c == 2 ? 1 : 2;
     }
 
     private List<Unit> ReadWorld2()
@@ -259,8 +326,10 @@ internal sealed partial class FwSpec
         foreach (var (k, v) in defs) mac.Add(new MacroDef { Name = k, Body = Lex(v, false) });
         var scans = closure.Select(f => CFile(f, defs)).ToList();
         foreach (var s in scans) foreach (var d in s.Defines) mac.Add(d);
-        foreach (var s in scans)
+        for (int si = 0; si < scans.Count; si++)
         {
+            var s = scans[si];
+            g.CurFile = _rel[closure[si]];
             Decls(g, tu, mac.Expand(s.Tokens), mac, u);
             foreach (var (x, y) in s.PragmaWeak) Node(g, tu, x, [], false, mac, u).Refs.Add((tu, y));
         }
@@ -327,7 +396,7 @@ internal sealed partial class FwSpec
                     if (kw == "define" && ParseDefine(rest, false) is { } d) r.Defines.Add(d);
                     else if (kw == "pragma" && Regex.Match(rest, @"^weak\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)") is { Success: true } m)
                         r.PragmaWeak.Add((m.Groups[1].Value, m.Groups[2].Value));
-                });
+                }, _eval);
                 continue;
             }
             lineStart = false;
@@ -593,7 +662,8 @@ internal sealed partial class FwSpec
     {
         bool isStatic = decl.Any(x => x.K == CK.Id && x.S == "static");
         string key = isStatic ? $"{tu}:{name}" : name;
-        if (!g.Nodes.TryGetValue(key, out var n)) g.Nodes[key] = n = new FnNode { Name = name, Tu = tu };
+        if (!g.Nodes.TryGetValue(key, out var n)) g.Nodes[key] = n = new FnNode { Name = name, Tu = tu, File = g.CurFile };
+        if (isFunc && !n.IsFunc) n.File = g.CurFile;   // the file of its body, not of a prototype or a call
         n.IsFunc |= isFunc;
         for (int i = 0; i < decl.Count; i++)
         {
@@ -623,24 +693,27 @@ internal sealed partial class FwSpec
 
     private enum Tri { False, True, Unknown }
 
+    /// <param name="scope">A target's closed-world #if (null: only the -Ds decide, anything else is unknown).</param>
     private static void Directive(string d, Dictionary<string, string> defs, List<(bool Parent, bool Done, bool Live)> stack, ref bool live,
-                                  Action<string, string>? onLive = null)
+                                  Action<string, string>? onLive = null, FwCond? scope = null)
     {
         int k = 0;
         while (k < d.Length && char.IsAsciiLetter(d[k])) k++;
         string kw = d[..k], rest = d[k..].Trim();
+        Tri Scoped() => scope!.Cond(Encoding.Latin1.GetBytes(d)) switch { Tri3.True => Tri.True, Tri3.False => Tri.False, _ => Tri.Unknown };
         switch (kw)
         {
             case "if" or "ifdef" or "ifndef":
             {
-                Tri c = kw == "if" ? Eval(rest, defs) : defs.ContainsKey(rest) ? (kw == "ifdef" ? Tri.True : Tri.False) : Tri.Unknown;
+                Tri c = scope is not null ? Scoped()
+                    : kw == "if" ? Eval(rest, defs) : defs.ContainsKey(rest) ? (kw == "ifdef" ? Tri.True : Tri.False) : Tri.Unknown;
                 stack.Add((live, c == Tri.True, live && c != Tri.False));
                 break;
             }
             case "elif" when stack.Count > 0:
             {
                 var (parent, done, _) = stack[^1];
-                Tri c = done ? Tri.False : Eval(rest, defs);
+                Tri c = done ? Tri.False : scope is not null ? Scoped() : Eval(rest, defs);
                 stack[^1] = (parent, done || c == Tri.True, parent && !done && c != Tri.False);
                 break;
             }

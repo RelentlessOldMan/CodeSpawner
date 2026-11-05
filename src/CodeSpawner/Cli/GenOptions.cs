@@ -149,6 +149,9 @@ public sealed class GenOptions
     public int FwChainMax { get; set; } = 40;
     /// <summary>"absolute" or "relative": how fw-build/compile_commands.json writes its directory and paths.</summary>
     public string FwDbPaths { get; set; } = "absolute";
+    /// <summary>Build targets (0 = one build; 2 or 3 = firmware-multi: fw/targets/&lt;t&gt;, a db, build log and truth per
+    /// target, docs/firmware-design.md "Multi-target"). Not scaled.</summary>
+    public int FwTargets { get; set; } = 0;
     /// <summary>Adds the bulk carve (fw/work/wreg_N.h; docs/firmware-design.md "Bulk shape"). Its count knobs
     /// default to the 1x bulk shape and scale.</summary>
     public bool FwWork { get; set; } = false;

@@ -104,6 +104,7 @@ public static class ArgParser
                 case "fw-big-mb": o.FwBigMb = I(); break;
                 case "fw-chain-max": o.FwChainMax = I(); break;
                 case "fw-db-paths": o.FwDbPaths = Val().ToLowerInvariant(); break;
+                case "fw-targets": o.FwTargets = I(); break;
                 case "fw-bulk": o.FwWork = B(); break;
                 case "fw-bulk-defines": o.FwWorkDefines = I(); break;
                 case "fw-bulk-pasters": o.FwWorkPasters = I(); break;
@@ -298,6 +299,9 @@ public static class ArgParser
             ("fw-bulk-half-pct", o.FwWorkHalfPct, 0), ("fw-bulk-near-pct", o.FwWorkNearPct, 0), ("fw-bulk-named-pct", o.FwWorkNamedPct, 0),
         })
             if (!(v >= min && v <= 100)) throw new ArgException($"--{k} must be in {min.ToString(System.Globalization.CultureInfo.InvariantCulture)}..100, got {v.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        if (o.FwTargets is not (0 or 2 or 3)) throw new ArgException($"--fw-targets must be 0, 2 or 3, got {o.FwTargets}");
+        if (o.FwTargets > 0 && o.FwWork) throw new ArgException("--fw-targets is not taken with --fw-bulk");
+        if (o.FwTargets > 0 && !o.Firmware) throw new ArgException("--fw-targets shapes the firmware tree, which is off; add --firmware");
         if (o.FwDbPaths is not ("absolute" or "relative")) throw new ArgException($"--fw-db-paths must be absolute or relative, got '{o.FwDbPaths}'");
         if (!o.FwWork)
         {

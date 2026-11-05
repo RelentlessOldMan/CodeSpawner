@@ -228,7 +228,18 @@ public static class ManifestWriter
         w.WriteString("treeSha256", t.TreeSha);
         w.WriteString("cases", CodeSpawner.Firmware.FirmwareEmitter.CasesPath);
         bool fn = t.UnionMustKeepFunctions is not null;
-        if (fn)
+        if (t.Builds is { } builds)
+        {
+            // multi-target (docs/firmware-design.md "Multi-target"): one root per target, each in its own startup.S
+            w.WriteStartArray("roots");
+            foreach (var (name, _) in builds) w.WriteStringValue(CodeSpawner.Firmware.FwMulti.Root(name));
+            w.WriteEndArray();
+            w.WriteString("functionCases", CodeSpawner.Firmware.FirmwareEmitter.FunctionCasesPath);
+            w.WriteStartArray("targets");
+            foreach (var (name, _) in builds) w.WriteStringValue(name);
+            w.WriteEndArray();
+        }
+        else if (fn)
         {
             // function truth: where execution starts, the other world's db, the function cases
             w.WriteStartArray("roots");
@@ -252,10 +263,8 @@ public static class ManifestWriter
         w.WriteNumber("mustDrop", t.MustDropCount);
         w.WriteNumber("open", t.OpenCount);
         w.WriteNumber("bytesBefore", t.BytesBefore);
-        w.WriteNumber("definesDroppedMin", t.DefinesDroppedMin);
-        w.WriteNumber("definesDroppedMax", t.DefinesDroppedMax);
-        w.WriteNumber("bytesAfterMin", t.BytesAfterMin);
-        w.WriteNumber("bytesAfterMax", t.BytesAfterMax);
+        // a multi-target corpus gives the carve's sizes per target (builds.<t>.counts)
+        if (t.Builds is null) CarveCounts(w, t);
         w.WriteEndObject();
         w.WriteStartArray("bigHeaders");
         foreach (var p in t.BigHeaders) w.WriteStringValue(p);
@@ -282,6 +291,7 @@ public static class ManifestWriter
         }
         w.WriteEndArray();
         if (r.Work is { } wk) WriteWork(w, wk);
+        if (t.Builds is not null) { WriteTargets(w, t); w.WriteEndObject(); return; }
         w.WriteStartObject("builds");
         foreach (var b in new[] { "main", "union" })
         {
@@ -317,6 +327,59 @@ public static class ManifestWriter
             L("mustKeepFiles", t.MustKeepFiles);
             w.WriteEndObject();
         }
+        w.WriteEndObject();
+        w.WriteEndObject();
+    }
+
+    private static void CarveCounts(Utf8JsonWriter w, CodeSpawner.Firmware.FwTruth t)
+    {
+        w.WriteNumber("definesDroppedMin", t.DefinesDroppedMin);
+        w.WriteNumber("definesDroppedMax", t.DefinesDroppedMax);
+        w.WriteNumber("bytesAfterMin", t.BytesAfterMin);
+        w.WriteNumber("bytesAfterMax", t.BytesAfterMax);
+    }
+
+    // firmware.builds of a multi-target corpus: each target's db, log, root, counts and lists, then the union's
+    private static void WriteTargets(Utf8JsonWriter w, CodeSpawner.Firmware.FwTruth all)
+    {
+        static void L(Utf8JsonWriter w, string key, CodeSpawner.Firmware.FwList l)
+        {
+            w.WriteStartObject(key);
+            w.WriteString("path", CodeSpawner.Firmware.FirmwareEmitter.TruthDir + "/" + l.Path);
+            w.WriteString("sha256", l.Sha256);
+            w.WriteNumber("count", l.Count);
+            w.WriteEndObject();
+        }
+        static void Lists(Utf8JsonWriter w, CodeSpawner.Firmware.FwTruth t, bool carve)
+        {
+            w.WriteStartObject("counts");
+            w.WriteNumber("mustKeep", t.MustKeepCount);
+            w.WriteNumber("mustDrop", t.MustDropCount);
+            w.WriteNumber("open", t.OpenCount);
+            if (carve) CarveCounts(w, t);
+            w.WriteEndObject();
+            L(w, "mustKeepDefines", t.MustKeepDefines);
+            L(w, "mustDropDefines", t.MustDropDefines);
+            L(w, "openDefines", t.OpenDefines);
+            L(w, "mustKeepFunctions", t.MustKeepFunctions);
+            L(w, "mustDropFunctions", t.MustDropFunctions!);
+            L(w, "openFunctions", t.OpenFunctions!);
+            L(w, "mustKeepFiles", t.MustKeepFiles);
+        }
+        w.WriteStartObject("builds");
+        foreach (var (name, t) in all.Builds!)
+        {
+            w.WriteStartObject(name);
+            w.WriteString("compileDb", CodeSpawner.Firmware.FwMulti.DbPath(name));
+            w.WriteString("buildLog", CodeSpawner.Firmware.FwMulti.LogPath(name));
+            w.WriteStartArray("roots");
+            w.WriteStringValue(CodeSpawner.Firmware.FwMulti.Root(name));
+            w.WriteEndArray();
+            Lists(w, t, true);
+            w.WriteEndObject();
+        }
+        w.WriteStartObject("union");
+        Lists(w, all, false);
         w.WriteEndObject();
         w.WriteEndObject();
     }

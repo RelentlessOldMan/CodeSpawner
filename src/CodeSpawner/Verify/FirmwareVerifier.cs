@@ -34,7 +34,16 @@ internal static class FirmwareVerifier
             { err.WriteLine("FAIL firmware roots: not an array of names"); return 1; }
             roots = rootsEl.EnumerateArray().Select(x => x.GetString()!).ToList();
         }
-        try { t = FwSpec.Compute(corpus, null, checkAlphabet: true, roots); }
+        // firmware.targets: a multi-target corpus (docs/firmware-design.md "Multi-target")
+        int targets = 0;
+        if (fw.TryGetProperty("targets", out var tgEl))
+        {
+            var tg = tgEl.ValueKind == JsonValueKind.Array ? tgEl.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : null).ToList() : null;
+            if (tg is not { Count: 2 or 3 } || !tg.SequenceEqual(FwMulti.Names[..tg.Count]))
+            { err.WriteLine($"FAIL firmware targets: not [{string.Join(", ", FwMulti.Names[..2])}] or [{string.Join(", ", FwMulti.Names)}]"); return 1; }
+            targets = tg.Count;
+        }
+        try { t = targets > 0 ? FwMulti.Compute(corpus, null, checkAlphabet: true, targets) : FwSpec.Compute(corpus, null, checkAlphabet: true, roots); }
         catch (FwDbException ex) { err.WriteLine($"FAIL firmware compileDb: {ex.Message}"); return 1; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { err.WriteLine($"FAIL firmware: the tree cannot be read ({ex.Message})"); return 1; }
@@ -69,15 +78,7 @@ internal static class FirmwareVerifier
         Eq("maxParseBytes", Num(fw, "maxParseBytes"), FwSpec.MaxParseBytes.ToString());
         Eq("treeSha256", Str(fw, "treeSha256"), t.TreeSha);
         var c = Obj(fw, "counts");
-        foreach (var (k, v) in new (string, long)[]
-        {
-            ("bigHeadersKept", t.BigHeadersKept), ("denseHeaders", t.DenseHeaders), ("wholeIncludedFromOutside", t.WholeIncludedFromOutside),
-            ("pasteMacros", t.PasteMacros), ("forwardingMacros", t.ForwardingMacros), ("totalDefineLines", t.TotalDefineLines),
-            ("mustKeep", t.MustKeepCount), ("mustDrop", t.MustDropCount), ("open", t.OpenCount), ("bytesBefore", t.BytesBefore),
-            ("definesDroppedMin", t.DefinesDroppedMin), ("definesDroppedMax", t.DefinesDroppedMax),
-            ("bytesAfterMin", t.BytesAfterMin), ("bytesAfterMax", t.BytesAfterMax),
-        })
-            Eq($"counts.{k}", Num(c, k), v.ToString());
+        foreach (var (k, v) in Counts(t, tree: true, carve: targets == 0)) Eq($"counts.{k}", Num(c, k), v.ToString());
         ListEq("bigHeaders", fw, "bigHeaders", t.BigHeaders);
         ListEq("denseHeaders", fw, "denseHeaders", t.Dense.Select(d => $"{d.Path} edge={(d.Edge ? "true" : "false")}").ToList(),
             x => Str(x, "path") is { } p && x.TryGetProperty("edge", out var g) && g.ValueKind is JsonValueKind.True or JsonValueKind.False
@@ -106,7 +107,19 @@ internal static class FirmwareVerifier
             Eq("counts.cases", Num(c, "cases"), rows.ToString());
         }
         else { err.WriteLine($"FAIL firmware cases: {Str(fw, "cases") ?? "(missing)"} is not a file of the corpus"); fail++; }
-        if (roots is not null)
+        if (targets > 0)
+        {
+            // each target's root, in its own startup.S; no world-2 db
+            ListEq("roots", fw, "roots", FwMulti.Names[..targets].Select(FwMulti.Root).ToList());
+            if (Str(fw, "compileDbUnion") is not null || File.Exists(Path.Combine(corpus, FirmwareEmitter.DbWorld2Path)))
+            { err.WriteLine("FAIL firmware compileDbUnion: a multi-target corpus has no world-2 db"); fail++; }
+            Eq("functionCases", Str(fw, "functionCases"), FirmwareEmitter.FunctionCasesPath);
+            string fcp = Path.Combine(corpus, FirmwareEmitter.FunctionCasesPath);
+            if (!File.Exists(fcp)) { err.WriteLine($"FAIL firmware functionCases: {FirmwareEmitter.FunctionCasesPath} is missing"); fail++; }
+            else if (CaseRows(fcp, corpus) is (_, { } bad)) { err.WriteLine($"FAIL firmware functionCases: {bad}"); fail++; }
+            else okCount[0]++;
+        }
+        else if (roots is not null)
         {
             Eq("compileDbUnion", Str(fw, "compileDbUnion"), FirmwareEmitter.DbWorld2Path);
             // the grader starts its function carve from these: exactly the generator's
@@ -130,7 +143,46 @@ internal static class FirmwareVerifier
         else { err.WriteLine("FAIL firmware hostile: missing (an array of { path, kind })"); fail++; }
 
         var builds = Obj(fw, "builds");
-        foreach (var b in new[] { "main", "union" })
+        void ListFile(string b, string k, FwList l)
+        {
+            var e = Obj(Obj(builds, b), k);
+            Eq($"builds.{b}.{k}.sha256", Str(e, "sha256"), l.Sha256);
+            Eq($"builds.{b}.{k}.count", Num(e, "count"), l.Count.ToString());
+            // each build names its own file, as gen writes it
+            string? rel = Str(e, "path");
+            string canon = $"{FirmwareEmitter.TruthDir}/{b}.{k}.txt";
+            if (rel != canon && rel != canon + ".gz")
+            { err.WriteLine($"FAIL firmware builds.{b}.{k}.path: manifest says {rel ?? "(missing)"}, the tree gives {canon}[.gz]"); fail++; return; }
+            string full = Path.Combine(corpus, rel);
+            if (!File.Exists(full)) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel} is not a file of the corpus"); fail++; return; }
+            if (ListSha(full) is not { } disk) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel} is not gzip"); fail++; return; }
+            if (disk == l.Sha256) okCount[0]++;
+            else { err.WriteLine($"FAIL firmware builds.{b}.{k} ({rel}): on disk it hashes {disk}, the truth is {l.Sha256}"); fail++; }
+        }
+        if (targets > 0)
+        {
+            var sides = t.Builds!.Append(("union", t)).ToList();
+            foreach (var (b, bt) in sides)
+            {
+                var be = Obj(builds, b);
+                if (b != "union")
+                {
+                    Eq($"builds.{b}.compileDb", Str(be, "compileDb"), FwMulti.DbPath(b));
+                    Eq($"builds.{b}.buildLog", Str(be, "buildLog"), FwMulti.LogPath(b));
+                    ListEq($"builds.{b}.roots", be, "roots", [FwMulti.Root(b)]);
+                }
+                var bc = Obj(be, "counts");
+                foreach (var (k, v) in Counts(bt, tree: false, carve: b != "union")) Eq($"builds.{b}.counts.{k}", Num(bc, k), v.ToString());
+                foreach (var (k, l) in new[]
+                {
+                    ("mustKeepDefines", bt.MustKeepDefines), ("mustDropDefines", bt.MustDropDefines), ("openDefines", bt.OpenDefines),
+                    ("mustKeepFunctions", bt.MustKeepFunctions), ("mustDropFunctions", bt.MustDropFunctions!), ("openFunctions", bt.OpenFunctions!),
+                    ("mustKeepFiles", bt.MustKeepFiles),
+                })
+                    ListFile(b, k, l);
+            }
+        }
+        else foreach (var b in new[] { "main", "union" })
         {
             var lists = Obj(builds, b);
             var want = new List<(string, FwList)> { ("mustKeepDefines", t.MustKeepDefines), ("mustDropDefines", t.MustDropDefines),
@@ -138,22 +190,7 @@ internal static class FirmwareVerifier
             if (t.UnionMustKeepFunctions is null) want.Add(("mustKeepFunctions", t.MustKeepFunctions));
             else if (b == "main") want.AddRange([("mustKeepFunctions", t.MustKeepFunctions), ("mustDropFunctions", t.MustDropFunctions!), ("openFunctions", t.OpenFunctions!)]);
             else want.AddRange([("mustKeepFunctions", t.UnionMustKeepFunctions), ("mustDropFunctions", t.UnionMustDropFunctions!), ("openFunctions", t.UnionOpenFunctions!)]);
-            foreach (var (k, l) in want)
-            {
-                var e = Obj(lists, k);
-                Eq($"builds.{b}.{k}.sha256", Str(e, "sha256"), l.Sha256);
-                Eq($"builds.{b}.{k}.count", Num(e, "count"), l.Count.ToString());
-                // each build names its own file, as gen writes it
-                string? rel = Str(e, "path");
-                string canon = $"{FirmwareEmitter.TruthDir}/{b}.{k}.txt";
-                if (rel != canon && rel != canon + ".gz")
-                { err.WriteLine($"FAIL firmware builds.{b}.{k}.path: manifest says {rel ?? "(missing)"}, the tree gives {canon}[.gz]"); fail++; continue; }
-                string full = Path.Combine(corpus, rel);
-                if (!File.Exists(full)) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel} is not a file of the corpus"); fail++; continue; }
-                if (ListSha(full) is not { } disk) { err.WriteLine($"FAIL firmware builds.{b}.{k}: {rel} is not gzip"); fail++; continue; }
-                if (disk == l.Sha256) okCount[0]++;
-                else { err.WriteLine($"FAIL firmware builds.{b}.{k} ({rel}): on disk it hashes {disk}, the truth is {l.Sha256}"); fail++; }
-            }
+            foreach (var (k, l) in want) ListFile(b, k, l);
         }
 
         // the bulk carve: its class counts, recounted from the main build's lists by the names' spelling
@@ -224,6 +261,7 @@ internal static class FirmwareVerifier
         if (referenceCarve is not null)
         {
             if (fail > 0) { err.WriteLine("FAIL firmware: no reference carve of a corpus that fails verify"); return fail + 1; }
+            if (targets > 0) { err.WriteLine("FAIL firmware reference carve: not written for a multi-target corpus"); return fail + 1; }
             string? keepRel = Str(Obj(Obj(builds, "main"), "mustKeepDefines"), "path");
             string dest = Path.GetFullPath(referenceCarve);
             try { WriteCarve(corpus, dest, t, paths.Resolve(keepRel!)!); }
@@ -236,6 +274,21 @@ internal static class FirmwareVerifier
             Console.WriteLine($"  OK  firmware reference carve written to {dest}");
         }
         return fail;
+    }
+
+    // firmware.counts or a build's counts: the tree's sizes, the truth's class counts, the carve's sizes (one build's)
+    private static List<(string, long)> Counts(FwTruth t, bool tree, bool carve)
+    {
+        var l = new List<(string, long)>();
+        if (tree)
+            l.AddRange([("bigHeadersKept", t.BigHeadersKept), ("denseHeaders", t.DenseHeaders), ("wholeIncludedFromOutside", t.WholeIncludedFromOutside),
+                ("pasteMacros", t.PasteMacros), ("forwardingMacros", t.ForwardingMacros), ("totalDefineLines", t.TotalDefineLines)]);
+        l.AddRange([("mustKeep", t.MustKeepCount), ("mustDrop", t.MustDropCount), ("open", t.OpenCount)]);
+        if (tree) l.Add(("bytesBefore", t.BytesBefore));
+        if (carve)
+            l.AddRange([("definesDroppedMin", t.DefinesDroppedMin), ("definesDroppedMax", t.DefinesDroppedMax),
+                ("bytesAfterMin", t.BytesAfterMin), ("bytesAfterMax", t.BytesAfterMax)]);
+        return l;
     }
 
     private sealed record WorkCount(long Exact, long Cross, long Half, long Filler, long Pasters, long Forwarders, long Appliers,

@@ -67,6 +67,9 @@ public static class Presets
     // firmware: the firmware corpus (docs/firmware-design.md) beside a bare tree: big and dense headers, paste macros.
     private static readonly string[] Firmware = [.. Bare, "--firmware"];
 
+    // firmware-multi: plain firmware built for three targets (docs/firmware-design.md "Multi-target").
+    private static readonly string[] FirmwareMulti = [.. Bare, "--firmware", "--fw-targets", "3"];
+
     // firmware-bulk: the bulk carve (docs/firmware-design.md "Bulk shape") at --scale, beside a small fixed
     // correctness part (one big header, every kind a few times), so the size and the pass shape come from the bulk part.
     private static readonly string[] FirmwareWork =
@@ -91,6 +94,7 @@ public static class Presets
         ("dup-content", DupContent),
         ("firmware", Firmware),
         ("firmware-bulk", FirmwareWork),
+        ("firmware-multi", FirmwareMulti),
     ];
 
     // Old names that still resolve but aren't advertised (the 1.5.4 and 1.5.5 renames). A preset's name isn't written into the

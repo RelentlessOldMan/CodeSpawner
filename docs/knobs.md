@@ -184,8 +184,8 @@ and `_meta.gen` records the effective values. The full table, the layout and the
 
 - **Scaled counts:** `--fw-big-headers` (400, at least 1), `--fw-files` (38,000), `--fw-families` (1,000,000),
   `--fw-pasters` (6,000,000) and `--fw-dense-headers` (200).
-- **Not scaled:** `--fw-big-mb` (24, 20–2000), `--fw-chain-max` (40, 2–10,000) and `--fw-db-paths` (`absolute` or
-  `relative`).
+- **Not scaled:** `--fw-big-mb` (24, 20–2000), `--fw-chain-max` (40, 2–10,000), `--fw-db-paths` (`absolute` or
+  `relative`) and `--fw-targets` (off, `2` or `3`; refused with `--fw-bulk`).
 - A knob the preset set doesn't count as given: `--preset firmware-bulk --firmware false` switches the firmware off.
   A `--fw-*` knob you type yourself is still refused with it off.
 - A `--scale` that makes a count past 2,147,483,647 is refused (give the knob outright).
@@ -234,6 +234,7 @@ default to the 1x shape). The output dir and the manifest key keep the older nam
 | `--preset pathological-symbols` | `--pathological-symbols 50` (noise off) | Symbol-extractor cost + honest-miss (`expectedMiss`) correctness. |
 | `--preset dup-content` | `--dup-groups 200 --dup-copies 4` (noise off) | Content-hash dedup / posting-collapse (`dupGroups`). |
 | `--preset firmware` | `--firmware` (noise off) | The firmware corpus and its header-carve truth (~10 GB at 1x; `--scale 0.01` is 0.16 GB). |
+| `--preset firmware-multi` | `--firmware --fw-targets 3` (noise off) | The firmware corpus built for three targets, with a truth per target and their union (`--scale 0.01` is 0.22 GB). |
 | `--preset firmware-bulk` | `--firmware --fw-bulk --fw-families 192 --fw-pasters 20000 --fw-files 296 --fw-big-headers 1 --fw-dense-headers 0` (noise off) | The bulk carve at `--scale`, shaped like a production-sized firmware tree (cross-call decoys, pass growth), plus a small fixed correctness part. |
 
 Your own knobs after a `--preset` override it (e.g. `--preset huge --giant-headers 4`).
