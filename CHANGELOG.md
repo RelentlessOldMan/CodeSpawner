@@ -12,6 +12,10 @@ reads it.
 
 ## [Unreleased]
 
+## [2026.11.13.1] - 2026-11-13
+
+No corpus byte changes: every preset and knob makes the same tree and manifest as 1.6.0.
+
 ### Changed
 
 - Versions are now dates, `YYYY.M.D.N` (`N` counts the releases cut that day, from 1). They sort after
@@ -1286,7 +1290,9 @@ Classic `gen` output differs from 1.1.12 for the same seed and knobs, in these w
   machine-checkable ground-truth manifest, `gen` / `verify`, and the release
   tooling.
 
-[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v2026.11.13.1...HEAD
+[2026.11.13.1]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.6.0...v2026.11.13.1
+[1.6.0]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.5...v1.6.0
 [1.5.5]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/RelentlessOldMan/CodeSpawner/compare/v1.5.2...v1.5.3
