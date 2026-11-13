@@ -1,5 +1,5 @@
 <#
-  Cut a CodeSpawner release in one shot: bump Version (patch) in Program.cs -> run the test suite -> commit +
+  Cut a CodeSpawner release in one shot: set Version in Program.cs to today's next date version -> run the test suite -> commit +
   tag LOCALLY -> build the Native AOT codespawner.exe and check it reports the new version -> push main + the
   tag -> create the GitHub release with the exe attached (Windows users download one file and run it; no .NET
   runtime needed).
@@ -8,9 +8,12 @@
   fail (or the push of main is rejected), the local bump commit and tag are rolled back and the repo is left
   exactly as it was - just fix the problem and re-run the same command.
 
+  Versions are dates: YYYY.M.D.N, where N counts the releases cut that day from 1 (2026.11.13.1, then
+  2026.11.13.2 the same day, then 2026.11.14.1). The date is the local date when the script runs.
+
   Commit your actual changes first (this only commits the version bump), then run:
-    powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1          # bump patch (1.0.0 -> 1.0.1)
-    powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 1.1.0    # explicit version
+    powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1                # today's next version
+    powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 2026.11.13.2   # explicit version
     powershell -ExecutionPolicy Bypass -File .\scripts\release.ps1 -DryRun  # every check + test + build, no git writes
 
   -DryRun runs the pre-flight checks, the tests, the version bump and the AOT build + version check, then
@@ -58,18 +61,24 @@ if (-not (Test-Native { git merge-base --is-ancestor origin/main HEAD })) {
 }
 if (-not (Test-Native { gh auth status })) { throw "gh is not authenticated - run 'gh auth login', then re-run." }
 
-# 2. Find the current version in Program.cs (exactly one `const string Version = "X.Y.Z"`) and decide the new one.
+# 2. Find the current version in Program.cs (exactly one `const string Version = "..."`) and decide the new one:
+#    today's date plus the next release number for today. A version from before the date scheme (X.Y.Z) still
+#    reads as the current one.
 $src = [System.IO.File]::ReadAllText($verFile)
-$verPattern = 'const\s+string\s+Version\s*=\s*"(\d+)\.(\d+)\.(\d+)"'
+$verPattern = 'const\s+string\s+Version\s*=\s*"(\d+(?:\.\d+){2,3})"'
 $vm = [regex]::Matches($src, $verPattern)
-if ($vm.Count -ne 1) { throw "Expected exactly one 'const string Version = `"X.Y.Z`"' in Program.cs, found $($vm.Count)." }
-$g = $vm[0].Groups
-$cur = "{0}.{1}.{2}" -f $g[1].Value, $g[2].Value, $g[3].Value
+if ($vm.Count -ne 1) { throw "Expected exactly one 'const string Version = `"...`"' in Program.cs, found $($vm.Count)." }
+$cur = $vm[0].Groups[1].Value
+$today = (Get-Date).ToString('yyyy.M.d', [System.Globalization.CultureInfo]::InvariantCulture)
 if ($Version) {
-    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must look like X.Y.Z" }
+    if ($Version -notmatch '^\d{4}\.(1[0-2]|[1-9])\.(3[01]|[12]\d|[1-9])\.[1-9]\d*$') {
+        throw "Version must look like YYYY.M.D.N (no leading zeros, N from 1), e.g. $today.1"
+    }
     $ver = $Version
 } else {
-    $ver = "{0}.{1}.{2}" -f $g[1].Value, $g[2].Value, ([int]$g[3].Value + 1)
+    $n = 1
+    if ($cur.StartsWith("$today.")) { $n = [int]$cur.Substring($today.Length + 1) + 1 }
+    $ver = "$today.$n"
 }
 if ($cur -eq $ver) { throw "Program.cs is already at $ver - bump to a new version (a release needs a version change to commit)." }
 if ([version]$ver -lt [version]$cur) { throw "$ver is older than the current $cur - a release only moves the version forward." }

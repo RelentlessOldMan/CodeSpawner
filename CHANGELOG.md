@@ -1,8 +1,9 @@
 # Changelog
 
 All notable changes to CodeSpawner are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions are dates, `YYYY.M.D.N`, where `N`
+counts the releases cut that day from 1 (`2026.11.13.1`, then `2026.11.13.2`). Releases up to 1.6.0 used
+`X.Y.Z` numbers.
 
 Each release is cut by `scripts\release.ps1`, which injects the matching section
 below into the GitHub release notes — so a version with no section here will fail
@@ -10,6 +11,11 @@ to release. Keep the top section up to date as you work; the release script only
 reads it.
 
 ## [Unreleased]
+
+### Changed
+
+- Versions are now dates, `YYYY.M.D.N` (`N` counts the releases cut that day, from 1). They sort after
+  every `X.Y.Z` release.
 
 ## [1.6.0] - 2026-11-04
 
